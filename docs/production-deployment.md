@@ -2,14 +2,14 @@
 
 This repository currently contains two deployable apps:
 
-- Root Shopify embedded admin app in the repository root.
+- Root Shopify admin app in the repository root (configured to open externally).
 - Next.js dashboard + storefront API app in `shopify-webpush-app`.
 
 ## Recommended production URLs
 
 Use separate public URLs unless you add your own reverse proxy in front of both apps.
 
-- Shopify embedded admin app: `https://push-eagle.vercel.app`
+- Shopify admin app: `https://push-eagle.vercel.app`
 - Dashboard/storefront backend app: `https://push-eagle-dashboard.vercel.app`
 
 If you only use a single Vercel URL for both, the current repo layout will conflict.
@@ -21,9 +21,9 @@ Set these in the Vercel project that deploys the repository root:
 - `SHOPIFY_API_KEY`
 - `SHOPIFY_API_SECRET`
 - `SCOPES`
-- `SHOPIFY_APP_URL`: public URL of the root embedded app
+- `SHOPIFY_APP_URL`: public URL of the root Shopify app
 - `SHOPIFY_WEB_DASHBOARD_URL`: public URL of the Next.js app iframe target
-- `DATABASE_URL`: Postgres connection string for Prisma session storage
+- `DATABASE_URL`: Postgres connection string for Prisma session storage using an isolated schema, for example `...?sslmode=require&schema=shopify_sessions`
 
 ## Next.js app env vars
 
@@ -42,7 +42,7 @@ Set these in the Vercel project that deploys `shopify-webpush-app`:
 
 ## Shopify Partner Dashboard values
 
-Update these to the root embedded app URL:
+Update these to the root Shopify app URL:
 
 - App URL / Application URL
 - Allowed redirection URL(s)
