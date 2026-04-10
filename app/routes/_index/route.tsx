@@ -24,9 +24,10 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>Push Eagle for Shopify</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Connect your Shopify store, collect browser subscribers, and run web push campaigns from your
+          dashboard.
         </p>
         {!showForm && (
           <p className={styles.text}>
@@ -39,25 +40,25 @@ export default function App() {
             <label className={styles.label}>
               <span>Shop domain</span>
               <input className={styles.input} type="text" name="shop" />
-              <span>e.g: my-shop-domain.myshopify.com</span>
+              <span>e.g: your-store.myshopify.com</span>
             </label>
             <button className={styles.button} type="submit">
-              Log in
+              Continue to Shopify Login
             </button>
           </Form>
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Storefront opt-in</strong>. Use the theme extension block to collect push subscribers on
+            storefront pages.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Campaign delivery</strong>. Send targeted notifications with Firebase-backed delivery and
+            click tracking.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Attribution analytics</strong>. Measure campaign impact with conversion attribution from
+            Shopify orders.
           </li>
         </ul>
       </div>

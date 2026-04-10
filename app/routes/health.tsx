@@ -14,7 +14,3 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     timestamp: new Date().toISOString(),
   });
 };
-
-export default function HealthRoute() {
-  return null;
-}
