@@ -14,16 +14,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     process.env.WEB_DASHBOARD_URL ||
     "";
 
-  return { dashboardUrl };
+  let dashboardNeedsSeparateDeploy = false;
+
+  if (dashboardUrl) {
+    try {
+      const requestUrl = new URL(request.url);
+      const resolvedDashboardUrl = new URL(dashboardUrl);
+
+      dashboardNeedsSeparateDeploy =
+        resolvedDashboardUrl.origin === requestUrl.origin &&
+        (resolvedDashboardUrl.pathname === "/" || resolvedDashboardUrl.pathname === requestUrl.pathname);
+    } catch {
+      dashboardNeedsSeparateDeploy = false;
+    }
+  }
+
+  return { dashboardUrl, dashboardNeedsSeparateDeploy };
 };
 
 export default function Index() {
   const shopify = useAppBridge();
-  const { dashboardUrl } = useLoaderData<typeof loader>();
+  const { dashboardUrl, dashboardNeedsSeparateDeploy } = useLoaderData<typeof loader>();
 
   const openDashboard = () => {
-    if (!dashboardUrl) {
-      shopify.toast.show("Set SHOPIFY_WEB_DASHBOARD_URL to your Vercel URL.");
+    if (!dashboardUrl || dashboardNeedsSeparateDeploy) {
+      shopify.toast.show("Deploy shopify-webpush-app separately and set SHOPIFY_WEB_DASHBOARD_URL to that URL.");
       return;
     }
     window.open(dashboardUrl, "_blank", "noopener,noreferrer");
@@ -35,11 +50,13 @@ export default function Index() {
         Open in new tab
       </s-button>
 
-      {!dashboardUrl ? (
+      {!dashboardUrl || dashboardNeedsSeparateDeploy ? (
         <s-section heading="Dashboard URL required">
           <s-paragraph>
-            Set <code>SHOPIFY_WEB_DASHBOARD_URL</code> in your environment to your Vercel app URL (for
-            example: <code>https://push-eagle.vercel.app</code>), then reload.
+            Deploy <code>shopify-webpush-app</code> as a separate Vercel project, then set
+            <code> SHOPIFY_WEB_DASHBOARD_URL </code>
+            in the root Shopify app environment to that deployed URL. The current value points back to this
+            same app, so embedding would just reload the login app instead of the dashboard.
           </s-paragraph>
         </s-section>
       ) : (
@@ -64,8 +81,9 @@ export default function Index() {
 
       <s-section heading="Next Step After Vercel Deploy">
         <s-paragraph>
-          Add the same URL to your theme block setting <code>Push Eagle app URL</code> and keep app proxy
-          pointing to <code>/api/storefront</code> on this app.
+          After deploying <code>shopify-webpush-app</code>, use that URL in your theme block setting
+          <code> Push Eagle app URL </code>
+          and point Shopify app proxy to <code>/api/storefront</code> on the Next.js app.
         </s-paragraph>
       </s-section>
     </s-page>
