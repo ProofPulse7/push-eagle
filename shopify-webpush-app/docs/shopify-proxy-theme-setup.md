@@ -8,7 +8,7 @@ In your Shopify Partner app configuration, set:
 
 - App proxy subpath prefix: `apps`
 - App proxy subpath: `push-eagle`
-- Proxy URL: `https://YOUR_NEXT_APP_DOMAIN/api/storefront`
+- Proxy URL: `https://push-eagle-dashboard.vercel.app/api/storefront`
 
 For this repository, `YOUR_NEXT_APP_DOMAIN` is the public URL of the `shopify-webpush-app` deployment, not the root embedded Shopify app URL.
 
@@ -24,7 +24,7 @@ Enable `Push Eagle Prompt` block in your theme editor.
 Set values:
 
 - Shop domain: `your-store.myshopify.com`
-- Push Eagle app URL: `https://YOUR_NEXT_APP_DOMAIN`
+- Push Eagle app URL: `https://push-eagle-dashboard.vercel.app`
 - App proxy bootstrap path: `/apps/push-eagle/bootstrap`
 - App proxy service worker path: `/apps/push-eagle/sw.js`
 
