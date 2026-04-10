@@ -15,14 +15,6 @@
     vapidKey: 'BBYMZqB-pyUMdSTJVC6qC_0p4KzX7cVqzWB9g4dkBcw5poVMOtqnKqV0Fsuh_KywnVtEHQILWswYeR0gc7kWfWs'
   };
 
-  function safeJsonParse(value) {
-    try {
-      return JSON.parse(value);
-    } catch (_error) {
-      return null;
-    }
-  }
-
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
       var existing = document.querySelector('script[src="' + src + '"]');
@@ -60,6 +52,24 @@
     var random = 'anon:' + String(Date.now()) + '_' + Math.random().toString(36).slice(2, 14);
     window.localStorage.setItem(key, random);
     return random;
+  }
+
+  function detectBrowser() {
+    var ua = navigator.userAgent || '';
+    if (/Edg\//.test(ua)) return 'edge';
+    if (/OPR\//.test(ua) || /Opera/.test(ua)) return 'opera';
+    if (/SamsungBrowser\//.test(ua)) return 'samsung';
+    if (/Firefox\//.test(ua)) return 'firefox';
+    if (/CriOS\//.test(ua) || /Chrome\//.test(ua)) return 'chrome';
+    if (/Safari\//.test(ua) && !/Chrome|CriOS|Edg\//.test(ua)) return 'safari';
+    return 'unknown';
+  }
+
+  function detectPlatform() {
+    var ua = navigator.userAgent || '';
+    if (/Android/.test(ua)) return 'android';
+    if (/iPhone|iPad|iPod/.test(ua)) return 'ios';
+    return 'desktop';
   }
 
   async function bootstrap(config) {
@@ -114,7 +124,15 @@
       return { ok: false, reason: 'unsupported' };
     }
 
-    var permission = await Notification.requestPermission();
+    var permission = Notification.permission;
+    if (permission === 'denied') {
+      return { ok: false, reason: 'permission-denied' };
+    }
+
+    if (permission !== 'granted') {
+      permission = await Notification.requestPermission();
+    }
+
     if (permission !== 'granted') {
       return { ok: false, reason: 'permission-denied' };
     }
@@ -142,8 +160,8 @@
         shopDomain: boot.shopDomain,
         externalId: boot.externalId,
         token: token,
-        browser: navigator.userAgent,
-        platform: navigator.platform,
+        browser: detectBrowser(),
+        platform: detectPlatform(),
         locale: navigator.language
       })
     });
@@ -157,7 +175,7 @@
 
   function isIosSafari() {
     var ua = navigator.userAgent || '';
-    var isIos = /iPad|iPhone|iPod/.test(ua);
+    var isIos = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     var isWebkit = /WebKit/.test(ua);
     var isCriOS = /CriOS/.test(ua);
     return isIos && isWebkit && !isCriOS;
@@ -231,7 +249,7 @@
       }
 
       if (!isStandaloneIos()) {
-        showStatus(root, 'Add this store to Home Screen, then open it from there to enable iOS push.', 'info');
+        showStatus(root, 'Add this store to Home Screen, then open it from there and tap allow notifications.', 'info');
       }
     }
 
@@ -248,6 +266,11 @@
 
     if (primaryButton) {
       primaryButton.addEventListener('click', async function () {
+        if (config.mode === 'ios' && !isStandaloneIos()) {
+          showStatus(root, 'iOS requires Home Screen mode first. Tap Share -> Add to Home Screen, then reopen this app.', 'info');
+          return;
+        }
+
         primaryButton.disabled = true;
         primaryButton.setAttribute('aria-busy', 'true');
 
