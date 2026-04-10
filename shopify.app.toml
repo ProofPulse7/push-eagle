@@ -2,7 +2,7 @@
 
 client_id = "c866e24e9ce383cebeee6edb01496449"
 name = "Push-Eagle"
-application_url = "https://example.com"
+application_url = "https://push-eagle.vercel.app"
 embedded = true
 
 [build]
@@ -29,7 +29,7 @@ api_version = "2026-07"
 scopes = "read_customers,read_orders,read_products,write_products,write_metaobjects,write_metaobject_definitions"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://push-eagle.vercel.app/auth/callback", "https://push-eagle.vercel.app/auth/shopify/callback", "https://push-eagle.vercel.app/api/auth" ]
 
 [product.metafields.app.demo_info]
 type = "single_line_text_field"

@@ -3,16 +3,32 @@ import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData } from "react-router";
 
-import { login } from "../../shopify.server";
+import { hasShopifyConfig, login, missingShopifyConfig } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  if (!hasShopifyConfig) {
+    return {
+      errors: loginErrorMessage({
+        form: `Missing Shopify env vars: ${missingShopifyConfig.join(", ")}. Add them in the root Vercel project and redeploy.`,
+      }),
+    };
+  }
+
   const errors = loginErrorMessage(await login(request));
 
   return { errors };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  if (!hasShopifyConfig) {
+    return {
+      errors: loginErrorMessage({
+        form: `Missing Shopify env vars: ${missingShopifyConfig.join(", ")}. Add them in the root Vercel project and redeploy.`,
+      }),
+    };
+  }
+
   const errors = loginErrorMessage(await login(request));
 
   return {
@@ -31,6 +47,7 @@ export default function Auth() {
       <s-page>
         <Form method="post">
         <s-section heading="Log in">
+          {errors.form && <s-banner tone="critical">{errors.form}</s-banner>}
           <s-text-field
             name="shop"
             label="Shop domain"

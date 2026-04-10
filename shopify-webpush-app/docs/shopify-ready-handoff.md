@@ -1,42 +1,27 @@
 # Shopify-Ready Handoff
 
-This folder is a cloned and stabilized app scaffold intended to be moved into your Shopify app project.
+This folder is no longer just a scaffold. It contains the active dashboard, storefront push flow, webhook handlers, Neon persistence, and Firebase integration used by this repository.
 
-## What is done
+## What is implemented
 
-- Full UI copied into `shopify-webpush-app` and compiled.
-- Major TypeScript issues fixed in automation editors, campaign composer, and data tables.
-- Integration layer added:
-  - `src/lib/config/env.ts`
-  - `src/lib/integrations/shopify/server.ts`
-  - `src/lib/integrations/database/index.ts`
-  - `src/lib/integrations/database/neon.ts`
-  - `src/lib/integrations/database/supabase.ts`
-  - `src/lib/integrations/firebase/client.ts`
-  - `src/lib/services/web-push/push-service.ts`
-- Starter API routes added:
-  - `src/app/api/integrations/health/route.ts`
-  - `src/app/api/shopify/webhooks/app-uninstalled/route.ts`
-- Environment template added: `.env.example`
+- Dashboard UI is live in `shopify-webpush-app`.
+- Neon-backed persistence is wired into campaign, subscriber, attribution, and cleanup flows.
+- Firebase client and admin integration are in place.
+- Storefront bootstrap, token registration, conversion attribution, and dynamic service worker endpoints are implemented.
+- Shopify webhook validation and merchant cleanup exist for the Next.js app.
+- Safari/iOS PWA metadata and storefront guidance are included.
 
-## What to do in your Shopify app next
+## What still needs production setup outside the codebase
 
-1. Copy this folder into your Shopify app repository.
-2. Merge/align your auth/session model with `src/lib/integrations/shopify/server.ts`.
-3. Create database schema (merchants, subscribers, push_tokens, campaigns, automation_runs, deliveries, events).
-4. Replace webhook placeholder with real HMAC validation and uninstall cleanup.
-5. Add secure token storage + per-shop segmentation.
-6. Connect dashboard cards/charts to real event tables.
+1. Deploy the root Shopify embedded app.
+2. Deploy `shopify-webpush-app`.
+3. Point Shopify App URL and redirect URLs to the root embedded app deployment.
+4. Point Shopify app proxy to the `shopify-webpush-app` deployment.
+5. Configure the theme block with the `shopify-webpush-app` public URL.
+6. Test installation, storefront opt-in, notification send, click tracking, and order attribution on a real store.
 
-## Browser compatibility baseline
+## Verification
 
-- Use Firebase Messaging in supported browsers.
-- Keep graceful fallback when notifications are blocked/unsupported.
-- Service worker scripts already exist in `public/` and can be adapted for production.
-
-## Quick check
-
-- `npm install`
-- `npm run typecheck`
-- `npm run build`
-- `GET /api/integrations/health`
+- `shopify-webpush-app`: `npm run typecheck` passes.
+- Root Prisma schema validates against PostgreSQL.
+- Root workspace typecheck still has separate monorepo React type conflicts that are not specific to the push backend work.

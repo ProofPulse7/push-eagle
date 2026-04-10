@@ -7,6 +7,31 @@ import {
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 
+const readEnv = (...keys: string[]) => {
+  for (const key of keys) {
+    const value = process.env[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+};
+
+export const shopifyApiKey = readEnv(
+  "SHOPIFY_API_KEY",
+  "SHOPIFY_CLIENT_ID",
+  "SHOPIFY_API_CLIENT_ID",
+);
+
+const shopifyApiSecret = readEnv(
+  "SHOPIFY_API_SECRET",
+  "SHOPIFY_API_SECRET_KEY",
+  "SHOPIFY_CLIENT_SECRET",
+  "SHOPIFY_SECRET",
+  "SHOPIFY_APP_SECRET",
+);
+
 const deriveAppUrl = () => {
   const explicitUrl = process.env.SHOPIFY_APP_URL?.trim();
   if (explicitUrl) {
@@ -26,33 +51,78 @@ const deriveAppUrl = () => {
   return "";
 };
 
+const appUrl = deriveAppUrl();
+
+export const missingShopifyConfig = [
+  !shopifyApiKey ? "SHOPIFY_API_KEY" : null,
+  !shopifyApiSecret ? "SHOPIFY_API_SECRET" : null,
+  !appUrl ? "SHOPIFY_APP_URL" : null,
+].filter(Boolean) as string[];
+
+export const hasShopifyConfig = missingShopifyConfig.length === 0;
+
+export const getShopifyConfigError = () =>
+  `Missing Shopify configuration: ${missingShopifyConfig.join(", ")}. Set these in the Vercel project for the root app. Accepted key aliases include SHOPIFY_CLIENT_ID for api key and SHOPIFY_CLIENT_SECRET for api secret.`;
+
+if (!hasShopifyConfig) {
+  console.error(getShopifyConfigError());
+}
+
 const scopes = (process.env.SCOPES || process.env.SHOPIFY_SCOPES || "")
   .split(",")
   .map((scope) => scope.trim())
   .filter(Boolean);
 
-const shopify = shopifyApp({
-  apiKey: process.env.SHOPIFY_API_KEY,
-  apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
-  apiVersion: ApiVersion.October25,
-  scopes,
-  appUrl: deriveAppUrl(),
-  authPathPrefix: "/auth",
-  sessionStorage: new PrismaSessionStorage(prisma),
-  distribution: AppDistribution.AppStore,
-  future: {
-    expiringOfflineAccessTokens: true,
-  },
-  ...(process.env.SHOP_CUSTOM_DOMAIN
-    ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
-    : {}),
-});
+let shopifyInstance: ReturnType<typeof shopifyApp> | null = null;
 
-export default shopify;
+const getShopify = () => {
+  if (!hasShopifyConfig) {
+    throw new Error(getShopifyConfigError());
+  }
+
+  if (!shopifyInstance) {
+    shopifyInstance = shopifyApp({
+      apiKey: shopifyApiKey,
+      apiSecretKey: shopifyApiSecret,
+      apiVersion: ApiVersion.October25,
+      scopes,
+      appUrl,
+      authPathPrefix: "/auth",
+      sessionStorage: new PrismaSessionStorage(prisma),
+      distribution: AppDistribution.AppStore,
+      future: {
+        expiringOfflineAccessTokens: true,
+      },
+      ...(process.env.SHOP_CUSTOM_DOMAIN
+        ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
+        : {}),
+    });
+  }
+
+  return shopifyInstance;
+};
+
+export default getShopify;
 export const apiVersion = ApiVersion.October25;
-export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
-export const authenticate = shopify.authenticate;
-export const unauthenticated = shopify.unauthenticated;
-export const login = shopify.login;
-export const registerWebhooks = shopify.registerWebhooks;
-export const sessionStorage = shopify.sessionStorage;
+
+export const addDocumentResponseHeaders = (request: Request, headers: Headers) => {
+  if (!hasShopifyConfig) {
+    return;
+  }
+
+  getShopify().addDocumentResponseHeaders(request, headers);
+};
+
+export const authenticate = {
+  admin: (request: Request) => getShopify().authenticate.admin(request),
+  webhook: (request: Request) => getShopify().authenticate.webhook(request),
+};
+
+export const unauthenticated = {
+  admin: (request: Request) => getShopify().unauthenticated.admin(request),
+};
+
+export const login = (request: Request) => getShopify().login(request);
+export const registerWebhooks = (args: Parameters<ReturnType<typeof shopifyApp>["registerWebhooks"]>[0]) =>
+  getShopify().registerWebhooks(args);
+export const sessionStorage = new PrismaSessionStorage(prisma);

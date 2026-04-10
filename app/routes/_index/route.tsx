@@ -1,7 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect, Form, useLoaderData } from "react-router";
 
-import { login } from "../../shopify.server";
+import { hasShopifyConfig, missingShopifyConfig } from "../../shopify.server";
 
 import styles from "./styles.module.css";
 
@@ -12,11 +12,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  return { showForm: Boolean(login) };
+  return {
+    showForm: hasShopifyConfig,
+    missingConfig: missingShopifyConfig,
+  };
 };
 
 export default function App() {
-  const { showForm } = useLoaderData<typeof loader>();
+  const { showForm, missingConfig } = useLoaderData<typeof loader>();
 
   return (
     <div className={styles.index}>
@@ -25,6 +28,12 @@ export default function App() {
         <p className={styles.text}>
           A tagline about [your app] that describes your value proposition.
         </p>
+        {!showForm && (
+          <p className={styles.text}>
+            This deployment is missing required Shopify env vars: {missingConfig.join(", ")}. Add them in the
+            root Vercel project settings, then redeploy.
+          </p>
+        )}
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
             <label className={styles.label}>
