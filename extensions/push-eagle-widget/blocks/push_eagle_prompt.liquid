@@ -1,0 +1,211 @@
+<div
+  data-push-eagle-root
+  data-enabled="{{ block.settings.enable_prompt }}"
+  data-mode="{{ block.settings.prompt_mode }}"
+  data-app-url="{{ block.settings.app_url | escape }}"
+  data-shop-domain="{{ block.settings.shop_domain | escape }}"
+  data-proxy-bootstrap-path="{{ block.settings.proxy_bootstrap_path | escape }}"
+  data-proxy-service-worker-path="{{ block.settings.proxy_service_worker_path | escape }}"
+  data-auto-show="{{ block.settings.auto_show }}"
+  data-delay-ms="{{ block.settings.delay_seconds | times: 1000 }}"
+  style="display: block;"
+>
+  <div class="push-eagle-card" style="--pe-bg: {{ block.settings.popup_bg }}; --pe-text: {{ block.settings.popup_text }}; --pe-btn-bg: {{ block.settings.button_bg }}; --pe-btn-text: {{ block.settings.button_text }};">
+    <h3 class="push-eagle-title">{{ block.settings.popup_title }}</h3>
+    <p class="push-eagle-message">{{ block.settings.popup_message }}</p>
+    <div class="push-eagle-actions">
+      <button class="push-eagle-button" type="button" data-push-eagle-action>
+        {{ block.settings.button_label }}
+      </button>
+      <button class="push-eagle-dismiss" type="button" data-push-eagle-dismiss>
+        {{ block.settings.dismiss_label }}
+      </button>
+    </div>
+    <p class="push-eagle-status" data-push-eagle-status></p>
+  </div>
+</div>
+
+{% style %}
+  .push-eagle-card {
+    max-width: 360px;
+    background: var(--pe-bg);
+    color: var(--pe-text);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 14px;
+    padding: 14px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    margin: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  .push-eagle-title {
+    margin: 0 0 6px;
+    font-size: 18px;
+    line-height: 1.2;
+  }
+
+  .push-eagle-message {
+    margin: 0 0 10px;
+    font-size: 14px;
+    line-height: 1.45;
+    opacity: 0.9;
+  }
+
+  .push-eagle-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .push-eagle-button {
+    background: var(--pe-btn-bg);
+    color: var(--pe-btn-text);
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .push-eagle-dismiss {
+    border: 1px solid rgba(0, 0, 0, 0.2);
+    background: transparent;
+    color: inherit;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .push-eagle-status {
+    margin: 10px 0 0;
+    font-size: 12px;
+    line-height: 1.4;
+    opacity: 0.85;
+  }
+
+  .push-eagle-status[data-kind="error"] {
+    color: #bf1650;
+    opacity: 1;
+  }
+
+  .push-eagle-status[data-kind="success"] {
+    color: #1c8a46;
+    opacity: 1;
+  }
+{% endstyle %}
+
+<script src="{{ 'push-eagle-storefront.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "Push Eagle Prompt",
+  "target": "body",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "enable_prompt",
+      "label": "Enable prompt",
+      "default": true
+    },
+    {
+      "type": "select",
+      "id": "prompt_mode",
+      "label": "Prompt mode",
+      "default": "custom",
+      "options": [
+        { "value": "custom", "label": "Custom popup" },
+        { "value": "browser", "label": "Browser prompt" },
+        { "value": "ios", "label": "iOS opt-in" }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "shop_domain",
+      "label": "Shop domain",
+      "default": "your-store.myshopify.com"
+    },
+    {
+      "type": "text",
+      "id": "app_url",
+      "label": "Push Eagle app URL",
+      "default": "https://your-app-domain.com"
+    },
+    {
+      "type": "text",
+      "id": "proxy_bootstrap_path",
+      "label": "App proxy bootstrap path",
+      "default": "/apps/push-eagle/bootstrap"
+    },
+    {
+      "type": "text",
+      "id": "proxy_service_worker_path",
+      "label": "App proxy service worker path",
+      "default": "/apps/push-eagle/sw.js"
+    },
+    {
+      "type": "checkbox",
+      "id": "auto_show",
+      "label": "Auto trigger prompt",
+      "default": true
+    },
+    {
+      "type": "range",
+      "id": "delay_seconds",
+      "min": 0,
+      "max": 30,
+      "step": 1,
+      "label": "Delay before prompt (seconds)",
+      "default": 2
+    },
+    {
+      "type": "text",
+      "id": "popup_title",
+      "label": "Popup title",
+      "default": "Stay Updated"
+    },
+    {
+      "type": "textarea",
+      "id": "popup_message",
+      "label": "Popup message",
+      "default": "Enable notifications for order updates, back in stock alerts, and limited-time deals."
+    },
+    {
+      "type": "text",
+      "id": "button_label",
+      "label": "Primary button label",
+      "default": "Allow notifications"
+    },
+    {
+      "type": "text",
+      "id": "dismiss_label",
+      "label": "Dismiss button label",
+      "default": "Not now"
+    },
+    {
+      "type": "color",
+      "id": "popup_bg",
+      "label": "Popup background",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "popup_text",
+      "label": "Popup text color",
+      "default": "#111111"
+    },
+    {
+      "type": "color",
+      "id": "button_bg",
+      "label": "Primary button background",
+      "default": "#111111"
+    },
+    {
+      "type": "color",
+      "id": "button_text",
+      "label": "Primary button text",
+      "default": "#ffffff"
+    }
+  ]
+}
+{% endschema %}

@@ -1,0 +1,172 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 25% 97%; /* Very light gray, almost white */
+    --foreground: 240 10% 3.9%;
+
+    --card: 0 0% 100%; /* White card/section background */
+    --card-foreground: 240 10% 3.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+
+    --primary: 262.1 83.3% 57.8%; /* Vibrant Violet */
+    --primary-foreground: 0 0% 98%;
+
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 262.1 83.3% 57.8%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 262.1 83.3% 57.8%;
+
+    --radius: 0.75rem; /* Increased border radius for a softer look */
+
+    --chart-1: 262 83% 58%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 352 71% 51%;
+    --chart-4: 211 70% 50%;
+    --chart-5: 45 93% 47%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+
+    --card: 240 10% 5.9%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 262.1 83.3% 67.8%;
+    --primary-foreground: 0 0% 98%;
+
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 262.1 83.3% 67.8%;
+    
+    --radius: 0.75rem;
+
+    --chart-1: 262 83% 68%;
+    --chart-2: 173 58% 49%;
+    --chart-3: 352 71% 61%;
+    --chart-4: 211 70% 60%;
+    --chart-5: 45 93% 57%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    opacity: 1;
+  }
+}
+
+@layer components {
+    .campaign-creator-scroll-area [data-radix-scroll-area-viewport] {
+        scrollbar-gutter: stable;
+    }
+
+    .campaign-creator-scroll-area [data-radix-scroll-area-scrollbar][data-orientation="vertical"] {
+        @apply w-4 bg-neutral-200 dark:bg-neutral-900 p-0.5;
+    }
+
+    .campaign-creator-scroll-area [data-radix-scroll-area-scrollbar] > div {
+        /* This is the thumb */
+        @apply bg-neutral-600 dark:bg-neutral-700 rounded-full;
+    }
+}
+
+@layer utilities {
+  .shimmer-underline {
+    @apply relative overflow-hidden;
+    text-decoration: underline;
+    text-decoration-color: hsl(var(--primary) / 0.5);
+    text-decoration-style: wavy;
+  }
+  .shimmer-underline::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(
+      90deg,
+      hsla(0,0%,100%,0) 0,
+      hsla(0,0%,100%,.2) 20%,
+      hsla(0,0%,100%,.5) 60%,
+      hsla(0,0%,100%,0)
+    );
+    animation: shimmer 2s infinite;
+  }
+
+  .slide-out {
+    animation: slide-out 0.5s forwards;
+  }
+
+  .slide-in {
+    animation: slide-in 0.5s forwards;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-out {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+}

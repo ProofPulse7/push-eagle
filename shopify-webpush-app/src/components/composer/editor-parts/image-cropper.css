@@ -1,0 +1,128 @@
+
+.ReactCrop {
+    position: relative;
+    display: inline-block;
+    cursor: crosshair;
+    overflow: hidden;
+    background-color: #f0f0f0;
+}
+
+.ReactCrop:focus {
+    outline: none;
+}
+
+.ReactCrop--disabled {
+    cursor: not-allowed;
+}
+
+.ReactCrop__image {
+    display: block;
+    max-height: var(--ReactCrop-image-max-height, 70vh);
+    object-fit: contain; /* Ensure image is contained within its box */
+}
+
+.ReactCrop__crop-selection {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform: translate3d(0, 0, 0);
+    box-sizing: border-box;
+    cursor: move;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    touch-action: none;
+}
+
+.ReactCrop--circular-crop .ReactCrop__crop-selection {
+  border-radius: 50%;
+  box-shadow: 0px 0px 1px 1px white, 0 0 0 9999px rgba(0, 0, 0, 0.6);
+}
+
+.ReactCrop__drag-handle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background-color: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(0, 0, 0, 0.4);
+    box-sizing: border-box;
+    outline: 1px solid transparent; 
+    border-radius: 50%;
+}
+
+.ReactCrop .ord-nw {
+  top: -5px;
+  left: -5px;
+  cursor: nw-resize;
+}
+.ReactCrop .ord-n {
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: n-resize;
+}
+.ReactCrop .ord-ne {
+  top: -5px;
+  right: -5px;
+  cursor: ne-resize;
+}
+.ReactCrop .ord-e {
+  top: 50%;
+  right: -5px;
+  transform: translateY(-50%);
+  cursor: e-resize;
+}
+.ReactCrop .ord-se {
+  bottom: -5px;
+  right: -5px;
+  cursor: se-resize;
+}
+.ReactCrop .ord-s {
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: s-resize;
+}
+.ReactCrop .ord-sw {
+  bottom: -5px;
+  left: -5px;
+  cursor: sw-resize;
+}
+.ReactCrop .ord-w {
+  top: 50%;
+  left: -5px;
+  transform: translateY(-50%);
+  cursor: w-resize;
+}
+
+.ReactCrop__drag-bar {
+  position: absolute;
+}
+
+.ReactCrop__drag-bar.ord-n {
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 20px;
+  margin-top: -10px;
+}
+.ReactCrop__drag-bar.ord-e {
+  right: 0;
+  top: 0;
+  width: 20px;
+  height: 100%;
+  margin-right: -10px;
+}
+.ReactCrop__drag-bar.ord-s {
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 20px;
+  margin-bottom: -10px;
+}
+.ReactCrop__drag-bar.ord-w {
+  left: 0;
+  top: 0;
+  width: 20px;
+  height: 100%;
+  margin-left: -10px;
+}

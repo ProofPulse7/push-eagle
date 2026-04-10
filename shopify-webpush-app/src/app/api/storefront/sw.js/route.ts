@@ -1,0 +1,66 @@
+import { NextResponse } from 'next/server';
+
+import { env } from '@/lib/config/env';
+
+export const runtime = 'nodejs';
+
+const serviceWorkerSource = `
+importScripts('https://www.gstatic.com/firebasejs/9.2.0/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/9.2.0/firebase-messaging-compat.js');
+
+firebase.initializeApp({
+  apiKey: '${env.NEXT_PUBLIC_FIREBASE_API_KEY}',
+  authDomain: '${env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN}',
+  projectId: '${env.NEXT_PUBLIC_FIREBASE_PROJECT_ID}',
+  storageBucket: '${env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET}',
+  messagingSenderId: '${env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID}',
+  appId: '${env.NEXT_PUBLIC_FIREBASE_APP_ID}',
+  measurementId: '${env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID}'
+});
+
+const messaging = firebase.messaging();
+
+messaging.onBackgroundMessage(function(payload) {
+  const title = payload.notification?.title || 'Push Eagle';
+  const options = {
+    body: payload.notification?.body,
+    icon: payload.notification?.icon,
+    image: payload.notification?.image,
+    data: {
+      url: payload.fcmOptions?.link || payload.data?.url || '/'
+    }
+  };
+
+  self.registration.showNotification(title, options);
+});
+
+self.addEventListener('notificationclick', function(event) {
+  event.notification.close();
+
+  const target = event.notification?.data?.url || '/';
+  event.waitUntil(clients.openWindow(target));
+});
+`;
+
+export async function GET() {
+  return new NextResponse(serviceWorkerSource, {
+    headers: {
+      'Content-Type': 'application/javascript; charset=utf-8',
+      'Cache-Control': 'no-store, must-revalidate',
+      'Service-Worker-Allowed': '/',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    },
+  });
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    },
+  });
+}
