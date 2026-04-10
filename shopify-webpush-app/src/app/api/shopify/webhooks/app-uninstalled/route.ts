@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
-import { cleanupMerchantData } from '@/lib/server/data/store';
+import { markMerchantUninstalled } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -19,9 +19,9 @@ export async function POST(req: Request) {
     const payload = JSON.parse(rawBody) as { domain?: string; myshopify_domain?: string };
     const shopDomain = parseShopDomain(payload.myshopify_domain ?? payload.domain);
 
-    await cleanupMerchantData(shopDomain);
+    await markMerchantUninstalled(shopDomain);
 
-    return NextResponse.json({ ok: true, shopDomain, cleaned: true });
+    return NextResponse.json({ ok: true, shopDomain, preserved: true, uninstalled: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to process webhook.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

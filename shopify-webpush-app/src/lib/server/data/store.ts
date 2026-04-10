@@ -66,6 +66,11 @@ const ensureSchema = async () => {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
 
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS first_installed_at TIMESTAMPTZ`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS last_authenticated_at TIMESTAMPTZ`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS uninstalled_at TIMESTAMPTZ`;
+      await sql`UPDATE merchants SET first_installed_at = COALESCE(first_installed_at, created_at), last_authenticated_at = COALESCE(last_authenticated_at, updated_at) WHERE first_installed_at IS NULL OR last_authenticated_at IS NULL`;
+
       await sql`CREATE TABLE IF NOT EXISTS subscribers (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -182,11 +187,20 @@ const buildTrackedUrl = (targetUrl: string | null | undefined, campaignId: strin
 const ensureMerchant = async (shopDomain: string) => {
   const sql = getNeonSql();
   await sql`
-    INSERT INTO merchants (shop_domain)
-    VALUES (${shopDomain})
+    INSERT INTO merchants (shop_domain, first_installed_at, last_authenticated_at, uninstalled_at)
+    VALUES (${shopDomain}, NOW(), NOW(), NULL)
     ON CONFLICT (shop_domain)
-    DO UPDATE SET updated_at = NOW()
+    DO UPDATE SET
+      updated_at = NOW(),
+      last_authenticated_at = NOW(),
+      uninstalled_at = NULL,
+      first_installed_at = COALESCE(merchants.first_installed_at, NOW())
   `;
+};
+
+export const ensureMerchantAccount = async (shopDomain: string) => {
+  await ensureSchema();
+  await ensureMerchant(shopDomain);
 };
 
 export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
@@ -427,6 +441,23 @@ export const cleanupMerchantData = async (shopDomain: string) => {
   const sql = getNeonSql();
   await sql`
     DELETE FROM merchants
+    WHERE shop_domain = ${shopDomain}
+  `;
+};
+
+export const markMerchantUninstalled = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  await sql`
+    UPDATE merchants
+    SET uninstalled_at = NOW(), updated_at = NOW()
+    WHERE shop_domain = ${shopDomain}
+  `;
+
+  await sql`
+    UPDATE subscriber_tokens
+    SET status = 'revoked', updated_at = NOW()
     WHERE shop_domain = ${shopDomain}
   `;
 };

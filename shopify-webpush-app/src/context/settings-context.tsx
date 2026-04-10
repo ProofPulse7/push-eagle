@@ -40,6 +40,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         // Load settings from localStorage when the component mounts on the client
+        const queryShop = new URLSearchParams(window.location.search).get('shop');
+        if (queryShop && queryShop.endsWith('.myshopify.com')) {
+            setShopDomainState(queryShop.toLowerCase());
+            localStorage.setItem('shopDomain', queryShop.toLowerCase());
+        }
+
         const savedUrl = localStorage.getItem('storeUrl');
         if (savedUrl) {
             setStoreUrlState(savedUrl);

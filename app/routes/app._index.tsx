@@ -1,12 +1,36 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+import { createHmac } from "node:crypto";
 import { useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
 
+const buildDashboardSsoUrl = (baseDashboardUrl: string, shopDomain: string) => {
+  const secret = process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() || process.env.SHOPIFY_API_SECRET?.trim();
+  const url = new URL("/api/integrations/shopify/sso", baseDashboardUrl);
+
+  if (!secret) {
+    url.searchParams.set("shop", shopDomain);
+    url.searchParams.set("redirect", "/dashboard");
+    return url.toString();
+  }
+
+  const ts = String(Date.now());
+  const payload = `${shopDomain}.${ts}`;
+  const sig = createHmac("sha256", secret).update(payload).digest("hex");
+
+  url.searchParams.set("shop", shopDomain);
+  url.searchParams.set("ts", ts);
+  url.searchParams.set("sig", sig);
+  url.searchParams.set("redirect", "/dashboard");
+
+  return url.toString();
+};
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const auth = await authenticate.admin(request);
+  const shopDomain = auth.session?.shop ?? "";
 
   const dashboardUrl =
     process.env.SHOPIFY_WEB_DASHBOARD_URL ||
@@ -29,19 +53,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   }
 
-  return { dashboardUrl, dashboardNeedsSeparateDeploy };
+  const embedUrl =
+    dashboardUrl && shopDomain && !dashboardNeedsSeparateDeploy
+      ? buildDashboardSsoUrl(dashboardUrl, shopDomain)
+      : dashboardUrl;
+
+  return { dashboardUrl, embedUrl, dashboardNeedsSeparateDeploy };
 };
 
 export default function Index() {
   const shopify = useAppBridge();
-  const { dashboardUrl, dashboardNeedsSeparateDeploy } = useLoaderData<typeof loader>();
+  const { dashboardUrl, embedUrl, dashboardNeedsSeparateDeploy } = useLoaderData<typeof loader>();
 
   const openDashboard = () => {
     if (!dashboardUrl || dashboardNeedsSeparateDeploy) {
       shopify.toast.show("Deploy shopify-webpush-app separately and set SHOPIFY_WEB_DASHBOARD_URL to that URL.");
       return;
     }
-    window.open(dashboardUrl, "_blank", "noopener,noreferrer");
+    window.open(embedUrl || dashboardUrl, "_blank", "noopener,noreferrer");
   };
 
   return (
@@ -60,23 +89,20 @@ export default function Index() {
           </s-paragraph>
         </s-section>
       ) : (
-        <s-section heading="Embedded Web App">
-          <div
-            style={{
-              width: "100%",
-              height: "75vh",
-              borderRadius: "12px",
-              overflow: "hidden",
-              border: "1px solid #dfe3e8",
-            }}
-          >
-            <iframe
-              title="Push Eagle Web App"
-              src={dashboardUrl}
-              style={{ width: "100%", height: "100%", border: 0 }}
-            />
-          </div>
-        </s-section>
+        <div
+          style={{
+            width: "100%",
+            height: "calc(100vh - 120px)",
+            minHeight: "680px",
+            overflow: "hidden",
+          }}
+        >
+          <iframe
+            title="Push Eagle Web App"
+            src={embedUrl || dashboardUrl}
+            style={{ width: "100%", height: "100%", border: 0 }}
+          />
+        </div>
       )}
 
       <s-section heading="Next Step After Vercel Deploy">
