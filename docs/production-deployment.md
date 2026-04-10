@@ -9,8 +9,8 @@ This repository currently contains two deployable apps:
 
 Use separate public URLs unless you add your own reverse proxy in front of both apps.
 
-- Shopify embedded admin app: `https://admin.push-eagle.example.com`
-- Dashboard/storefront backend app: `https://app.push-eagle.example.com`
+- Shopify embedded admin app: `https://push-eagle.vercel.app`
+- Dashboard/storefront backend app: `https://push-eagle-dashboard.vercel.app`
 
 If you only use a single Vercel URL for both, the current repo layout will conflict.
 
@@ -51,7 +51,7 @@ Update app proxy to point to the Next.js app URL:
 
 - Proxy prefix: `apps`
 - Proxy subpath: `push-eagle`
-- Proxy URL: `https://app.push-eagle.example.com/api/storefront`
+- Proxy URL: `https://push-eagle-dashboard.vercel.app/api/storefront`
 
 ## Theme block values
 
