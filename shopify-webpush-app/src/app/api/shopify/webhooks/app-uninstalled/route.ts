@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
-import { markMerchantUninstalled } from '@/lib/server/data/store';
+import { markMerchantUninstalled, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -18,6 +18,19 @@ export async function POST(req: Request) {
 
     const payload = JSON.parse(rawBody) as { domain?: string; myshopify_domain?: string };
     const shopDomain = parseShopDomain(payload.myshopify_domain ?? payload.domain);
+    const eventId = req.headers.get('x-shopify-event-id');
+
+    if (eventId) {
+      const accepted = await registerWebhookEvent({
+        shopDomain,
+        topic: 'app/uninstalled',
+        eventId,
+      });
+
+      if (!accepted) {
+        return NextResponse.json({ ok: true, duplicate: true, shopDomain });
+      }
+    }
 
     await markMerchantUninstalled(shopDomain);
 

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
-import { recordAttributedConversion } from '@/lib/server/data/store';
+import { recordAttributedConversion, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getCustomerExternalId } from '@/lib/server/storefront-identity';
 
@@ -30,6 +30,20 @@ export async function POST(request: Request) {
 
     const payload = JSON.parse(rawBody) as ShopifyOrderPayload;
     const shopDomain = parseShopDomain(request.headers.get('x-shopify-shop-domain'));
+    const eventId = request.headers.get('x-shopify-event-id');
+
+    if (eventId) {
+      const accepted = await registerWebhookEvent({
+        shopDomain,
+        topic: 'orders/create',
+        eventId,
+      });
+
+      if (!accepted) {
+        return NextResponse.json({ ok: true, duplicate: true, shopDomain });
+      }
+    }
+
     const externalId = getCustomerExternalId({
       customerId: payload.customer?.id ? String(payload.customer.id) : null,
       email: payload.customer?.email ?? null,

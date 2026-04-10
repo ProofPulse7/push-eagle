@@ -53,6 +53,12 @@ type RecordConversionInput = {
   campaignId?: string | null;
 };
 
+type RegisterWebhookEventInput = {
+  shopDomain: string;
+  topic: string;
+  eventId: string;
+};
+
 let schemaReadyPromise: Promise<void> | null = null;
 
 const ensureSchema = async () => {
@@ -150,6 +156,15 @@ const ensureSchema = async () => {
         order_id TEXT,
         converted_at TIMESTAMPTZ,
         revenue_cents INTEGER NOT NULL DEFAULT 0
+      )`;
+
+      await sql`CREATE TABLE IF NOT EXISTS webhook_events (
+        id BIGSERIAL PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        topic TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_domain, topic, event_id)
       )`;
 
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_status ON subscriber_tokens(shop_domain, status)`;
@@ -638,4 +653,20 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
   `;
 
   return { attributed: true, campaignId: matchedCampaignId, model: 'impression' as const };
+};
+
+export const registerWebhookEvent = async (input: RegisterWebhookEventInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  await ensureMerchant(input.shopDomain);
+
+  const rows = await sql`
+    INSERT INTO webhook_events (shop_domain, topic, event_id)
+    VALUES (${input.shopDomain}, ${input.topic}, ${input.eventId})
+    ON CONFLICT (shop_domain, topic, event_id) DO NOTHING
+    RETURNING id
+  `;
+
+  return rows.length > 0;
 };
