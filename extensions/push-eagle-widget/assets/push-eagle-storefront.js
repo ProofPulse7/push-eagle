@@ -217,6 +217,11 @@
       delayMs: Number(root.dataset.delayMs || '0')
     };
 
+    var effectiveMode = config.mode;
+    if (isIosSafari() && config.mode !== 'browser') {
+      effectiveMode = 'ios';
+    }
+
     if (!config.enabled) {
       closePrompt(root);
       return;
@@ -242,7 +247,7 @@
       });
     }
 
-    if (config.mode === 'ios') {
+    if (effectiveMode === 'ios') {
       if (!isIosSafari()) {
         closePrompt(root);
         return;
@@ -253,7 +258,7 @@
       }
     }
 
-    if (config.mode === 'browser' && config.autoShow) {
+    if (effectiveMode === 'browser' && config.autoShow) {
       var browserResult = await registerToken(config, boot);
       if (browserResult.ok) {
         showStatus(root, 'Notifications enabled.', 'success');
@@ -266,7 +271,7 @@
 
     if (primaryButton) {
       primaryButton.addEventListener('click', async function () {
-        if (config.mode === 'ios' && !isStandaloneIos()) {
+        if (effectiveMode === 'ios' && !isStandaloneIos()) {
           showStatus(root, 'iOS requires Home Screen mode first. Tap Share -> Add to Home Screen, then reopen this app.', 'info');
           return;
         }
