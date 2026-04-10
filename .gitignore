@@ -16,6 +16,10 @@ database.sqlite
 .env
 .env.*
 
+# Firebase service account keys
+*firebase-adminsdk*.json
+*-firebase-adminsdk-*.json
+
 
 
 
