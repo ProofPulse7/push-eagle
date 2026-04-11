@@ -29,16 +29,26 @@ const buildDashboardSsoUrl = (baseDashboardUrl: string, shopDomain: string) => {
 };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const auth = await authenticate.admin(request);
   const dashboardUrl =
     process.env.SHOPIFY_WEB_DASHBOARD_URL ||
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.WEB_DASHBOARD_URL ||
     "";
 
-  if (dashboardUrl && auth.session?.shop) {
-    throw redirect(buildDashboardSsoUrl(dashboardUrl, auth.session.shop));
+  if (dashboardUrl) {
+    const requestUrl = new URL(request.url);
+    const queryShop = requestUrl.searchParams.get("shop");
+    const headerShop = request.headers.get("x-shopify-shop-domain");
+    const shopDomain = (queryShop || headerShop || "").trim().toLowerCase();
+
+    if (shopDomain.endsWith(".myshopify.com")) {
+      throw redirect(buildDashboardSsoUrl(dashboardUrl, shopDomain));
+    }
+
+    throw redirect(dashboardUrl);
   }
+
+  await authenticate.admin(request);
 
   return { apiKey: shopifyApiKey };
 };
