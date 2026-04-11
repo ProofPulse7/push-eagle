@@ -4,7 +4,12 @@ import { redirect, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
-import { authenticate, shopifyApiKey, syncMerchantProfileToDashboard } from "../shopify.server";
+import {
+  authenticate,
+  shopifyApiKey,
+  syncMerchantProfileToDashboard,
+  syncRecentCustomersToDashboard,
+} from "../shopify.server";
 
 const buildDashboardSsoUrl = (baseDashboardUrl: string, shopDomain: string) => {
   const secret = process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() || process.env.SHOPIFY_API_SECRET?.trim();
@@ -48,14 +53,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const headerShop = request.headers.get("x-shopify-shop-domain");
     let shopDomain = (queryShop || headerShop || "").trim().toLowerCase();
 
-    try {
+    const isShopLaunch = shopDomain.endsWith(".myshopify.com");
+
+    if (isShopLaunch) {
+      // For Shopify-origin launches, force admin auth so sessions and tokens are created.
       const auth = await authenticate.admin(request);
       authSession = auth;
-      if (!shopDomain) {
-        shopDomain = (auth.session?.shop || "").trim().toLowerCase();
+      shopDomain = (auth.session?.shop || shopDomain).trim().toLowerCase();
+    } else {
+      try {
+        const auth = await authenticate.admin(request);
+        authSession = auth;
+        if (!shopDomain) {
+          shopDomain = (auth.session?.shop || "").trim().toLowerCase();
+        }
+      } catch {
+        // Continue with query/header-derived shop when admin auth context is not available yet.
       }
-    } catch {
-      // Continue with query/header-derived shop when admin auth context is not available yet.
     }
 
     if (!shopDomain) {
@@ -66,6 +80,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       void syncMerchantProfileToDashboard({
         shopDomain: authSession.session.shop,
         scope: authSession.session.scope || null,
+        admin: authSession.admin,
+      });
+
+      void syncRecentCustomersToDashboard({
+        shopDomain: authSession.session.shop,
         admin: authSession.admin,
       });
     }
