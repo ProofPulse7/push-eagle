@@ -34,6 +34,27 @@ type UpdateAttributionSettingsInput = {
   impressionWindowDays: number;
 };
 
+type OptInSettings = {
+  promptType: 'browser' | 'custom';
+  title: string;
+  message: string;
+  allowText: string;
+  allowBgColor: string;
+  allowTextColor: string;
+  laterText: string;
+  logoUrl: string | null;
+  desktopDelaySeconds: number;
+  mobileDelaySeconds: number;
+  maxDisplaysPerSession: number;
+  hideForDays: number;
+  desktopPosition: 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
+  mobilePosition: 'top' | 'bottom';
+};
+
+type UpdateOptInSettingsInput = {
+  shopDomain: string;
+} & OptInSettings;
+
 type TrackCampaignClickInput = {
   campaignId: string;
   shopDomain: string;
@@ -82,6 +103,23 @@ type UpsertShopifyCustomerInput = {
 };
 
 let schemaReadyPromise: Promise<void> | null = null;
+
+const defaultOptInSettings: OptInSettings = {
+  promptType: 'custom',
+  title: 'Never miss a sale 🛍️',
+  message: 'Subscribe to get updates on our new products and exclusive promotions.',
+  allowText: 'Allow',
+  allowBgColor: '#2e5fdc',
+  allowTextColor: '#ffffff',
+  laterText: 'Later',
+  logoUrl: null,
+  desktopDelaySeconds: 5,
+  mobileDelaySeconds: 10,
+  maxDisplaysPerSession: 10,
+  hideForDays: 2,
+  desktopPosition: 'top-center',
+  mobilePosition: 'top',
+};
 
 const ensureSchema = async () => {
   if (!schemaReadyPromise) {
@@ -225,6 +263,21 @@ const ensureSchema = async () => {
         impression_window_days INTEGER NOT NULL DEFAULT 3,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_prompt_type TEXT NOT NULL DEFAULT 'custom'`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_title TEXT`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_message TEXT`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_allow_text TEXT`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_allow_bg_color TEXT`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_allow_text_color TEXT`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_later_text TEXT`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_logo_url TEXT`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_desktop_delay_seconds INTEGER NOT NULL DEFAULT 5`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_mobile_delay_seconds INTEGER NOT NULL DEFAULT 10`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_max_displays_per_session INTEGER NOT NULL DEFAULT 10`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_hide_for_days INTEGER NOT NULL DEFAULT 2`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_desktop_position TEXT NOT NULL DEFAULT 'top-center'`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_mobile_position TEXT NOT NULL DEFAULT 'top'`;
 
       await sql`CREATE TABLE IF NOT EXISTS campaign_deliveries (
         id BIGSERIAL PRIMARY KEY,
@@ -820,6 +873,122 @@ export const getAttributionSettings = async (shopDomain: string) => {
     clickWindowDays: Number(settingsRows[0]?.click_window_days ?? 2),
     impressionWindowDays: Number(settingsRows[0]?.impression_window_days ?? 3),
   };
+};
+
+export const getOptInSettings = async (shopDomain: string): Promise<OptInSettings> => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  await sql`
+    INSERT INTO merchant_settings (shop_domain)
+    VALUES (${shopDomain})
+    ON CONFLICT (shop_domain) DO NOTHING
+  `;
+
+  const rows = await sql`
+    SELECT
+      opt_in_prompt_type,
+      opt_in_title,
+      opt_in_message,
+      opt_in_allow_text,
+      opt_in_allow_bg_color,
+      opt_in_allow_text_color,
+      opt_in_later_text,
+      opt_in_logo_url,
+      opt_in_desktop_delay_seconds,
+      opt_in_mobile_delay_seconds,
+      opt_in_max_displays_per_session,
+      opt_in_hide_for_days,
+      opt_in_desktop_position,
+      opt_in_mobile_position
+    FROM merchant_settings
+    WHERE shop_domain = ${shopDomain}
+    LIMIT 1
+  `;
+
+  const row = rows[0];
+
+  return {
+    promptType: (row?.opt_in_prompt_type as OptInSettings['promptType']) ?? defaultOptInSettings.promptType,
+    title: String(row?.opt_in_title ?? defaultOptInSettings.title),
+    message: String(row?.opt_in_message ?? defaultOptInSettings.message),
+    allowText: String(row?.opt_in_allow_text ?? defaultOptInSettings.allowText),
+    allowBgColor: String(row?.opt_in_allow_bg_color ?? defaultOptInSettings.allowBgColor),
+    allowTextColor: String(row?.opt_in_allow_text_color ?? defaultOptInSettings.allowTextColor),
+    laterText: String(row?.opt_in_later_text ?? defaultOptInSettings.laterText),
+    logoUrl: row?.opt_in_logo_url ? String(row.opt_in_logo_url) : defaultOptInSettings.logoUrl,
+    desktopDelaySeconds: Number(row?.opt_in_desktop_delay_seconds ?? defaultOptInSettings.desktopDelaySeconds),
+    mobileDelaySeconds: Number(row?.opt_in_mobile_delay_seconds ?? defaultOptInSettings.mobileDelaySeconds),
+    maxDisplaysPerSession: Number(row?.opt_in_max_displays_per_session ?? defaultOptInSettings.maxDisplaysPerSession),
+    hideForDays: Number(row?.opt_in_hide_for_days ?? defaultOptInSettings.hideForDays),
+    desktopPosition: (row?.opt_in_desktop_position as OptInSettings['desktopPosition']) ?? defaultOptInSettings.desktopPosition,
+    mobilePosition: (row?.opt_in_mobile_position as OptInSettings['mobilePosition']) ?? defaultOptInSettings.mobilePosition,
+  };
+};
+
+export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  await sql`
+    INSERT INTO merchant_settings (
+      shop_domain,
+      opt_in_prompt_type,
+      opt_in_title,
+      opt_in_message,
+      opt_in_allow_text,
+      opt_in_allow_bg_color,
+      opt_in_allow_text_color,
+      opt_in_later_text,
+      opt_in_logo_url,
+      opt_in_desktop_delay_seconds,
+      opt_in_mobile_delay_seconds,
+      opt_in_max_displays_per_session,
+      opt_in_hide_for_days,
+      opt_in_desktop_position,
+      opt_in_mobile_position,
+      updated_at
+    )
+    VALUES (
+      ${input.shopDomain},
+      ${input.promptType},
+      ${input.title},
+      ${input.message},
+      ${input.allowText},
+      ${input.allowBgColor},
+      ${input.allowTextColor},
+      ${input.laterText},
+      ${input.logoUrl ?? null},
+      ${input.desktopDelaySeconds},
+      ${input.mobileDelaySeconds},
+      ${input.maxDisplaysPerSession},
+      ${input.hideForDays},
+      ${input.desktopPosition},
+      ${input.mobilePosition},
+      NOW()
+    )
+    ON CONFLICT (shop_domain)
+    DO UPDATE SET
+      opt_in_prompt_type = EXCLUDED.opt_in_prompt_type,
+      opt_in_title = EXCLUDED.opt_in_title,
+      opt_in_message = EXCLUDED.opt_in_message,
+      opt_in_allow_text = EXCLUDED.opt_in_allow_text,
+      opt_in_allow_bg_color = EXCLUDED.opt_in_allow_bg_color,
+      opt_in_allow_text_color = EXCLUDED.opt_in_allow_text_color,
+      opt_in_later_text = EXCLUDED.opt_in_later_text,
+      opt_in_logo_url = EXCLUDED.opt_in_logo_url,
+      opt_in_desktop_delay_seconds = EXCLUDED.opt_in_desktop_delay_seconds,
+      opt_in_mobile_delay_seconds = EXCLUDED.opt_in_mobile_delay_seconds,
+      opt_in_max_displays_per_session = EXCLUDED.opt_in_max_displays_per_session,
+      opt_in_hide_for_days = EXCLUDED.opt_in_hide_for_days,
+      opt_in_desktop_position = EXCLUDED.opt_in_desktop_position,
+      opt_in_mobile_position = EXCLUDED.opt_in_mobile_position,
+      updated_at = NOW()
+  `;
+
+  return getOptInSettings(input.shopDomain);
 };
 
 export const updateAttributionSettings = async (input: UpdateAttributionSettingsInput) => {

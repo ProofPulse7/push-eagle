@@ -19,14 +19,16 @@
   {{ block.shopify_attributes }}
 >
   <div class="pe-prompt__card">
-    <div class="pe-prompt__icon" aria-hidden="true">
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-      </svg>
+    <div class="pe-prompt__content">
+      <div class="pe-prompt__logo-shell">
+        <img class="pe-prompt__logo" data-push-eagle-logo alt="Push Eagle" width="48" height="48" hidden>
+        <span class="pe-prompt__logo-fallback" data-push-eagle-logo-fallback aria-hidden="true">PE</span>
+      </div>
+      <div class="pe-prompt__copy">
+        <p class="pe-prompt__headline" data-push-eagle-headline>{{ block.settings.headline }}</p>
+        <p class="pe-prompt__subheading" data-push-eagle-message>{{ block.settings.subheading }}</p>
+      </div>
     </div>
-    <p class="pe-prompt__headline">{{ block.settings.headline }}</p>
-    <p class="pe-prompt__subheading">{{ block.settings.subheading }}</p>
     <p class="pe-prompt__status" data-push-eagle-status aria-live="polite"></p>
     <div class="pe-prompt__actions">
       <button

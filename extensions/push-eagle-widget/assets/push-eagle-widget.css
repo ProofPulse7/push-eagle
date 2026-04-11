@@ -2,22 +2,28 @@
 .pe-prompt {
   position: fixed;
   z-index: 2147483647;
-  max-width: 320px;
+  max-width: 360px;
   width: calc(100vw - 48px);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  line-height: 1;
+  line-height: 1.2;
   box-sizing: border-box;
 }
 
 .pe-prompt--bottom-left  { bottom: 24px; left: 24px; }
 .pe-prompt--bottom-right { bottom: 24px; right: 24px; }
+.pe-prompt--top-center   { top: 24px; left: 50%; transform: translateX(-50%); }
 .pe-prompt--top-left     { top: 24px;    left: 24px; }
 .pe-prompt--top-right    { top: 24px;    right: 24px; }
+.pe-prompt--mobile-top   { top: 12px; left: 12px; right: 12px; }
+.pe-prompt--mobile-bottom { bottom: 12px; left: 12px; right: 12px; }
 
 .pe-prompt--bottom-left,
 .pe-prompt--bottom-right,
+.pe-prompt--top-center,
 .pe-prompt--top-left,
-.pe-prompt--top-right {
+.pe-prompt--top-right,
+.pe-prompt--mobile-top,
+.pe-prompt--mobile-bottom {
   animation: pe-slide-in 0.25s ease forwards;
 }
 
@@ -40,49 +46,70 @@
 
 .pe-prompt__card {
   background: #ffffff;
-  border-radius: 14px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.08);
-  padding: 20px;
+  border-radius: 18px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18), 0 4px 18px rgba(15, 23, 42, 0.08);
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   box-sizing: border-box;
+  border: 1px solid rgba(148, 163, 184, 0.22);
 }
 
-.pe-prompt__icon {
+.pe-prompt__content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pe-prompt__logo-shell {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background-color: #f3e8ff;
-  color: var(--pe-accent, #9400d3);
+  background: #e5e7eb;
   flex-shrink: 0;
-  margin-bottom: 2px;
+  overflow: hidden;
 }
 
-.pe-prompt__icon svg {
+.pe-prompt__logo {
   display: block;
-  width: 24px;
-  height: 24px;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pe-prompt__logo-fallback {
+  font-size: 13px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+
+.pe-prompt__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .pe-prompt__headline {
   margin: 0;
   padding: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-  color: #111827;
+  color: #1f2937;
   line-height: 1.3;
 }
 
 .pe-prompt__subheading {
   margin: 0;
   padding: 0;
-  font-size: 13px;
+  font-size: 12px;
   color: #6b7280;
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
 .pe-prompt__status {
@@ -102,8 +129,8 @@
 .pe-prompt__actions {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 2px;
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .pe-prompt__btn {
@@ -111,7 +138,7 @@
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 13px;
   font-weight: 600;
   padding: 10px 16px;
@@ -132,10 +159,11 @@
 .pe-prompt__btn--primary {
   background: var(--pe-accent, #9400d3);
   color: #ffffff;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.08);
 }
 
 .pe-prompt__btn--secondary {
-  background: #f3f4f6;
+  background: transparent;
   color: #6b7280;
 }
 
@@ -145,16 +173,34 @@
     width: calc(100vw - 24px);
   }
 
-  .pe-prompt--bottom-left  { bottom: 12px; left: 12px; right: 12px; }
-  .pe-prompt--bottom-right { bottom: 12px; left: 12px; right: 12px; }
-  .pe-prompt--top-left     { top: 12px;    left: 12px; right: 12px; }
-  .pe-prompt--top-right    { top: 12px;    left: 12px; right: 12px; }
-
-  .pe-prompt--bottom-center {
+  .pe-prompt--bottom-left,
+  .pe-prompt--bottom-right,
+  .pe-prompt--bottom-center,
+  .pe-prompt--mobile-bottom {
     bottom: 12px;
     left: 12px;
     right: 12px;
+    top: auto;
     transform: none;
+  }
+
+  .pe-prompt--top-left,
+  .pe-prompt--top-center,
+  .pe-prompt--top-right,
+  .pe-prompt--mobile-top {
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    bottom: auto;
+    transform: none;
+  }
+
+  .pe-prompt--bottom-center {
     animation: pe-slide-in 0.25s ease forwards;
+  }
+
+  .pe-prompt__card {
+    border-radius: 16px;
+    padding: 14px;
   }
 }

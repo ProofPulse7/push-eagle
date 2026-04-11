@@ -18,6 +18,23 @@
     vapidKey: 'BBYMZqB-pyUMdSTJVC6qC_0p4KzX7cVqzWB9g4dkBcw5poVMOtqnKqV0Fsuh_KywnVtEHQILWswYeR0gc7kWfWs'
   };
 
+  var defaultOptInSettings = {
+    promptType: 'custom',
+    title: 'Never miss a sale 🛍️',
+    message: 'Subscribe to get updates on our new products and exclusive promotions.',
+    allowText: 'Allow',
+    allowBgColor: '#2e5fdc',
+    allowTextColor: '#ffffff',
+    laterText: 'Later',
+    logoUrl: null,
+    desktopDelaySeconds: 5,
+    mobileDelaySeconds: 10,
+    maxDisplaysPerSession: 10,
+    hideForDays: 2,
+    desktopPosition: 'top-center',
+    mobilePosition: 'top'
+  };
+
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
       var existing = document.querySelector('script[src="' + src + '"]');
@@ -64,6 +81,22 @@
   function safeLocalStorageRemove(key) {
     try {
       window.localStorage.removeItem(key);
+    } catch (_error) {
+      // ignore storage failures
+    }
+  }
+
+  function safeSessionStorageGet(key) {
+    try {
+      return window.sessionStorage.getItem(key);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function safeSessionStorageSet(key, value) {
+    try {
+      window.sessionStorage.setItem(key, value);
     } catch (_error) {
       // ignore storage failures
     }
@@ -150,6 +183,102 @@
     return safeLocalStorageGet(getStorageKey(shopDomain, 'subscribed')) === 'true';
   }
 
+  function getSessionDisplayCount(shopDomain) {
+    return Number(safeSessionStorageGet(getStorageKey(shopDomain, 'session_displays')) || '0');
+  }
+
+  function incrementSessionDisplayCount(shopDomain) {
+    safeSessionStorageSet(getStorageKey(shopDomain, 'session_displays'), String(getSessionDisplayCount(shopDomain) + 1));
+  }
+
+  function isMobileViewport() {
+    return window.matchMedia('(max-width: 767px)').matches;
+  }
+
+  function getResolvedOptInSettings(boot) {
+    var merged = Object.assign({}, defaultOptInSettings, boot && boot.optIn ? boot.optIn : {});
+    merged.desktopDelaySeconds = Number(merged.desktopDelaySeconds || defaultOptInSettings.desktopDelaySeconds);
+    merged.mobileDelaySeconds = Number(merged.mobileDelaySeconds || defaultOptInSettings.mobileDelaySeconds);
+    merged.maxDisplaysPerSession = Number(merged.maxDisplaysPerSession || defaultOptInSettings.maxDisplaysPerSession);
+    merged.hideForDays = Number(merged.hideForDays || defaultOptInSettings.hideForDays);
+    return merged;
+  }
+
+  function applyPosition(root, settings) {
+    var positions = [
+      'pe-prompt--top-left',
+      'pe-prompt--top-center',
+      'pe-prompt--top-right',
+      'pe-prompt--bottom-left',
+      'pe-prompt--bottom-center',
+      'pe-prompt--bottom-right',
+      'pe-prompt--mobile-top',
+      'pe-prompt--mobile-bottom'
+    ];
+
+    for (var index = 0; index < positions.length; index += 1) {
+      root.classList.remove(positions[index]);
+    }
+
+    if (isMobileViewport()) {
+      root.classList.add(settings.mobilePosition === 'bottom' ? 'pe-prompt--mobile-bottom' : 'pe-prompt--mobile-top');
+      return;
+    }
+
+    root.classList.add('pe-prompt--' + settings.desktopPosition);
+  }
+
+  function applyOptInSettings(root, runtimeConfig, boot) {
+    var settings = getResolvedOptInSettings(boot);
+    var headline = root.querySelector('[data-push-eagle-headline]');
+    var message = root.querySelector('[data-push-eagle-message]');
+    var allowButton = root.querySelector('[data-push-eagle-action]');
+    var laterButton = root.querySelector('[data-push-eagle-dismiss]');
+    var logo = root.querySelector('[data-push-eagle-logo]');
+    var logoFallback = root.querySelector('[data-push-eagle-logo-fallback]');
+
+    if (headline) {
+      headline.textContent = settings.title;
+    }
+    if (message) {
+      message.textContent = settings.message;
+    }
+    if (allowButton) {
+      allowButton.textContent = settings.allowText;
+      allowButton.style.backgroundColor = settings.allowBgColor;
+      allowButton.style.color = settings.allowTextColor;
+    }
+    if (laterButton) {
+      laterButton.textContent = settings.laterText;
+    }
+    if (logo) {
+      if (settings.logoUrl) {
+        logo.src = settings.logoUrl;
+        logo.hidden = false;
+        if (logoFallback) {
+          logoFallback.hidden = true;
+        }
+      } else {
+        logo.removeAttribute('src');
+        logo.hidden = true;
+        if (logoFallback) {
+          logoFallback.hidden = false;
+        }
+      }
+    }
+
+    runtimeConfig.mode = settings.promptType === 'browser' ? 'browser' : runtimeConfig.mode;
+    runtimeConfig.delayMs = (isMobileViewport() ? settings.mobileDelaySeconds : settings.desktopDelaySeconds) * 1000;
+    runtimeConfig.maxDisplaysPerSession = settings.maxDisplaysPerSession;
+    runtimeConfig.remindAfterDays = settings.hideForDays;
+    runtimeConfig.resolvedOptIn = settings;
+    applyPosition(root, settings);
+  }
+
+  function canShowPromptForSession(shopDomain, maxDisplaysPerSession) {
+    return getSessionDisplayCount(shopDomain) < Math.max(1, Number(maxDisplaysPerSession || 1));
+  }
+
   async function bootstrap(config) {
     var bootstrapUrl = config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH;
 
@@ -168,6 +297,7 @@
       shopDomain: config.shopDomain,
       externalId: getOrCreateAnonExternalId(config.shopDomain),
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
+      optIn: defaultOptInSettings,
       firebase: fallbackFirebaseConfig
     };
   }
@@ -370,13 +500,9 @@
       displayTrigger: root.dataset.displayTrigger || 'auto',
       manualSelector: root.dataset.manualSelector || '[data-push-eagle-open]',
       remindAfterDays: Number(root.dataset.remindAfterDays || '7'),
+      maxDisplaysPerSession: 10,
       delayMs: Number(root.dataset.delayMs || '0')
     };
-
-    var effectiveMode = config.mode;
-    if (isIosSafari() && config.mode !== 'browser') {
-      effectiveMode = 'ios';
-    }
 
     if (!config.enabled) {
       closePrompt(root);
@@ -390,6 +516,13 @@
     }
 
     var boot = await bootstrap(config);
+  applyOptInSettings(root, config, boot);
+
+    var effectiveMode = config.mode;
+    if (isIosSafari() && config.mode !== 'browser') {
+      effectiveMode = 'ios';
+    }
+
     var support = getBrowserSupport();
 
     var primaryButton = root.querySelector('[data-push-eagle-action]');
@@ -438,6 +571,13 @@
     }
 
     var showPrompt = function () {
+      if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
+        closePrompt(root);
+        return;
+      }
+
+      incrementSessionDisplayCount(config.shopDomain);
+      dismissPrompt(config.shopDomain, config.remindAfterDays);
       openPrompt(root);
       if (effectiveMode === 'ios' && !isStandaloneIos()) {
         explainUnsupported(root, 'ios-home-screen');

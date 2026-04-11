@@ -1,10 +1,9 @@
 
 'use client';
 
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
-import { ArrowLeft, Upload, Crop, Smile, Check, Lightbulb, Trash2, ImageIcon, Wifi, Signal, Battery, Square, Circle as CircleIcon, Triangle } from 'lucide-react';
+import { ArrowLeft, Upload, Crop, Smile, Check, Trash2, ImageIcon, Wifi, Signal, Battery, Square, Circle as CircleIcon, Triangle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -18,8 +17,31 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import dynamic from 'next/dynamic';
 import { ImageEditorSheet } from '@/components/composer/editor-parts/image-editor-sheet';
 import { useSettings } from '@/context/settings-context';
+import { useToast } from '@/hooks/use-toast';
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
+
+type DesktopPosition = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
+type MobilePosition = 'top' | 'bottom';
+
+type OptInSettingsResponse = {
+    ok: boolean;
+    promptType: 'browser' | 'custom';
+    title: string;
+    message: string;
+    allowText: string;
+    allowBgColor: string;
+    allowTextColor: string;
+    laterText: string;
+    logoUrl: string | null;
+    desktopDelaySeconds: number;
+    mobileDelaySeconds: number;
+    maxDisplaysPerSession: number;
+    hideForDays: number;
+    desktopPosition: DesktopPosition;
+    mobilePosition: MobilePosition;
+    error?: string;
+};
 
 
 const DesktopScreen = ({ selected, onSelect }: { selected: string, onSelect: (pos: string) => void }) => {
@@ -173,19 +195,22 @@ const MobilePreview = ({ title, message, allowText, laterText, allowBgColor, all
 
 
 export default function CustomPromptPage() {
-    type ImageValue = { file: File | null; preview: string | null };
-
-    const [desktopPosition, setDesktopPosition] = useState('top-center');
-    const [mobilePosition, setMobilePosition] = useState('top');
-    
-    // State for live preview
-    const [title, setTitle] = useState("Never miss a sale 🛍️");
-    const [message, setMessage] = useState("Subscribe to get updates on our new products and exclusive promotions.");
-    const [allowText, setAllowText] = useState("Allow");
-    const [allowBgColor, setAllowBgColor] = useState("#2e5fdc");
-    const [allowTextColor, setAllowTextColor] = useState("#ffffff");
-    const [laterText, setLaterText] = useState("Later");
-    const { logo, setLogo } = useSettings();
+    const [desktopPosition, setDesktopPosition] = useState<DesktopPosition>('top-center');
+    const [mobilePosition, setMobilePosition] = useState<MobilePosition>('top');
+    const [title, setTitle] = useState('Never miss a sale 🛍️');
+    const [message, setMessage] = useState('Subscribe to get updates on our new products and exclusive promotions.');
+    const [allowText, setAllowText] = useState('Allow');
+    const [allowBgColor, setAllowBgColor] = useState('#2e5fdc');
+    const [allowTextColor, setAllowTextColor] = useState('#ffffff');
+    const [laterText, setLaterText] = useState('Later');
+    const [desktopDelaySeconds, setDesktopDelaySeconds] = useState('5');
+    const [mobileDelaySeconds, setMobileDelaySeconds] = useState('10');
+    const [maxDisplaysPerSession, setMaxDisplaysPerSession] = useState('10');
+    const [hideForDays, setHideForDays] = useState('2');
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const { logo, setLogo, shopDomain } = useSettings();
+    const { toast } = useToast();
     const logoInputRef = useRef<HTMLInputElement | null>(null);
 
     const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
@@ -206,7 +231,115 @@ export default function CustomPromptPage() {
     const handleSaveCrop = (dataUrl: string) => {
         setLogo({ file: null, preview: dataUrl });
         setEditingState(null);
-    }
+    };
+
+    useEffect(() => {
+        if (!shopDomain) {
+            setLoading(false);
+            return;
+        }
+
+        let isMounted = true;
+        setLoading(true);
+
+        fetch(`/api/settings/opt-in?shop=${encodeURIComponent(shopDomain)}`)
+            .then(async (res) => {
+                const data = (await res.json()) as OptInSettingsResponse;
+                if (!res.ok || !data?.ok || !isMounted) {
+                    throw new Error(data?.error ?? 'Failed to load opt-in settings.');
+                }
+
+                setTitle(data.title);
+                setMessage(data.message);
+                setAllowText(data.allowText);
+                setAllowBgColor(data.allowBgColor);
+                setAllowTextColor(data.allowTextColor);
+                setLaterText(data.laterText);
+                setDesktopDelaySeconds(String(data.desktopDelaySeconds));
+                setMobileDelaySeconds(String(data.mobileDelaySeconds));
+                setMaxDisplaysPerSession(String(data.maxDisplaysPerSession));
+                setHideForDays(String(data.hideForDays));
+                setDesktopPosition(data.desktopPosition);
+                setMobilePosition(data.mobilePosition);
+                setLogo({ file: null, preview: data.logoUrl ?? null });
+            })
+            .catch((error) => {
+                if (!isMounted) {
+                    return;
+                }
+
+                toast({
+                    variant: 'destructive',
+                    title: 'Failed to load custom prompt settings',
+                    description: error instanceof Error ? error.message : 'Unexpected error while loading prompt settings.',
+                });
+            })
+            .finally(() => {
+                if (isMounted) {
+                    setLoading(false);
+                }
+            });
+
+        return () => {
+            isMounted = false;
+        };
+    }, [shopDomain, setLogo, toast]);
+
+    const saveChanges = async () => {
+        if (!shopDomain) {
+            toast({
+                variant: 'destructive',
+                title: 'Shop domain required',
+                description: 'Open the dashboard from a connected Shopify store before saving opt-in settings.',
+            });
+            return;
+        }
+
+        setSaving(true);
+        try {
+            const response = await fetch('/api/settings/opt-in', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    shopDomain,
+                    promptType: 'custom',
+                    title,
+                    message,
+                    allowText,
+                    allowBgColor,
+                    allowTextColor,
+                    laterText,
+                    logoUrl: logo.preview ?? null,
+                    desktopDelaySeconds: Number(desktopDelaySeconds),
+                    mobileDelaySeconds: Number(mobileDelaySeconds),
+                    maxDisplaysPerSession: Number(maxDisplaysPerSession),
+                    hideForDays: Number(hideForDays),
+                    desktopPosition,
+                    mobilePosition,
+                }),
+            });
+
+            const result = (await response.json()) as OptInSettingsResponse;
+            if (!response.ok || !result?.ok) {
+                throw new Error(result?.error ?? 'Failed to save custom prompt settings.');
+            }
+
+            toast({
+                title: 'Custom prompt saved',
+                description: 'The live storefront popup now uses these settings.',
+            });
+        } catch (error) {
+            toast({
+                variant: 'destructive',
+                title: 'Save failed',
+                description: error instanceof Error ? error.message : 'Unexpected error while saving custom prompt settings.',
+            });
+        } finally {
+            setSaving(false);
+        }
+    };
     
     return (
         <div className="flex flex-col min-h-screen">
@@ -330,7 +463,7 @@ export default function CustomPromptPage() {
                                         <Label>Desktop</Label>
                                         <div className="flex items-center gap-2">
                                             <p className="text-sm text-muted-foreground whitespace-nowrap">Show prompt after</p>
-                                            <Select defaultValue="5">
+                                            <Select value={desktopDelaySeconds} onValueChange={setDesktopDelaySeconds}>
                                                 <SelectTrigger className="w-full">
                                                     <SelectValue />
                                                 </SelectTrigger>
@@ -345,7 +478,7 @@ export default function CustomPromptPage() {
                                         <Label>Mobile</Label>
                                         <div className="flex items-center gap-2">
                                             <p className="text-sm text-muted-foreground whitespace-nowrap">Show prompt after</p>
-                                            <Select defaultValue="10">
+                                            <Select value={mobileDelaySeconds} onValueChange={setMobileDelaySeconds}>
                                                 <SelectTrigger className="w-full">
                                                     <SelectValue />
                                                 </SelectTrigger>
@@ -361,7 +494,7 @@ export default function CustomPromptPage() {
                                     <Label>Max count per session</Label>
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm text-muted-foreground">Show the prompt maximum</p>
-                                        <Input type="number" defaultValue={10} min="1" max="10" className="w-20" />
+                                        <Input type="number" value={maxDisplaysPerSession} onChange={(e) => setMaxDisplaysPerSession(e.target.value)} min="1" max="10" className="w-20" />
                                         <p className="text-sm text-muted-foreground">times per session</p>
                                     </div>
                                 </div>
@@ -369,7 +502,7 @@ export default function CustomPromptPage() {
                                     <Label>Frequency</Label>
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm text-muted-foreground">Hide the prompt for</p>
-                                        <Input type="number" defaultValue={2} min="1" max="10" className="w-20" />
+                                        <Input type="number" value={hideForDays} onChange={(e) => setHideForDays(e.target.value)} min="1" max="30" className="w-20" />
                                         <p className="text-sm text-muted-foreground">days after it is shown to a visitor</p>
                                     </div>
                                 </div>
@@ -414,6 +547,7 @@ export default function CustomPromptPage() {
                         <Card>
                             <CardHeader>
                                 <CardTitle>Preview</CardTitle>
+                                <CardDescription>These settings now control the live theme embed popup on your storefront.</CardDescription>
                             </CardHeader>
                             <CardContent>
                                 <Tabs defaultValue="desktop">
@@ -453,7 +587,10 @@ export default function CustomPromptPage() {
                     <Button variant="outline" size="lg" asChild>
                       <Link href="/opt-ins">Cancel</Link>
                     </Button>
-                    <Button size="lg">Save Changes</Button>
+                    <Button size="lg" onClick={saveChanges} disabled={saving || loading}>
+                        {(saving || loading) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        {loading ? 'Loading...' : saving ? 'Saving...' : 'Save Changes'}
+                    </Button>
                 </div>
             </div>
 
