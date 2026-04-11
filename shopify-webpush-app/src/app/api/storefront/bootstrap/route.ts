@@ -50,6 +50,10 @@ export async function GET(request: Request) {
       },
     });
 
+    response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    response.headers.set('Pragma', 'no-cache');
+    response.headers.set('Expires', '0');
+
     response.cookies.set(cookieName, externalId, {
       httpOnly: false,
       sameSite: 'lax',

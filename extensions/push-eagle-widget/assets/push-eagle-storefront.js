@@ -164,6 +164,10 @@
     return dismissedUntil > Date.now();
   }
 
+  function clearSessionDisplayCount(shopDomain) {
+    safeSessionStorageSet(getStorageKey(shopDomain, 'session_displays'), '0');
+  }
+
   function dismissPrompt(shopDomain, remindAfterDays) {
     var days = Number(remindAfterDays || 7);
     var safeDays = isNaN(days) ? 7 : Math.max(1, days);
@@ -210,6 +214,47 @@
       merged.placementPreset = defaultOptInSettings.placementPreset;
     }
     return merged;
+  }
+
+  function getSettingsSignature(settings) {
+    var keys = [
+      settings.promptType,
+      settings.title,
+      settings.message,
+      settings.allowText,
+      settings.allowBgColor,
+      settings.allowTextColor,
+      settings.laterText,
+      settings.logoUrl || '',
+      String(settings.desktopDelaySeconds),
+      String(settings.mobileDelaySeconds),
+      String(settings.maxDisplaysPerSession),
+      String(settings.hideForDays),
+      settings.desktopPosition,
+      settings.mobilePosition,
+      settings.placementPreset || 'balanced',
+      String(settings.offsetX || 0),
+      String(settings.offsetY || 0)
+    ];
+
+    return keys.join('|');
+  }
+
+  function syncSettingsVersion(shopDomain, settings) {
+    var key = getStorageKey(shopDomain, 'settings_signature');
+    var next = getSettingsSignature(settings);
+    var prev = safeLocalStorageGet(key);
+
+    if (!prev) {
+      safeLocalStorageSet(key, next);
+      return;
+    }
+
+    if (prev !== next) {
+      safeLocalStorageSet(key, next);
+      clearPromptDismissal(shopDomain);
+      clearSessionDisplayCount(shopDomain);
+    }
   }
 
   function getPresetOffset(settings) {
@@ -301,6 +346,7 @@
     runtimeConfig.remindAfterDays = settings.hideForDays;
     runtimeConfig.resolvedOptIn = settings;
     applyPosition(root, settings);
+    syncSettingsVersion(runtimeConfig.shopDomain, settings);
 
     var presetOffset = getPresetOffset(settings);
     var finalOffsetX = presetOffset.x + settings.offsetX;
@@ -611,7 +657,6 @@
       }
 
       incrementSessionDisplayCount(config.shopDomain);
-      dismissPrompt(config.shopDomain, config.remindAfterDays);
       openPrompt(root);
       if (effectiveMode === 'ios' && !isStandaloneIos()) {
         explainUnsupported(root, 'ios-home-screen');
