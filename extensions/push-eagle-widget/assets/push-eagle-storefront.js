@@ -32,7 +32,10 @@
     maxDisplaysPerSession: 10,
     hideForDays: 2,
     desktopPosition: 'top-center',
-    mobilePosition: 'top'
+    mobilePosition: 'top',
+    placementPreset: 'balanced',
+    offsetX: 0,
+    offsetY: 0
   };
 
   function loadScript(src) {
@@ -201,7 +204,32 @@
     merged.mobileDelaySeconds = Number(merged.mobileDelaySeconds || defaultOptInSettings.mobileDelaySeconds);
     merged.maxDisplaysPerSession = Number(merged.maxDisplaysPerSession || defaultOptInSettings.maxDisplaysPerSession);
     merged.hideForDays = Number(merged.hideForDays || defaultOptInSettings.hideForDays);
+    merged.offsetX = Number(merged.offsetX || 0);
+    merged.offsetY = Number(merged.offsetY || 0);
+    if (!merged.placementPreset) {
+      merged.placementPreset = defaultOptInSettings.placementPreset;
+    }
     return merged;
+  }
+
+  function getPresetOffset(settings) {
+    var isMobile = isMobileViewport();
+    var step = isMobile ? 16 : 24;
+
+    if (settings.placementPreset === 'safe-left') {
+      return { x: step, y: 0 };
+    }
+    if (settings.placementPreset === 'safe-right') {
+      return { x: -step, y: 0 };
+    }
+    if (settings.placementPreset === 'safe-top') {
+      return { x: 0, y: step };
+    }
+    if (settings.placementPreset === 'safe-bottom') {
+      return { x: 0, y: -step };
+    }
+
+    return { x: 0, y: 0 };
   }
 
   function applyPosition(root, settings) {
@@ -273,6 +301,12 @@
     runtimeConfig.remindAfterDays = settings.hideForDays;
     runtimeConfig.resolvedOptIn = settings;
     applyPosition(root, settings);
+
+    var presetOffset = getPresetOffset(settings);
+    var finalOffsetX = presetOffset.x + settings.offsetX;
+    var finalOffsetY = presetOffset.y + settings.offsetY;
+    root.style.setProperty('--pe-offset-x', finalOffsetX + 'px');
+    root.style.setProperty('--pe-offset-y', finalOffsetY + 'px');
   }
 
   function canShowPromptForSession(shopDomain, maxDisplaysPerSession) {

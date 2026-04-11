@@ -40,6 +40,9 @@ type OptInSettingsResponse = {
     hideForDays: number;
     desktopPosition: DesktopPosition;
     mobilePosition: MobilePosition;
+    placementPreset: 'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom';
+    offsetX: number;
+    offsetY: number;
     error?: string;
 };
 
@@ -207,6 +210,9 @@ export default function CustomPromptPage() {
     const [mobileDelaySeconds, setMobileDelaySeconds] = useState('10');
     const [maxDisplaysPerSession, setMaxDisplaysPerSession] = useState('10');
     const [hideForDays, setHideForDays] = useState('2');
+    const [placementPreset, setPlacementPreset] = useState<'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom'>('balanced');
+    const [offsetX, setOffsetX] = useState('0');
+    const [offsetY, setOffsetY] = useState('0');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const { logo, setLogo, shopDomain } = useSettings();
@@ -261,6 +267,9 @@ export default function CustomPromptPage() {
                 setHideForDays(String(data.hideForDays));
                 setDesktopPosition(data.desktopPosition);
                 setMobilePosition(data.mobilePosition);
+                setPlacementPreset(data.placementPreset);
+                setOffsetX(String(data.offsetX));
+                setOffsetY(String(data.offsetY));
                 setLogo({ file: null, preview: data.logoUrl ?? null });
             })
             .catch((error) => {
@@ -318,6 +327,9 @@ export default function CustomPromptPage() {
                     hideForDays: Number(hideForDays),
                     desktopPosition,
                     mobilePosition,
+                    placementPreset,
+                    offsetX: Number(offsetX),
+                    offsetY: Number(offsetY),
                 }),
             });
 
@@ -539,6 +551,41 @@ export default function CustomPromptPage() {
                                         </SelectContent>
                                     </Select>
                                     <MobileScreen selected={mobilePosition} onSelect={setMobilePosition} />
+                                </div>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Fine Position Controls</CardTitle>
+                                <CardDescription>Use presets for quick alignment, then nudge left/right/up/down to avoid overlapping store elements.</CardDescription>
+                            </CardHeader>
+                            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div className="space-y-2 md:col-span-1">
+                                    <Label>Placement preset</Label>
+                                    <Select value={placementPreset} onValueChange={(value) => setPlacementPreset(value as 'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom')}>
+                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="balanced">Balanced (default)</SelectItem>
+                                            <SelectItem value="safe-left">Shift away from left overlays</SelectItem>
+                                            <SelectItem value="safe-right">Shift away from right overlays</SelectItem>
+                                            <SelectItem value="safe-top">Shift away from sticky headers</SelectItem>
+                                            <SelectItem value="safe-bottom">Shift away from sticky footers</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Horizontal nudge (px)</Label>
+                                    <div className="flex items-center gap-2">
+                                        <Input type="number" min="-240" max="240" value={offsetX} onChange={(e) => setOffsetX(e.target.value)} />
+                                        <span className="text-xs text-muted-foreground whitespace-nowrap">left(-) / right(+)</span>
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Vertical nudge (px)</Label>
+                                    <div className="flex items-center gap-2">
+                                        <Input type="number" min="-240" max="240" value={offsetY} onChange={(e) => setOffsetY(e.target.value)} />
+                                        <span className="text-xs text-muted-foreground whitespace-nowrap">up(-) / down(+)</span>
+                                    </div>
                                 </div>
                             </CardContent>
                         </Card>

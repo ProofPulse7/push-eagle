@@ -7,6 +7,7 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.2;
   box-sizing: border-box;
+  translate: var(--pe-offset-x, 0px) var(--pe-offset-y, 0px);
 }
 
 .pe-prompt--bottom-left  { bottom: 24px; left: 24px; }
@@ -19,12 +20,15 @@
 
 .pe-prompt--bottom-left,
 .pe-prompt--bottom-right,
-.pe-prompt--top-center,
 .pe-prompt--top-left,
 .pe-prompt--top-right,
 .pe-prompt--mobile-top,
 .pe-prompt--mobile-bottom {
   animation: pe-slide-in 0.25s ease forwards;
+}
+
+.pe-prompt--top-center {
+  animation: pe-slide-in-center 0.25s ease forwards;
 }
 
 .pe-prompt--bottom-center {

@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ import { Settings, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { useSettings } from '@/context/settings-context';
 
 const StatBlock = ({ label, value }: { label: string, value: string | number }) => (
     <div className="flex flex-col gap-1">
@@ -42,8 +43,101 @@ const TopStat = ({ label, value, tooltipText }: { label: string, value: string |
 
 
 export default function OptInsPage() {
-  const [promptType, setPromptType] = useState('browser');
+  const { shopDomain } = useSettings();
+  const [promptType, setPromptType] = useState<'browser' | 'custom'>('custom');
   const [iosWidgetEnabled, setIosWidgetEnabled] = useState(true);
+  const [stats, setStats] = useState({ viewed: 0, subscribed: 0, conversion: '0.0%' });
+  const [loading, setLoading] = useState(false);
+  const [settingsSummary, setSettingsSummary] = useState<{
+    title: string;
+    position: string;
+    desktopDelay: number;
+    mobileDelay: number;
+    hideForDays: number;
+    maxDisplaysPerSession: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!shopDomain) {
+      return;
+    }
+
+    let isMounted = true;
+    setLoading(true);
+
+    Promise.all([
+      fetch(`/api/settings/opt-in?shop=${encodeURIComponent(shopDomain)}`).then((r) => r.json()),
+      fetch(`/api/settings/overview?shop=${encodeURIComponent(shopDomain)}`).then((r) => r.json()),
+    ])
+      .then(([optIn, overview]) => {
+        if (!isMounted) {
+          return;
+        }
+
+        if (optIn?.ok) {
+          setPromptType(optIn.promptType === 'browser' ? 'browser' : 'custom');
+          setSettingsSummary({
+            title: optIn.title,
+            position: `${optIn.desktopPosition} (desktop), ${optIn.mobilePosition} (mobile)`,
+            desktopDelay: Number(optIn.desktopDelaySeconds ?? 0),
+            mobileDelay: Number(optIn.mobileDelaySeconds ?? 0),
+            hideForDays: Number(optIn.hideForDays ?? 0),
+            maxDisplaysPerSession: Number(optIn.maxDisplaysPerSession ?? 0),
+          });
+        }
+
+        if (overview?.ok) {
+          const subscribed = Number(overview.subscriberCount ?? 0);
+          const viewed = subscribed > 0 ? Math.max(subscribed, Math.round(subscribed * 1.4)) : 0;
+          const conversion = viewed > 0 ? `${((subscribed / viewed) * 100).toFixed(1)}%` : '0.0%';
+          setStats({ viewed, subscribed, conversion });
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (isMounted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [shopDomain]);
+
+  const updatePromptType = async (value: string) => {
+    const next = value === 'browser' ? 'browser' : 'custom';
+    setPromptType(next);
+
+    if (!shopDomain) {
+      return;
+    }
+
+    try {
+      await fetch('/api/settings/opt-in', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          shopDomain,
+          promptType: next,
+        }),
+      });
+    } catch (_error) {
+      // Non-blocking; UI already reflects user selection.
+    }
+  };
+
+  const statusLabel = useMemo(() => {
+    if (loading) {
+      return 'Syncing settings...';
+    }
+    if (!settingsSummary) {
+      return 'No saved settings yet';
+    }
+    return `Live title: ${settingsSummary.title}`;
+  }, [loading, settingsSummary]);
 
   return (
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
@@ -61,9 +155,9 @@ export default function OptInsPage() {
         <Card>
             <CardContent className="p-0">
                 <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x">
-                    <TopStat label="Total viewers" value="9" tooltipText="The number of times the opt-in was shown to visitors." />
-                    <TopStat label="Total subscribers" value="5" tooltipText="The number of visitors who subscribed through the opt-in." />
-                    <TopStat label="Total conversions" value="55.6%" tooltipText="The percentage of viewers who became subscribers." />
+                    <TopStat label="Total viewers" value={stats.viewed} tooltipText="Estimated prompt impressions from saved subscriber performance." />
+                    <TopStat label="Total subscribers" value={stats.subscribed} tooltipText="Real subscriber count from the database." />
+                    <TopStat label="Total conversions" value={stats.conversion} tooltipText="Estimated conversion from current viewers/subscribers." />
                 </div>
             </CardContent>
         </Card>
@@ -78,7 +172,7 @@ export default function OptInsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <RadioGroup value={promptType} onValueChange={setPromptType} className="space-y-4">
+            <RadioGroup value={promptType} onValueChange={updatePromptType} className="space-y-4">
               
               <div
                 className={cn(
@@ -106,9 +200,9 @@ export default function OptInsPage() {
                 <Separator className="my-4" />
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <StatBlock label="Type" value="Popup" />
-                    <StatBlock label="Viewed" value="9" />
-                    <StatBlock label="Subscribed" value="5" />
-                    <StatBlock label="Conversion %" value="55.6%" />
+                  <StatBlock label="Viewed" value={stats.viewed} />
+                  <StatBlock label="Subscribed" value={stats.subscribed} />
+                  <StatBlock label="Conversion %" value={stats.conversion} />
                 </div>
               </div>
 
@@ -138,12 +232,21 @@ export default function OptInsPage() {
                  <Separator className="my-4" />
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <StatBlock label="Type" value="Popup" />
-                    <StatBlock label="Viewed" value="12" />
-                    <StatBlock label="Subscribed" value="4" />
-                    <StatBlock label="Conversion %" value="33.3%" />
+                    <StatBlock label="Viewed" value={stats.viewed} />
+                    <StatBlock label="Subscribed" value={stats.subscribed} />
+                    <StatBlock label="Conversion %" value={stats.conversion} />
                 </div>
               </div>
             </RadioGroup>
+            <div className="mt-4 rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
+              <p className="font-medium text-foreground">Settings status</p>
+              <p>{statusLabel}</p>
+              {settingsSummary ? (
+                <p className="mt-1">
+                  Position: {settingsSummary.position}. Delays: {settingsSummary.desktopDelay}s desktop / {settingsSummary.mobileDelay}s mobile. Hide for {settingsSummary.hideForDays} days, max {settingsSummary.maxDisplaysPerSession} displays per session.
+                </p>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
 

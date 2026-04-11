@@ -49,6 +49,9 @@ type OptInSettings = {
   hideForDays: number;
   desktopPosition: 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
   mobilePosition: 'top' | 'bottom';
+  placementPreset: 'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom';
+  offsetX: number;
+  offsetY: number;
 };
 
 type UpdateOptInSettingsInput = {
@@ -119,6 +122,9 @@ const defaultOptInSettings: OptInSettings = {
   hideForDays: 2,
   desktopPosition: 'top-center',
   mobilePosition: 'top',
+  placementPreset: 'balanced',
+  offsetX: 0,
+  offsetY: 0,
 };
 
 const ensureSchema = async () => {
@@ -278,6 +284,9 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_hide_for_days INTEGER NOT NULL DEFAULT 2`;
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_desktop_position TEXT NOT NULL DEFAULT 'top-center'`;
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_mobile_position TEXT NOT NULL DEFAULT 'top'`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_placement_preset TEXT NOT NULL DEFAULT 'balanced'`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_offset_x INTEGER NOT NULL DEFAULT 0`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_offset_y INTEGER NOT NULL DEFAULT 0`;
 
       await sql`CREATE TABLE IF NOT EXISTS campaign_deliveries (
         id BIGSERIAL PRIMARY KEY,
@@ -901,7 +910,10 @@ export const getOptInSettings = async (shopDomain: string): Promise<OptInSetting
       opt_in_max_displays_per_session,
       opt_in_hide_for_days,
       opt_in_desktop_position,
-      opt_in_mobile_position
+      opt_in_mobile_position,
+      opt_in_placement_preset,
+      opt_in_offset_x,
+      opt_in_offset_y
     FROM merchant_settings
     WHERE shop_domain = ${shopDomain}
     LIMIT 1
@@ -924,6 +936,9 @@ export const getOptInSettings = async (shopDomain: string): Promise<OptInSetting
     hideForDays: Number(row?.opt_in_hide_for_days ?? defaultOptInSettings.hideForDays),
     desktopPosition: (row?.opt_in_desktop_position as OptInSettings['desktopPosition']) ?? defaultOptInSettings.desktopPosition,
     mobilePosition: (row?.opt_in_mobile_position as OptInSettings['mobilePosition']) ?? defaultOptInSettings.mobilePosition,
+    placementPreset: (row?.opt_in_placement_preset as OptInSettings['placementPreset']) ?? defaultOptInSettings.placementPreset,
+    offsetX: Number(row?.opt_in_offset_x ?? defaultOptInSettings.offsetX),
+    offsetY: Number(row?.opt_in_offset_y ?? defaultOptInSettings.offsetY),
   };
 };
 
@@ -949,6 +964,9 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
       opt_in_hide_for_days,
       opt_in_desktop_position,
       opt_in_mobile_position,
+      opt_in_placement_preset,
+      opt_in_offset_x,
+      opt_in_offset_y,
       updated_at
     )
     VALUES (
@@ -967,6 +985,9 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
       ${input.hideForDays},
       ${input.desktopPosition},
       ${input.mobilePosition},
+      ${input.placementPreset},
+      ${input.offsetX},
+      ${input.offsetY},
       NOW()
     )
     ON CONFLICT (shop_domain)
@@ -985,6 +1006,9 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
       opt_in_hide_for_days = EXCLUDED.opt_in_hide_for_days,
       opt_in_desktop_position = EXCLUDED.opt_in_desktop_position,
       opt_in_mobile_position = EXCLUDED.opt_in_mobile_position,
+        opt_in_placement_preset = EXCLUDED.opt_in_placement_preset,
+        opt_in_offset_x = EXCLUDED.opt_in_offset_x,
+        opt_in_offset_y = EXCLUDED.opt_in_offset_y,
       updated_at = NOW()
   `;
 
