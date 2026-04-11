@@ -1,10 +1,14 @@
 {
-  "ratings": {
-    "stars": {
-      "label": "Ratings"
-    },
-    "home": {
-      "recommendationText": "Recommended Product!"
+  "push_eagle": {
+    "prompt": {
+      "headline": "Stay in the loop",
+      "subheading": "Get notified about exclusive offers, restocks, and updates — right in your browser.",
+      "allow_label": "Enable notifications",
+      "decline_label": "Maybe later",
+      "status_enabled": "Notifications enabled.",
+      "status_denied": "Permission denied. You can enable notifications from browser settings.",
+      "status_failed": "Setup failed. Please retry.",
+      "ios_home_screen": "Add this store to Home Screen, then open it from there to enable notifications."
     }
   }
 }

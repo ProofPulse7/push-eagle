@@ -1,0 +1,160 @@
+/* Push Eagle — Push Notification Opt-In Widget */
+.pe-prompt {
+  position: fixed;
+  z-index: 2147483647;
+  max-width: 320px;
+  width: calc(100vw - 48px);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
+.pe-prompt--bottom-left  { bottom: 24px; left: 24px; }
+.pe-prompt--bottom-right { bottom: 24px; right: 24px; }
+.pe-prompt--top-left     { top: 24px;    left: 24px; }
+.pe-prompt--top-right    { top: 24px;    right: 24px; }
+
+.pe-prompt--bottom-left,
+.pe-prompt--bottom-right,
+.pe-prompt--top-left,
+.pe-prompt--top-right {
+  animation: pe-slide-in 0.25s ease forwards;
+}
+
+.pe-prompt--bottom-center {
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  animation: pe-slide-in-center 0.25s ease forwards;
+}
+
+@keyframes pe-slide-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pe-slide-in-center {
+  from { opacity: 0; transform: translateX(-50%) translateY(14px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.pe-prompt__card {
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.08);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+}
+
+.pe-prompt__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background-color: #f3e8ff;
+  color: var(--pe-accent, #9400d3);
+  flex-shrink: 0;
+  margin-bottom: 2px;
+}
+
+.pe-prompt__icon svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+}
+
+.pe-prompt__headline {
+  margin: 0;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.3;
+}
+
+.pe-prompt__subheading {
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.pe-prompt__status {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  min-height: 0;
+  line-height: 1.4;
+}
+
+.pe-prompt__status:empty { display: none; }
+
+.pe-prompt__status[data-kind="success"] { color: #059669; }
+.pe-prompt__status[data-kind="error"]   { color: #dc2626; }
+.pe-prompt__status[data-kind="info"]    { color: #6b7280; }
+
+.pe-prompt__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.pe-prompt__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.15s ease;
+  white-space: nowrap;
+  font-family: inherit;
+  text-decoration: none;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
+.pe-prompt__btn:hover  { opacity: 0.85; }
+.pe-prompt__btn:active { transform: scale(0.97); }
+.pe-prompt__btn[disabled],
+.pe-prompt__btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.pe-prompt__btn--primary {
+  background: var(--pe-accent, #9400d3);
+  color: #ffffff;
+}
+
+.pe-prompt__btn--secondary {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+@media (max-width: 480px) {
+  .pe-prompt {
+    max-width: 100%;
+    width: calc(100vw - 24px);
+  }
+
+  .pe-prompt--bottom-left  { bottom: 12px; left: 12px; right: 12px; }
+  .pe-prompt--bottom-right { bottom: 12px; left: 12px; right: 12px; }
+  .pe-prompt--top-left     { top: 12px;    left: 12px; right: 12px; }
+  .pe-prompt--top-right    { top: 12px;    left: 12px; right: 12px; }
+
+  .pe-prompt--bottom-center {
+    bottom: 12px;
+    left: 12px;
+    right: 12px;
+    transform: none;
+    animation: pe-slide-in 0.25s ease forwards;
+  }
+}
