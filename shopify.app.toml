@@ -2,7 +2,7 @@
 
 client_id = "c866e24e9ce383cebeee6edb01496449"
 name = "Push-Eagle"
-application_url = "https://push-eagle.vercel.app"
+application_url = "https://push-eagle-dashboard.vercel.app/dashboard"
 embedded = false
 
 [build]
@@ -13,22 +13,28 @@ api_version = "2026-07"
 
   [[webhooks.subscriptions]]
   topics = [ "app/uninstalled" ]
-  uri = "/webhooks/app/uninstalled"
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/app-uninstalled"
 
   [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
-  uri = "/webhooks/app/scopes_update"
+  uri = "https://push-eagle.vercel.app/webhooks/app/scopes_update"
 
   [[webhooks.subscriptions]]
   topics = [ "orders/create" ]
-  uri = "/api/shopify/webhooks/orders-create"
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/orders-create"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_customers,read_orders,read_products,write_products,write_metaobjects,write_metaobject_definitions"
 
 [auth]
-redirect_urls = [ "https://push-eagle.vercel.app/auth/callback", "https://push-eagle.vercel.app/auth/shopify/callback", "https://push-eagle.vercel.app/api/auth" ]
+redirect_urls = [
+  "https://push-eagle.vercel.app/auth/callback",
+  "https://push-eagle.vercel.app/auth/shopify/callback",
+  "https://push-eagle.vercel.app/api/auth",
+  "https://push-eagle-dashboard.vercel.app/auth/callback",
+  "https://push-eagle-dashboard.vercel.app/api/auth/callback"
+]
 
 [app_proxy]
 url = "https://push-eagle-dashboard.vercel.app/api/storefront"
@@ -36,15 +42,15 @@ subpath = "push-eagle"
 prefix = "apps"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/customers/data_request"
+  uri = "https://push-eagle.vercel.app/webhooks/customers/data_request"
   compliance_topics = [ "customers/data_request" ]
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/customers/redact"
+  uri = "https://push-eagle.vercel.app/webhooks/customers/redact"
   compliance_topics = [ "customers/redact" ]
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/shop/redact"
+  uri = "https://push-eagle.vercel.app/webhooks/shop/redact"
   compliance_topics = [ "shop/redact" ]
 
 [product.metafields.app.demo_info]

@@ -4,7 +4,7 @@ import { redirect, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
-import { authenticate, shopifyApiKey } from "../shopify.server";
+import { authenticate, shopifyApiKey, syncMerchantProfileToDashboard } from "../shopify.server";
 
 const buildDashboardSsoUrl = (baseDashboardUrl: string, shopDomain: string) => {
   const secret = process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() || process.env.SHOPIFY_API_SECRET?.trim();
@@ -35,12 +35,40 @@ const resolveDashboardUrl = () =>
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const dashboardUrl = resolveDashboardUrl();
+  let authSession:
+    | {
+        session?: { shop?: string; scope?: string | null };
+        admin?: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> };
+      }
+    | null = null;
 
   if (dashboardUrl) {
     const requestUrl = new URL(request.url);
     const queryShop = requestUrl.searchParams.get("shop");
     const headerShop = request.headers.get("x-shopify-shop-domain");
-    const shopDomain = (queryShop || headerShop || "").trim().toLowerCase();
+    let shopDomain = (queryShop || headerShop || "").trim().toLowerCase();
+
+    try {
+      const auth = await authenticate.admin(request);
+      authSession = auth;
+      if (!shopDomain) {
+        shopDomain = (auth.session?.shop || "").trim().toLowerCase();
+      }
+    } catch {
+      // Continue with query/header-derived shop when admin auth context is not available yet.
+    }
+
+    if (!shopDomain) {
+      shopDomain = "";
+    }
+
+    if (authSession?.session?.shop && authSession.admin) {
+      void syncMerchantProfileToDashboard({
+        shopDomain: authSession.session.shop,
+        scope: authSession.session.scope || null,
+        admin: authSession.admin,
+      });
+    }
 
     if (shopDomain.endsWith(".myshopify.com")) {
       throw redirect(buildDashboardSsoUrl(dashboardUrl, shopDomain));
