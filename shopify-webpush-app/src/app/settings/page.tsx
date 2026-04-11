@@ -87,7 +87,8 @@ export default function SettingsPage() {
   const [locationStoreOption, setLocationStoreOption] = useState('yes');
   const [nameStoreOption, setNameStoreOption] = useState('yes');
     const [overview, setOverview] = useState<MerchantOverview | null>(null);
-        const [overviewRefreshTick, setOverviewRefreshTick] = useState(0);
+    const [overviewRefreshTick, setOverviewRefreshTick] = useState(0);
+    const [syncingShopify, setSyncingShopify] = useState(false);
   
   const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
@@ -214,6 +215,54 @@ export default function SettingsPage() {
         });
     };
 
+    const syncFromShopify = async () => {
+        if (!shopDomain && !overview?.myshopifyDomain) {
+            toast({
+                variant: 'destructive',
+                title: 'Shop domain required',
+                description: 'Open app from Shopify first so we can resolve your store domain.',
+            });
+            return;
+        }
+
+        setSyncingShopify(true);
+        try {
+            const response = await fetch('/api/integrations/shopify/sync-now', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    shopDomain: shopDomain || overview?.myshopifyDomain,
+                }),
+            });
+
+            const result = await response.json();
+            if (!response.ok || !result?.ok) {
+                toast({
+                    variant: 'destructive',
+                    title: 'Sync failed',
+                    description: result?.error || 'Could not fetch data from Shopify right now.',
+                });
+                return;
+            }
+
+            setOverviewRefreshTick((value) => value + 1);
+            toast({
+                title: 'Shopify sync complete',
+                description: 'Store details were refreshed from Shopify.',
+            });
+        } catch {
+            toast({
+                variant: 'destructive',
+                title: 'Sync failed',
+                description: 'Could not fetch data from Shopify right now.',
+            });
+        } finally {
+            setSyncingShopify(false);
+        }
+    };
+
 
   return (
     <div className="flex flex-col gap-8">
@@ -242,15 +291,25 @@ export default function SettingsPage() {
             </TabsList>
             <TabsContent value="overview">
             <Card className="mt-4">
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-row items-center justify-between gap-2">
                     <CardTitle>Store Details</CardTitle>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setOverviewRefreshTick((value) => value + 1)}
-                    >
-                        Refresh details
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={syncFromShopify}
+                            disabled={syncingShopify}
+                        >
+                            {syncingShopify ? 'Syncing...' : 'Sync from Shopify'}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setOverviewRefreshTick((value) => value + 1)}
+                        >
+                            Refresh details
+                        </Button>
+                    </div>
                 </CardHeader>
                 <CardContent className="space-y-8">
                     <div className="flex items-center gap-4">
