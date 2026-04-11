@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       ok: true,
       shopDomain,
       externalId,
-      tokenEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/token`,
+      tokenEndpoint: '/apps/push-eagle/token',
       conversionEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/conversion`,
       firebase: {
         apiKey: env.NEXT_PUBLIC_FIREBASE_API_KEY,

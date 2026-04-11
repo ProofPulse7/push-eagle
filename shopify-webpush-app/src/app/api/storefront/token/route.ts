@@ -3,6 +3,8 @@ import { createHash } from 'crypto';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { env } from '@/lib/config/env';
+import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { upsertSubscriberToken } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
@@ -18,8 +20,28 @@ const schema = z.object({
   country: z.string().optional(),
 });
 
+const appOrigin = (() => {
+  try {
+    return new URL(env.NEXT_PUBLIC_APP_URL).origin;
+  } catch (_error) {
+    return '';
+  }
+})();
+
+const isTrustedRequest = (request: Request) => {
+  const url = new URL(request.url);
+  const hasProxySignature = url.searchParams.has('signature');
+
+  if (hasProxySignature) {
+    return verifyShopifyAppProxySignature(url.searchParams);
+  }
+
+  const origin = request.headers.get('origin');
+  return Boolean(origin && appOrigin && origin === appOrigin);
+};
+
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': appOrigin || '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Domain',
 };
@@ -30,8 +52,20 @@ export async function OPTIONS() {
 
 export async function POST(request: Request) {
   try {
+    if (!isTrustedRequest(request)) {
+      return NextResponse.json({ ok: false, error: 'Unauthorized token registration request.' }, { status: 401, headers: corsHeaders });
+    }
+
+    const url = new URL(request.url);
     const body = schema.parse(await request.json());
     const shopDomain = parseShopDomain(body.shopDomain);
+
+    if (url.searchParams.has('shop')) {
+      const proxiedShopDomain = parseShopDomain(url.searchParams.get('shop'));
+      if (proxiedShopDomain !== shopDomain) {
+        return NextResponse.json({ ok: false, error: 'Shop domain mismatch.' }, { status: 400, headers: corsHeaders });
+      }
+    }
 
     const userAgent = request.headers.get('user-agent');
     const externalId = body.externalId?.trim()

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
+import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 
 export const runtime = 'nodejs';
 
@@ -42,7 +43,12 @@ self.addEventListener('notificationclick', function(event) {
 });
 `;
 
-export async function GET() {
+const handleRequest = async (request: Request) => {
+  const url = new URL(request.url);
+  if (!verifyShopifyAppProxySignature(url.searchParams)) {
+    return NextResponse.json({ ok: false, error: 'Invalid Shopify app proxy signature.' }, { status: 401 });
+  }
+
   return new NextResponse(serviceWorkerSource, {
     headers: {
       'Content-Type': 'application/javascript; charset=utf-8',
@@ -52,6 +58,10 @@ export async function GET() {
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
     },
   });
+};
+
+export async function GET(request: Request) {
+  return handleRequest(request);
 }
 
 export async function OPTIONS() {
