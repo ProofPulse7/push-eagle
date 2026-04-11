@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
@@ -17,9 +18,43 @@ import { AndroidPreview } from '@/components/composer/previews/android-preview';
 import { WindowsPreview } from '@/components/composer/previews/windows-preview';
 import { MacOSPreview } from '@/components/composer/previews/macos-preview';
 
+const buildScheduledAt = (scheduledDate?: Date, scheduledTime?: string) => {
+    if (!scheduledDate || !scheduledTime) {
+        return null;
+    }
+
+    const match = scheduledTime.match(/^(\d{1,2}):(\d{2})\s?(AM|PM)$/i);
+    if (!match) {
+        return null;
+    }
+
+    const [, hourValue, minuteValue, meridiem] = match;
+    let hours = Number(hourValue) % 12;
+    if (meridiem.toUpperCase() === 'PM') {
+        hours += 12;
+    }
+
+    const result = new Date(scheduledDate);
+    result.setHours(hours, Number(minuteValue), 0, 0);
+    return result;
+};
+
 
 export default function ScheduleCampaignPage() {
-    const { title, message, primaryLink, windowsHero, macHero, androidHero, logo, actionButtons, sendingOption, segmentId } = useCampaignState();
+    const {
+        title,
+        message,
+        primaryLink,
+        windowsHero,
+        macHero,
+        androidHero,
+        logo,
+        actionButtons,
+        sendingOption,
+        scheduledDate,
+        scheduledTime,
+        segmentId,
+    } = useCampaignState();
     const [isLaunching, setIsLaunching] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [previewDevice, setPreviewDevice] = useState('windows');
@@ -27,12 +62,23 @@ export default function ScheduleCampaignPage() {
     const router = useRouter();
     const { toast } = useToast();
     const { shopDomain } = useSettings();
+    const scheduledAt = buildScheduledAt(scheduledDate, scheduledTime);
     
     const handleLaunchCampaign = async (status: 'Sent' | 'Scheduled') => {
         setIsLaunching(true);
         try {
             if (!shopDomain) {
                 throw new Error('Set your Shopify subdomain in Settings before launching campaigns.');
+            }
+
+            if (sendingOption === 'schedule') {
+                if (!scheduledAt) {
+                    throw new Error('Choose a valid scheduled date and time.');
+                }
+
+                if (scheduledAt.getTime() <= Date.now()) {
+                    throw new Error('Scheduled time must be in the future.');
+                }
             }
 
             const createResponse = await fetch('/api/campaigns', {
@@ -49,7 +95,7 @@ export default function ScheduleCampaignPage() {
                     imageUrl: macHero.preview,
                     segmentId,
                     status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
-                    scheduledAt: sendingOption === 'schedule' ? new Date(Date.now() + 5 * 60 * 1000).toISOString() : null,
+                    scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
                 }),
             });
 
@@ -189,7 +235,9 @@ export default function ScheduleCampaignPage() {
                                 <p className="text-sm text-muted-foreground">Starts (Pakistan Standard Time)</p>
                                 <p className="font-medium flex items-center gap-2">
                                     <Clock className="h-4 w-4" /> 
-                                    {sendingOption === 'schedule' ? 'Scheduled for later' : 'Immediately'}
+                                    {sendingOption === 'schedule' && scheduledAt
+                                        ? format(scheduledAt, 'PPP p')
+                                        : 'Immediately'}
                                 </p>
                             </div>
                         </CardContent>

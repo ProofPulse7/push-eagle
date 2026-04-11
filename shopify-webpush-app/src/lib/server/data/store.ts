@@ -594,15 +594,32 @@ export const listCampaigns = async (shopDomain: string, limit = 50) => {
   `;
 };
 
+export const listDueScheduledCampaigns = async (limit = 25) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  return sql`
+    SELECT id, shop_domain, scheduled_at
+    FROM campaigns
+    WHERE status = 'scheduled'
+      AND scheduled_at IS NOT NULL
+      AND scheduled_at <= NOW()
+    ORDER BY scheduled_at ASC
+    LIMIT ${limit}
+  ` as Promise<Array<{ id: string; shop_domain: string; scheduled_at: string | Date | null }>>;
+};
+
 export const sendCampaign = async (shopDomain: string, campaignId: string) => {
   await ensureSchema();
   const sql = getNeonSql();
 
   const campaignRows = await sql`
-    SELECT *
-    FROM campaigns
-    WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
-    LIMIT 1
+    UPDATE campaigns
+    SET status = 'sending'
+    WHERE id = ${campaignId}
+      AND shop_domain = ${shopDomain}
+      AND status IN ('draft', 'scheduled')
+    RETURNING *
   `;
 
   const campaign = campaignRows[0] as
@@ -613,12 +630,36 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
         target_url: string | null;
         icon_url: string | null;
         image_url: string | null;
+        status: string;
       }
     | undefined;
 
   if (!campaign) {
-    throw new Error('Campaign not found for this shop.');
+    const existingRows = await sql`
+      SELECT status
+      FROM campaigns
+      WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+      LIMIT 1
+    `;
+
+    const existing = existingRows[0] as { status?: string } | undefined;
+
+    if (!existing) {
+      throw new Error('Campaign not found for this shop.');
+    }
+
+    if (existing.status === 'sent') {
+      throw new Error('Campaign has already been sent.');
+    }
+
+    if (existing.status === 'sending') {
+      throw new Error('Campaign is already being processed.');
+    }
+
+    throw new Error(`Campaign cannot be sent from status '${existing.status ?? 'unknown'}'.`);
   }
+
+  const previousStatus = campaign.status;
 
   const recipients = (await sql`
     SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id
@@ -641,82 +682,92 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
     };
   }
 
-  const trackedUrl = buildTrackedUrl(campaign.target_url, campaignId, shopDomain);
-  const messaging = getFirebaseAdminMessaging();
-  const chunkSize = 500;
-  let successCount = 0;
-  let failureCount = 0;
+  try {
+    const trackedUrl = buildTrackedUrl(campaign.target_url, campaignId, shopDomain);
+    const messaging = getFirebaseAdminMessaging();
+    const chunkSize = 500;
+    let successCount = 0;
+    let failureCount = 0;
 
-  for (let i = 0; i < recipients.length; i += chunkSize) {
-    const chunk = recipients.slice(i, i + chunkSize);
-    const multicast = await messaging.sendEachForMulticast({
-      tokens: chunk.map((item) => item.fcm_token),
-      notification: {
-        title: campaign.title,
-        body: campaign.body,
-        imageUrl: campaign.image_url ?? undefined,
-      },
-      webpush: {
-        fcmOptions: {
-          link: trackedUrl ?? undefined,
-        },
+    for (let i = 0; i < recipients.length; i += chunkSize) {
+      const chunk = recipients.slice(i, i + chunkSize);
+      const multicast = await messaging.sendEachForMulticast({
+        tokens: chunk.map((item) => item.fcm_token),
         notification: {
-          icon: campaign.icon_url ?? undefined,
-          image: campaign.image_url ?? undefined,
+          title: campaign.title,
+          body: campaign.body,
+          imageUrl: campaign.image_url ?? undefined,
         },
-      },
-      data: {
-        campaignId,
-        shopDomain,
-      },
-    });
+        webpush: {
+          fcmOptions: {
+            link: trackedUrl ?? undefined,
+          },
+          notification: {
+            icon: campaign.icon_url ?? undefined,
+            image: campaign.image_url ?? undefined,
+          },
+        },
+        data: {
+          campaignId,
+          shopDomain,
+        },
+      });
 
-    successCount += multicast.successCount;
-    failureCount += multicast.failureCount;
+      successCount += multicast.successCount;
+      failureCount += multicast.failureCount;
 
-    for (let index = 0; index < multicast.responses.length; index += 1) {
-      const response = multicast.responses[index];
-      const recipient = chunk[index];
+      for (let index = 0; index < multicast.responses.length; index += 1) {
+        const response = multicast.responses[index];
+        const recipient = chunk[index];
 
-      if (response.success) {
-        await sql`
-          INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
-          VALUES (
-            ${campaignId},
-            ${shopDomain},
-            ${Number(recipient.subscriber_id)},
-            ${Number(recipient.token_id)},
-            ${response.messageId ?? null}
-          )
-        `;
-        continue;
-      }
+        if (response.success) {
+          await sql`
+            INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
+            VALUES (
+              ${campaignId},
+              ${shopDomain},
+              ${Number(recipient.subscriber_id)},
+              ${Number(recipient.token_id)},
+              ${response.messageId ?? null}
+            )
+          `;
+          continue;
+        }
 
-      const code = response.error?.code ?? '';
-      if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
-        await sql`
-          UPDATE subscriber_tokens
-          SET status = 'revoked', updated_at = NOW()
-          WHERE id = ${Number(recipient.token_id)}
-        `;
+        const code = response.error?.code ?? '';
+        if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
+          await sql`
+            UPDATE subscriber_tokens
+            SET status = 'revoked', updated_at = NOW()
+            WHERE id = ${Number(recipient.token_id)}
+          `;
+        }
       }
     }
+
+    await sql`
+      UPDATE campaigns
+      SET
+        status = 'sent',
+        sent_at = NOW(),
+        delivery_count = ${successCount}
+      WHERE id = ${campaignId}
+    `;
+
+    return {
+      successCount,
+      failureCount,
+      recipientCount: recipients.length,
+    };
+  } catch (error) {
+    await sql`
+      UPDATE campaigns
+      SET status = ${previousStatus}
+      WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+    `;
+
+    throw error;
   }
-
-  await sql`
-    UPDATE campaigns
-    SET
-      status = 'sent',
-      sent_at = NOW(),
-      delivery_count = ${successCount}
-    WHERE id = ${campaignId}
-  `;
-
-  return {
-    successCount,
-    failureCount,
-    recipientCount: recipients.length,
-  };
 };
 
 export const cleanupMerchantData = async (shopDomain: string) => {

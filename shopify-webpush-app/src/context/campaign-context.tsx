@@ -24,6 +24,10 @@ export interface CampaignContextType {
     setLogo: (image: ImageValue) => void;
     sendingOption: string;
     setSendingOption: (option: string) => void;
+    scheduledDate: Date | undefined;
+    setScheduledDate: (value: Date | undefined) => void;
+    scheduledTime: string;
+    setScheduledTime: (value: string) => void;
     segmentId: string;
     setSegmentId: (value: string) => void;
 }
@@ -48,6 +52,8 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null });
     const { logo, setLogo } = useSettings();
     const [sendingOption, setSendingOption] = useState('now');
+    const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
+    const [scheduledTime, setScheduledTime] = useState('10:00 AM');
     const [segmentId, setSegmentId] = useState('all');
 
     const value: CampaignContextType = {
@@ -60,6 +66,8 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
         androidHero, setAndroidHero,
         logo, setLogo,
         sendingOption, setSendingOption,
+        scheduledDate, setScheduledDate,
+        scheduledTime, setScheduledTime,
         segmentId, setSegmentId,
     };
 

@@ -60,6 +60,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
         const statusMap: Record<string, Campaign['status']> = {
             draft: 'Draft',
             scheduled: 'Scheduled',
+            sending: 'Scheduled',
             sent: 'Sent',
             archived: 'Archived',
             paused: 'Paused',

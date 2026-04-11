@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const EnvSchema = z.object({
   NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
+  CRON_SECRET: z.string().default(''),
   SHOPIFY_API_KEY: z.string().default(''),
   SHOPIFY_API_SECRET: z.string().default(''),
   SHOPIFY_SCOPES: z.string().default('read_products,read_customers,write_products'),

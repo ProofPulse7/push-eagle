@@ -49,10 +49,17 @@ const segments = [
 
 export default function CampaignDetailsPage() {
     const router = useRouter();
-    const { sendingOption, setSendingOption, segmentId, setSegmentId } = useCampaignState();
+    const {
+        sendingOption,
+        setSendingOption,
+        scheduledDate,
+        setScheduledDate,
+        scheduledTime,
+        setScheduledTime,
+        segmentId,
+        setSegmentId,
+    } = useCampaignState();
     const [campaignType, setCampaignType] = useState('regular');
-    const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
-    const [timeValue, setTimeValue] = useState('10:00 AM');
     const [expiryDate, setExpiryDate] = useState<Date | undefined>(new Date());
     const [expiryTime, setExpiryTime] = useState('10:00 AM');
     const [searchSegment, setSearchSegment] = useState('');
@@ -118,7 +125,7 @@ export default function CampaignDetailsPage() {
                                                         />
                                                     </PopoverContent>
                                                 </Popover>
-                                                <Select value={timeValue} onValueChange={setTimeValue}>
+                                                <Select value={scheduledTime} onValueChange={setScheduledTime}>
                                                     <SelectTrigger id="schedule-time" aria-label="Time" className="w-[140px]">
                                                         <SelectValue />
                                                     </SelectTrigger>
