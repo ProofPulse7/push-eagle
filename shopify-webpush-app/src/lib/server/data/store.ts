@@ -97,23 +97,70 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS first_installed_at TIMESTAMPTZ`;
       await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS last_authenticated_at TIMESTAMPTZ`;
       await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS uninstalled_at TIMESTAMPTZ`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS shop_id TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS store_name TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS email TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS primary_domain TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS myshopify_domain TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS currency_code TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS timezone TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS plan_name TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS owner_name TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS scopes TEXT`;
       await sql`UPDATE merchants SET first_installed_at = COALESCE(first_installed_at, created_at), last_authenticated_at = COALESCE(last_authenticated_at, updated_at) WHERE first_installed_at IS NULL OR last_authenticated_at IS NULL`;
+      await sql`UPDATE merchants SET myshopify_domain = COALESCE(myshopify_domain, shop_domain) WHERE myshopify_domain IS NULL`;
 
-      await sql`CREATE TABLE IF NOT EXISTS merchant_profiles (
-        shop_domain TEXT PRIMARY KEY REFERENCES merchants(shop_domain) ON DELETE CASCADE,
-        shop_id TEXT,
-        store_name TEXT,
-        email TEXT,
-        primary_domain TEXT,
-        myshopify_domain TEXT,
-        currency_code TEXT,
-        timezone TEXT,
-        plan_name TEXT,
-        owner_name TEXT,
-        scopes TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )`;
+      await sql`
+        DO $$
+        BEGIN
+          IF to_regclass('public.merchant_profiles') IS NOT NULL THEN
+            INSERT INTO merchants (
+              shop_domain,
+              shop_id,
+              store_name,
+              email,
+              primary_domain,
+              myshopify_domain,
+              currency_code,
+              timezone,
+              plan_name,
+              owner_name,
+              scopes,
+              updated_at
+            )
+            SELECT
+              p.shop_domain,
+              p.shop_id,
+              p.store_name,
+              p.email,
+              p.primary_domain,
+              p.myshopify_domain,
+              p.currency_code,
+              p.timezone,
+              p.plan_name,
+              p.owner_name,
+              p.scopes,
+              NOW()
+            FROM merchant_profiles p
+            ON CONFLICT (shop_domain)
+            DO UPDATE SET
+              shop_id = COALESCE(EXCLUDED.shop_id, merchants.shop_id),
+              store_name = COALESCE(EXCLUDED.store_name, merchants.store_name),
+              email = COALESCE(EXCLUDED.email, merchants.email),
+              primary_domain = COALESCE(EXCLUDED.primary_domain, merchants.primary_domain),
+              myshopify_domain = COALESCE(EXCLUDED.myshopify_domain, merchants.myshopify_domain),
+              currency_code = COALESCE(EXCLUDED.currency_code, merchants.currency_code),
+              timezone = COALESCE(EXCLUDED.timezone, merchants.timezone),
+              plan_name = COALESCE(EXCLUDED.plan_name, merchants.plan_name),
+              owner_name = COALESCE(EXCLUDED.owner_name, merchants.owner_name),
+              scopes = COALESCE(EXCLUDED.scopes, merchants.scopes),
+              updated_at = NOW();
+
+            DROP TABLE merchant_profiles;
+          END IF;
+        END
+        $$
+      `;
 
       await sql`CREATE TABLE IF NOT EXISTS shopify_customers (
         id BIGSERIAL PRIMARY KEY,
@@ -266,23 +313,12 @@ const ensureMerchant = async (shopDomain: string) => {
   const fallbackStoreName = shopDomain.replace(/\.myshopify\.com$/i, '').replace(/[-_]+/g, ' ').trim();
 
   await sql`
-    INSERT INTO merchant_profiles (
-      shop_domain,
-      store_name,
-      myshopify_domain,
-      updated_at
-    )
-    VALUES (
-      ${shopDomain},
-      ${fallbackStoreName || null},
-      ${shopDomain},
-      NOW()
-    )
-    ON CONFLICT (shop_domain)
-    DO UPDATE SET
-      myshopify_domain = COALESCE(merchant_profiles.myshopify_domain, EXCLUDED.myshopify_domain),
-      store_name = COALESCE(merchant_profiles.store_name, EXCLUDED.store_name),
+    UPDATE merchants
+    SET
+      myshopify_domain = COALESCE(myshopify_domain, ${shopDomain}),
+      store_name = COALESCE(store_name, ${fallbackStoreName || null}),
       updated_at = NOW()
+    WHERE shop_domain = ${shopDomain}
   `;
 };
 
@@ -297,47 +333,20 @@ export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) =
   await ensureMerchant(input.shopDomain);
 
   await sql`
-    INSERT INTO merchant_profiles (
-      shop_domain,
-      shop_id,
-      store_name,
-      email,
-      primary_domain,
-      myshopify_domain,
-      currency_code,
-      timezone,
-      plan_name,
-      owner_name,
-      scopes,
-      updated_at
-    )
-    VALUES (
-      ${input.shopDomain},
-      ${input.shopId ?? null},
-      ${input.storeName ?? null},
-      ${input.email ?? null},
-      ${input.primaryDomain ?? null},
-      ${input.myshopifyDomain ?? null},
-      ${input.currencyCode ?? null},
-      ${input.timezone ?? null},
-      ${input.planName ?? null},
-      ${input.ownerName ?? null},
-      ${input.scopes ?? null},
-      NOW()
-    )
-    ON CONFLICT (shop_domain)
-    DO UPDATE SET
-      shop_id = COALESCE(EXCLUDED.shop_id, merchant_profiles.shop_id),
-      store_name = COALESCE(EXCLUDED.store_name, merchant_profiles.store_name),
-      email = COALESCE(EXCLUDED.email, merchant_profiles.email),
-      primary_domain = COALESCE(EXCLUDED.primary_domain, merchant_profiles.primary_domain),
-      myshopify_domain = COALESCE(EXCLUDED.myshopify_domain, merchant_profiles.myshopify_domain),
-      currency_code = COALESCE(EXCLUDED.currency_code, merchant_profiles.currency_code),
-      timezone = COALESCE(EXCLUDED.timezone, merchant_profiles.timezone),
-      plan_name = COALESCE(EXCLUDED.plan_name, merchant_profiles.plan_name),
-      owner_name = COALESCE(EXCLUDED.owner_name, merchant_profiles.owner_name),
-      scopes = COALESCE(EXCLUDED.scopes, merchant_profiles.scopes),
+    UPDATE merchants
+    SET
+      shop_id = COALESCE(${input.shopId ?? null}, shop_id),
+      store_name = COALESCE(${input.storeName ?? null}, store_name),
+      email = COALESCE(${input.email ?? null}, email),
+      primary_domain = COALESCE(${input.primaryDomain ?? null}, primary_domain),
+      myshopify_domain = COALESCE(${input.myshopifyDomain ?? null}, myshopify_domain),
+      currency_code = COALESCE(${input.currencyCode ?? null}, currency_code),
+      timezone = COALESCE(${input.timezone ?? null}, timezone),
+      plan_name = COALESCE(${input.planName ?? null}, plan_name),
+      owner_name = COALESCE(${input.ownerName ?? null}, owner_name),
+      scopes = COALESCE(${input.scopes ?? null}, scopes),
       updated_at = NOW()
+    WHERE shop_domain = ${input.shopDomain}
   `;
 };
 
@@ -405,20 +414,19 @@ export const getMerchantOverview = async (shopDomain: string) => {
 
   const profileRows = await sql`
     SELECT
-      p.store_name,
-      p.email,
-      p.primary_domain,
-      p.myshopify_domain,
-      p.currency_code,
-      p.timezone,
-      p.plan_name,
-      p.owner_name,
-      p.scopes,
+      m.store_name,
+      m.email,
+      m.primary_domain,
+      m.myshopify_domain,
+      m.currency_code,
+      m.timezone,
+      m.plan_name,
+      m.owner_name,
+      m.scopes,
       m.first_installed_at,
       m.last_authenticated_at,
       m.uninstalled_at
     FROM merchants m
-    LEFT JOIN merchant_profiles p ON p.shop_domain = m.shop_domain
     WHERE m.shop_domain = ${shopDomain}
     LIMIT 1
   `;
