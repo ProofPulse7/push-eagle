@@ -60,7 +60,14 @@ export async function GET(request: Request) {
     const redirectUrl = new URL(redirectPath.startsWith('/') ? redirectPath : '/dashboard', currentOrigin);
     redirectUrl.searchParams.set('shop', shopDomain);
 
-    return NextResponse.redirect(redirectUrl, { status: 307 });
+    const response = NextResponse.redirect(redirectUrl, { status: 302 });
+    response.cookies.set('pe_shop', shopDomain, {
+      path: '/',
+      maxAge: 60 * 60 * 24 * 30,
+      sameSite: 'lax',
+      secure: true,
+    });
+    return response;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid SSO request.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

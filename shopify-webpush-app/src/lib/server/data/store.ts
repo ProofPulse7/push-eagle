@@ -59,6 +59,28 @@ type RegisterWebhookEventInput = {
   eventId: string;
 };
 
+type UpsertMerchantProfileInput = {
+  shopDomain: string;
+  shopId?: string | null;
+  storeName?: string | null;
+  email?: string | null;
+  primaryDomain?: string | null;
+  myshopifyDomain?: string | null;
+  currencyCode?: string | null;
+  timezone?: string | null;
+  planName?: string | null;
+  ownerName?: string | null;
+  scopes?: string | null;
+};
+
+type UpsertShopifyCustomerInput = {
+  shopDomain: string;
+  customerId?: string | null;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+};
+
 let schemaReadyPromise: Promise<void> | null = null;
 
 const ensureSchema = async () => {
@@ -76,6 +98,34 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS last_authenticated_at TIMESTAMPTZ`;
       await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS uninstalled_at TIMESTAMPTZ`;
       await sql`UPDATE merchants SET first_installed_at = COALESCE(first_installed_at, created_at), last_authenticated_at = COALESCE(last_authenticated_at, updated_at) WHERE first_installed_at IS NULL OR last_authenticated_at IS NULL`;
+
+      await sql`CREATE TABLE IF NOT EXISTS merchant_profiles (
+        shop_domain TEXT PRIMARY KEY REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        shop_id TEXT,
+        store_name TEXT,
+        email TEXT,
+        primary_domain TEXT,
+        myshopify_domain TEXT,
+        currency_code TEXT,
+        timezone TEXT,
+        plan_name TEXT,
+        owner_name TEXT,
+        scopes TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+
+      await sql`CREATE TABLE IF NOT EXISTS shopify_customers (
+        id BIGSERIAL PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        customer_id TEXT,
+        email TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_domain, customer_id)
+      )`;
 
       await sql`CREATE TABLE IF NOT EXISTS subscribers (
         id BIGSERIAL PRIMARY KEY,
@@ -172,6 +222,7 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_customers_shop_email ON shopify_customers(shop_domain, email)`;
     })();
   }
 
@@ -216,6 +267,193 @@ const ensureMerchant = async (shopDomain: string) => {
 export const ensureMerchantAccount = async (shopDomain: string) => {
   await ensureSchema();
   await ensureMerchant(shopDomain);
+};
+
+export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  await sql`
+    INSERT INTO merchant_profiles (
+      shop_domain,
+      shop_id,
+      store_name,
+      email,
+      primary_domain,
+      myshopify_domain,
+      currency_code,
+      timezone,
+      plan_name,
+      owner_name,
+      scopes,
+      updated_at
+    )
+    VALUES (
+      ${input.shopDomain},
+      ${input.shopId ?? null},
+      ${input.storeName ?? null},
+      ${input.email ?? null},
+      ${input.primaryDomain ?? null},
+      ${input.myshopifyDomain ?? null},
+      ${input.currencyCode ?? null},
+      ${input.timezone ?? null},
+      ${input.planName ?? null},
+      ${input.ownerName ?? null},
+      ${input.scopes ?? null},
+      NOW()
+    )
+    ON CONFLICT (shop_domain)
+    DO UPDATE SET
+      shop_id = COALESCE(EXCLUDED.shop_id, merchant_profiles.shop_id),
+      store_name = COALESCE(EXCLUDED.store_name, merchant_profiles.store_name),
+      email = COALESCE(EXCLUDED.email, merchant_profiles.email),
+      primary_domain = COALESCE(EXCLUDED.primary_domain, merchant_profiles.primary_domain),
+      myshopify_domain = COALESCE(EXCLUDED.myshopify_domain, merchant_profiles.myshopify_domain),
+      currency_code = COALESCE(EXCLUDED.currency_code, merchant_profiles.currency_code),
+      timezone = COALESCE(EXCLUDED.timezone, merchant_profiles.timezone),
+      plan_name = COALESCE(EXCLUDED.plan_name, merchant_profiles.plan_name),
+      owner_name = COALESCE(EXCLUDED.owner_name, merchant_profiles.owner_name),
+      scopes = COALESCE(EXCLUDED.scopes, merchant_profiles.scopes),
+      updated_at = NOW()
+  `;
+};
+
+export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  if (!input.customerId && !input.email) {
+    return;
+  }
+
+  if (input.customerId) {
+    await sql`
+      INSERT INTO shopify_customers (
+        shop_domain,
+        customer_id,
+        email,
+        first_name,
+        last_name,
+        updated_at
+      )
+      VALUES (
+        ${input.shopDomain},
+        ${input.customerId},
+        ${input.email ?? null},
+        ${input.firstName ?? null},
+        ${input.lastName ?? null},
+        NOW()
+      )
+      ON CONFLICT (shop_domain, customer_id)
+      DO UPDATE SET
+        email = COALESCE(EXCLUDED.email, shopify_customers.email),
+        first_name = COALESCE(EXCLUDED.first_name, shopify_customers.first_name),
+        last_name = COALESCE(EXCLUDED.last_name, shopify_customers.last_name),
+        updated_at = NOW()
+    `;
+    return;
+  }
+
+  await sql`
+    INSERT INTO shopify_customers (
+      shop_domain,
+      customer_id,
+      email,
+      first_name,
+      last_name,
+      updated_at
+    )
+    VALUES (
+      ${input.shopDomain},
+      NULL,
+      ${input.email ?? null},
+      ${input.firstName ?? null},
+      ${input.lastName ?? null},
+      NOW()
+    )
+  `;
+};
+
+export const getMerchantOverview = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  const profileRows = await sql`
+    SELECT
+      p.store_name,
+      p.email,
+      p.primary_domain,
+      p.myshopify_domain,
+      p.currency_code,
+      p.timezone,
+      p.plan_name,
+      p.owner_name,
+      p.scopes,
+      m.first_installed_at,
+      m.last_authenticated_at,
+      m.uninstalled_at
+    FROM merchants m
+    LEFT JOIN merchant_profiles p ON p.shop_domain = m.shop_domain
+    WHERE m.shop_domain = ${shopDomain}
+    LIMIT 1
+  `;
+
+  const subscriberCountRows = await sql`
+    SELECT COUNT(*)::INT AS count
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+  `;
+
+  const customerCountRows = await sql`
+    SELECT COUNT(*)::INT AS count
+    FROM shopify_customers
+    WHERE shop_domain = ${shopDomain}
+  `;
+
+  const campaignCountRows = await sql`
+    SELECT COUNT(*)::INT AS count
+    FROM campaigns
+    WHERE shop_domain = ${shopDomain}
+  `;
+
+  const row = profileRows[0] as
+    | {
+        store_name?: string | null;
+        email?: string | null;
+        primary_domain?: string | null;
+        myshopify_domain?: string | null;
+        currency_code?: string | null;
+        timezone?: string | null;
+        plan_name?: string | null;
+        owner_name?: string | null;
+        scopes?: string | null;
+        first_installed_at?: string | Date | null;
+        last_authenticated_at?: string | Date | null;
+        uninstalled_at?: string | Date | null;
+      }
+    | undefined;
+
+  return {
+    shopDomain,
+    storeName: row?.store_name ?? null,
+    email: row?.email ?? null,
+    storeUrl: row?.primary_domain ?? null,
+    myshopifyDomain: row?.myshopify_domain ?? shopDomain,
+    currencyCode: row?.currency_code ?? null,
+    timezone: row?.timezone ?? null,
+    planName: row?.plan_name ?? null,
+    ownerName: row?.owner_name ?? null,
+    scopes: row?.scopes ?? null,
+    firstInstalledAt: row?.first_installed_at ? String(row.first_installed_at) : null,
+    lastAuthenticatedAt: row?.last_authenticated_at ? String(row.last_authenticated_at) : null,
+    uninstalledAt: row?.uninstalled_at ? String(row.uninstalled_at) : null,
+    subscriberCount: Number(subscriberCountRows[0]?.count ?? 0),
+    customerCount: Number(customerCountRows[0]?.count ?? 0),
+    campaignCount: Number(campaignCountRows[0]?.count ?? 0),
+  };
 };
 
 export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
@@ -669,4 +907,24 @@ export const registerWebhookEvent = async (input: RegisterWebhookEventInput) => 
   `;
 
   return rows.length > 0;
+};
+
+export const listWebhookEvents = async (shopDomain: string, limit = 100) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  const rows = await sql`
+    SELECT topic, event_id, received_at
+    FROM webhook_events
+    WHERE shop_domain = ${shopDomain}
+    ORDER BY received_at DESC
+    LIMIT ${limit}
+  `;
+
+  return rows.map((row) => ({
+    topic: String(row.topic),
+    event_id: String(row.event_id),
+    received_at: row.received_at as string | Date,
+  }));
 };

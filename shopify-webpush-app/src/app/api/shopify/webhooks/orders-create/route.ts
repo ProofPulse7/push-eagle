@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
-import { recordAttributedConversion, registerWebhookEvent } from '@/lib/server/data/store';
+import { recordAttributedConversion, registerWebhookEvent, upsertShopifyCustomer } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getCustomerExternalId } from '@/lib/server/storefront-identity';
 
@@ -16,6 +16,8 @@ type ShopifyOrderPayload = {
   customer?: {
     id?: number | string | null;
     email?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
   } | null;
 };
 
@@ -47,6 +49,14 @@ export async function POST(request: Request) {
     const externalId = getCustomerExternalId({
       customerId: payload.customer?.id ? String(payload.customer.id) : null,
       email: payload.customer?.email ?? null,
+    });
+
+    await upsertShopifyCustomer({
+      shopDomain,
+      customerId: payload.customer?.id ? String(payload.customer.id) : null,
+      email: payload.customer?.email ?? null,
+      firstName: payload.customer?.first_name ?? null,
+      lastName: payload.customer?.last_name ?? null,
     });
 
     let campaignId: string | null = null;

@@ -73,6 +73,9 @@ export function Sidebar() {
             <NavLink href="/onboarding" icon={ClipboardCheck}>
                 Onboarding
             </NavLink>
+            <NavLink href="/webhooks" icon={Bell}>
+                Webhooks
+            </NavLink>
         </nav>
 
         <div className="mt-auto space-y-1">

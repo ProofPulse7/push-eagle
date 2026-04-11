@@ -22,6 +22,22 @@ import { useSettings } from '@/context/settings-context';
 import { ImageEditorSheet } from '@/components/composer/editor-parts/image-editor-sheet';
 import { useToast } from '@/hooks/use-toast';
 
+type MerchantOverview = {
+    storeName: string | null;
+    email: string | null;
+    storeUrl: string | null;
+    myshopifyDomain: string;
+    currencyCode: string | null;
+    timezone: string | null;
+    planName: string | null;
+    ownerName: string | null;
+    scopes: string | null;
+    subscriberCount: number;
+    customerCount: number;
+    campaignCount: number;
+    uninstalledAt: string | null;
+};
+
 const SettingsSection = ({ title, children, description }: { title: string, children: React.ReactNode, description?: string }) => (
     <div className="space-y-4 first:pt-0 pt-8 has-[hr]:pt-4">
         <div className='mb-4'>
@@ -70,6 +86,8 @@ export default function SettingsPage() {
   const [emailStoreOption, setEmailStoreOption] = useState('full-email');
   const [locationStoreOption, setLocationStoreOption] = useState('yes');
   const [nameStoreOption, setNameStoreOption] = useState('yes');
+    const [overview, setOverview] = useState<MerchantOverview | null>(null);
+        const [overviewRefreshTick, setOverviewRefreshTick] = useState(0);
   
   const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
@@ -96,6 +114,46 @@ export default function SettingsPage() {
             isMounted = false;
         };
     }, [shopDomain, setAttributionModel, setClickWindowDays, setImpressionWindowDays]);
+
+    useEffect(() => {
+        if (!shopDomain) {
+            return;
+        }
+
+        let isMounted = true;
+        fetch(`/api/settings/overview?shop=${encodeURIComponent(shopDomain)}`)
+            .then(async (res) => {
+                const data = await res.json();
+                if (!res.ok || !data?.ok || !isMounted) {
+                    return;
+                }
+
+                setOverview({
+                    storeName: data.storeName ?? null,
+                    email: data.email ?? null,
+                    storeUrl: data.storeUrl ?? null,
+                    myshopifyDomain: data.myshopifyDomain ?? shopDomain,
+                    currencyCode: data.currencyCode ?? null,
+                    timezone: data.timezone ?? null,
+                    planName: data.planName ?? null,
+                    ownerName: data.ownerName ?? null,
+                    scopes: data.scopes ?? null,
+                    subscriberCount: Number(data.subscriberCount ?? 0),
+                    customerCount: Number(data.customerCount ?? 0),
+                    campaignCount: Number(data.campaignCount ?? 0),
+                    uninstalledAt: data.uninstalledAt ?? null,
+                });
+
+                if (data.storeUrl && data.storeUrl !== storeUrl) {
+                    setStoreUrl(data.storeUrl);
+                }
+            })
+            .catch(() => undefined);
+
+        return () => {
+            isMounted = false;
+        };
+    }, [shopDomain, setStoreUrl, storeUrl, overviewRefreshTick]);
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -180,8 +238,15 @@ export default function SettingsPage() {
             </TabsList>
             <TabsContent value="overview">
             <Card className="mt-4">
-                <CardHeader>
+                <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle>Store Details</CardTitle>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setOverviewRefreshTick((value) => value + 1)}
+                    >
+                        Refresh details
+                    </Button>
                 </CardHeader>
                 <CardContent className="space-y-8">
                     <div className="flex items-center gap-4">
@@ -203,16 +268,20 @@ export default function SettingsPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         <div className="space-y-2">
                             <Label htmlFor="username">Username</Label>
-                            <Input id="username" defaultValue="Push Eagle" />
+                                                        <Input
+                                                            id="username"
+                                                            value={overview?.ownerName || overview?.storeName || ''}
+                                                            readOnly
+                                                        />
                         </div>
                          <div className="space-y-2">
                             <Label htmlFor="store-name">Store Name</Label>
-                            <Input id="store-name" defaultValue="Push Eagle Test1" />
+                                                        <Input id="store-name" value={overview?.storeName || ''} readOnly />
                         </div>
                          <div className="space-y-2">
                             <Label htmlFor="store-url">Store URL</Label>
                             <div className="relative">
-                                <Input id="store-url" value={storeUrl} onChange={(e) => setStoreUrl(e.target.value)} />
+                                <Input id="store-url" value={overview?.storeUrl || storeUrl || ''} onChange={(e) => setStoreUrl(e.target.value)} />
                                 <Button variant="ghost" size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 text-muted-foreground">
                                     <ExternalLink className="h-4 w-4" />
                                 </Button>
@@ -223,7 +292,7 @@ export default function SettingsPage() {
                              <div className="relative">
                                           <Input
                                              id="subdomain"
-                                             value={shopDomain}
+                                                            value={shopDomain || overview?.myshopifyDomain || ''}
                                              onChange={(e) => setShopDomain(e.target.value)}
                                              placeholder="your-store.myshopify.com"
                                              className="pr-10"
@@ -236,18 +305,35 @@ export default function SettingsPage() {
                          <div className="space-y-2">
                             <Label htmlFor="platform">Platform</Label>
                              <div className="relative">
-                                <Input id="platform" defaultValue="Shopify" className="pr-10" />
+                                <Input id="platform" value="Shopify" className="pr-10" readOnly />
                                 <Button variant="ghost" size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 text-muted-foreground">
                                     <Copy className="h-4 w-4" />
                                 </Button>
                             </div>
                         </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="merchant-email">Merchant Email</Label>
+                            <Input id="merchant-email" value={overview?.email || ''} readOnly />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="currency">Currency</Label>
+                            <Input id="currency" value={overview?.currencyCode || ''} readOnly />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="timezone">Timezone</Label>
+                            <Input id="timezone" value={overview?.timezone || ''} readOnly />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <Badge variant="secondary" className="justify-center py-2">Subscribers: {overview?.subscriberCount ?? 0}</Badge>
+                        <Badge variant="secondary" className="justify-center py-2">Customers: {overview?.customerCount ?? 0}</Badge>
+                        <Badge variant="secondary" className="justify-center py-2">Campaigns: {overview?.campaignCount ?? 0}</Badge>
                     </div>
                      <div className="space-y-4 pt-4 border-t">
                         <h3 className="text-lg font-semibold">Current Plan</h3>
                         <div className="flex items-center justify-between p-4 rounded-lg bg-muted/50">
                             <div>
-                                <p className="font-semibold">BASIC (0$/month)</p>
+                                <p className="font-semibold">{overview?.planName || 'BASIC (0$/month)'}</p>
                             </div>
                             <Button variant="outline" className="border-yellow-500 text-yellow-600 hover:bg-yellow-500/10 hover:text-yellow-700">Change Plan</Button>
                         </div>

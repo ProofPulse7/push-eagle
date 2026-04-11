@@ -31,7 +31,7 @@ export function useSettings() {
 }
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
-    const [storeUrl, setStoreUrlState] = useState('pusheagle.online');
+    const [storeUrl, setStoreUrlState] = useState('');
     const [shopDomain, setShopDomainState] = useState('');
     const [logo, setLogoState] = useState<ImageValue>({ file: null, preview: null });
     const [attributionModel, setAttributionModelState] = useState<'click' | 'impression'>('impression');
@@ -41,9 +41,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         // Load settings from localStorage when the component mounts on the client
         const queryShop = new URLSearchParams(window.location.search).get('shop');
-        if (queryShop && queryShop.endsWith('.myshopify.com')) {
-            setShopDomainState(queryShop.toLowerCase());
-            localStorage.setItem('shopDomain', queryShop.toLowerCase());
+        const cookieShop = document.cookie
+            .split(';')
+            .map((part) => part.trim())
+            .find((part) => part.startsWith('pe_shop='))
+            ?.slice('pe_shop='.length);
+        const resolvedShop = (queryShop || cookieShop || '').trim().toLowerCase();
+        if (resolvedShop.endsWith('.myshopify.com')) {
+            setShopDomainState(resolvedShop);
+            localStorage.setItem('shopDomain', resolvedShop);
         }
 
         const savedUrl = localStorage.getItem('storeUrl');
