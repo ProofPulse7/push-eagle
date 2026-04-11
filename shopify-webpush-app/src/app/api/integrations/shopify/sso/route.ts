@@ -55,7 +55,9 @@ export async function GET(request: Request) {
 
     await ensureMerchantAccount(shopDomain);
 
-    const redirectUrl = new URL(redirectPath.startsWith('/') ? redirectPath : '/dashboard', env.NEXT_PUBLIC_APP_URL);
+    // Always redirect to the current dashboard deployment origin.
+    const currentOrigin = new URL(request.url).origin;
+    const redirectUrl = new URL(redirectPath.startsWith('/') ? redirectPath : '/dashboard', currentOrigin);
     redirectUrl.searchParams.set('shop', shopDomain);
 
     return NextResponse.redirect(redirectUrl, { status: 307 });
