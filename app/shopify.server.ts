@@ -57,6 +57,14 @@ const appUrl = deriveAppUrl();
 const resolveDashboardUrl = () =>
   readEnv("SHOPIFY_WEB_DASHBOARD_URL", "WEB_DASHBOARD_URL") || "https://push-eagle-dashboard.vercel.app";
 
+const resolveRootAppUrl = () => {
+  try {
+    return new URL(appUrl).origin;
+  } catch {
+    return "https://push-eagle.vercel.app";
+  }
+};
+
 const getProfileSyncSecret = () => readEnv("SHOPIFY_DASHBOARD_SSO_SECRET", "SHOPIFY_API_SECRET");
 
 type AdminShopResponse = {
@@ -120,11 +128,12 @@ export const syncMerchantProfileToDashboard = async (input: {
   const ts = Date.now();
   const sig = createHmac("sha256", secret).update(`${input.shopDomain}.${ts}`).digest("hex");
 
-  await fetch(new URL("/api/integrations/shopify/merchant-profile", dashboardUrl), {
+  const syncResponse = await fetch(new URL("/api/integrations/shopify/merchant-profile", dashboardUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Push-Eagle-Signature": sig,
+      "X-Push-Eagle-Source": resolveRootAppUrl(),
     },
     body: JSON.stringify({
       shopDomain: input.shopDomain,
@@ -141,6 +150,11 @@ export const syncMerchantProfileToDashboard = async (input: {
       scopes: input.scope ?? null,
     }),
   });
+
+  if (!syncResponse.ok) {
+    const body = await syncResponse.text();
+    throw new Error(`Merchant profile sync failed: ${syncResponse.status} ${body.slice(0, 200)}`);
+  }
 };
 
 type AdminCustomersResponse = {
@@ -197,11 +211,12 @@ export const syncRecentCustomersToDashboard = async (input: {
   const ts = Date.now();
   const sig = createHmac("sha256", secret).update(`${input.shopDomain}.${ts}`).digest("hex");
 
-  await fetch(new URL("/api/integrations/shopify/customers-sync", dashboardUrl), {
+  const syncResponse = await fetch(new URL("/api/integrations/shopify/customers-sync", dashboardUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Push-Eagle-Signature": sig,
+      "X-Push-Eagle-Source": resolveRootAppUrl(),
     },
     body: JSON.stringify({
       shopDomain: input.shopDomain,
@@ -209,6 +224,11 @@ export const syncRecentCustomersToDashboard = async (input: {
       customers,
     }),
   });
+
+  if (!syncResponse.ok) {
+    const body = await syncResponse.text();
+    throw new Error(`Customer sync failed: ${syncResponse.status} ${body.slice(0, 200)}`);
+  }
 };
 
 export const missingShopifyConfig = [

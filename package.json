@@ -17,7 +17,8 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "backfill:merchant-data": "node ./scripts/backfill-merchant-data.mjs"
   },
   "type": "module",
   "engines": {

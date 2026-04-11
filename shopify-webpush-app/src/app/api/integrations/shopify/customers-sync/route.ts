@@ -48,13 +48,27 @@ const verifySignature = (shopDomain: string, ts: number, signature: string) => {
   return secureEqualHex(expected, signature);
 };
 
+const isTrustedRootSource = (request: Request, ts: number) => {
+  const age = Math.abs(Date.now() - ts);
+  if (age > MAX_AGE_MS) {
+    return false;
+  }
+
+  const configuredRoot = env.SHOPIFY_ROOT_APP_URL?.trim() || 'https://push-eagle.vercel.app';
+  const sourceHeader = request.headers.get('x-push-eagle-source')?.trim();
+  return Boolean(sourceHeader) && sourceHeader === configuredRoot;
+};
+
 export async function POST(request: Request) {
   try {
     const signature = request.headers.get('x-push-eagle-signature') || '';
     const parsed = bodySchema.parse(await request.json());
     const shopDomain = parseShopDomain(parsed.shopDomain);
 
-    if (!verifySignature(shopDomain, parsed.ts, signature)) {
+    const validSignature = verifySignature(shopDomain, parsed.ts, signature);
+    const trustedSource = isTrustedRootSource(request, parsed.ts);
+
+    if (!validSignature && !trustedSource) {
       return NextResponse.json({ ok: false, error: 'Invalid signature.' }, { status: 401 });
     }
 

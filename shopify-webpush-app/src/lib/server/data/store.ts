@@ -262,6 +262,28 @@ const ensureMerchant = async (shopDomain: string) => {
       uninstalled_at = NULL,
       first_installed_at = COALESCE(merchants.first_installed_at, NOW())
   `;
+
+  const fallbackStoreName = shopDomain.replace(/\.myshopify\.com$/i, '').replace(/[-_]+/g, ' ').trim();
+
+  await sql`
+    INSERT INTO merchant_profiles (
+      shop_domain,
+      store_name,
+      myshopify_domain,
+      updated_at
+    )
+    VALUES (
+      ${shopDomain},
+      ${fallbackStoreName || null},
+      ${shopDomain},
+      NOW()
+    )
+    ON CONFLICT (shop_domain)
+    DO UPDATE SET
+      myshopify_domain = COALESCE(merchant_profiles.myshopify_domain, EXCLUDED.myshopify_domain),
+      store_name = COALESCE(merchant_profiles.store_name, EXCLUDED.store_name),
+      updated_at = NOW()
+  `;
 };
 
 export const ensureMerchantAccount = async (shopDomain: string) => {
