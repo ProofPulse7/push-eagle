@@ -28,12 +28,13 @@ const buildDashboardSsoUrl = (baseDashboardUrl: string, shopDomain: string) => {
   return url.toString();
 };
 
+const resolveDashboardUrl = () =>
+  process.env.SHOPIFY_WEB_DASHBOARD_URL?.trim() ||
+  process.env.WEB_DASHBOARD_URL?.trim() ||
+  "https://push-eagle-dashboard.vercel.app";
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const dashboardUrl =
-    process.env.SHOPIFY_WEB_DASHBOARD_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.WEB_DASHBOARD_URL ||
-    "";
+  const dashboardUrl = resolveDashboardUrl();
 
   if (dashboardUrl) {
     const requestUrl = new URL(request.url);

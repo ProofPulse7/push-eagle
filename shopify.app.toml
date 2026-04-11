@@ -31,6 +31,23 @@ scopes = "read_customers,read_orders,read_products,write_products,write_metaobje
 [auth]
 redirect_urls = [ "https://push-eagle.vercel.app/auth/callback", "https://push-eagle.vercel.app/auth/shopify/callback", "https://push-eagle.vercel.app/api/auth" ]
 
+[app_proxy]
+url = "https://push-eagle-dashboard.vercel.app/api/storefront"
+subpath = "push-eagle"
+prefix = "apps"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/data_request"
+  compliance_topics = [ "customers/data_request" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
 [product.metafields.app.demo_info]
 type = "single_line_text_field"
 name = "Demo Source Info"
