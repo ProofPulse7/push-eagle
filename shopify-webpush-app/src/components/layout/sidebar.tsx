@@ -2,6 +2,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   LayoutGrid,
   Send,
@@ -31,10 +32,22 @@ const NavLogo = (props: React.SVGProps<SVGSVGElement>) => (
 
 
 export function Sidebar() {
+    const searchParams = useSearchParams();
+    const preservedParams = new URLSearchParams();
+    const shop = searchParams.get('shop');
+    const host = searchParams.get('host');
+    if (shop) {
+        preservedParams.set('shop', shop);
+    }
+    if (host) {
+        preservedParams.set('host', host);
+    }
+    const withContext = (path: string) => (preservedParams.toString() ? `${path}?${preservedParams.toString()}` : path);
+
   return (
     <aside className="fixed left-0 top-0 z-40 hidden h-full w-64 flex-col border-r bg-card text-card-foreground md:flex rounded-r-3xl shadow-xl">
       <div className="flex h-16 shrink-0 items-center px-6">
-        <Link href="/dashboard" className="flex items-center gap-3 font-semibold text-lg text-foreground">
+                <Link href={withContext('/dashboard')} className="flex items-center gap-3 font-semibold text-lg text-foreground">
             <NavLogo className="h-7 w-7 text-primary" />
             <span className="">Push Eagle</span>
         </Link>
@@ -42,7 +55,7 @@ export function Sidebar() {
       
       <div className="flex flex-1 flex-col overflow-y-auto p-4 gap-4">
         <Button asChild>
-            <Link href="/campaigns/new">
+            <Link href={withContext('/campaigns/new')}>
                 <Plus className="h-4 w-4" />
                 New Campaign
             </Link>

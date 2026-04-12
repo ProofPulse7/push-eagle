@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, Upload, Crop, Smile, Check, Trash2, ImageIcon, Wifi, Signal, Battery, Square, Circle as CircleIcon, Triangle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -198,6 +199,7 @@ const MobilePreview = ({ title, message, allowText, laterText, allowBgColor, all
 
 
 export default function CustomPromptPage() {
+    const searchParams = useSearchParams();
     const [desktopPosition, setDesktopPosition] = useState<DesktopPosition>('top-center');
     const [mobilePosition, setMobilePosition] = useState<MobilePosition>('top');
     const [title, setTitle] = useState('Never miss a sale 🛍️');
@@ -217,6 +219,7 @@ export default function CustomPromptPage() {
     const [saving, setSaving] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+    const [resolvedShopDomain, setResolvedShopDomain] = useState('');
     const { logo, setLogo, shopDomain } = useSettings();
     const { toast } = useToast();
     const logoInputRef = useRef<HTMLInputElement | null>(null);
@@ -224,6 +227,18 @@ export default function CustomPromptPage() {
     const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
 
     const delayOptions = [3, 5, 10, ...Array.from({ length: 11 }, (_, i) => 15 + i * 5)];
+
+    const normalizeShopDomain = (value: string) => value.trim().toLowerCase();
+    const isValidShopDomain = (value: string) => value.endsWith('.myshopify.com');
+
+    useEffect(() => {
+        const fromContext = normalizeShopDomain(shopDomain || '');
+        const fromQuery = normalizeShopDomain(searchParams.get('shop') || '');
+        const fromStorage = normalizeShopDomain(localStorage.getItem('shopDomain') || '');
+
+        const candidate = [fromContext, fromQuery, fromStorage].find((value) => value && isValidShopDomain(value)) || '';
+        setResolvedShopDomain(candidate);
+    }, [searchParams, shopDomain]);
 
     const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -243,15 +258,16 @@ export default function CustomPromptPage() {
 
     useEffect(() => {
         setLoadError(null);
-        if (!shopDomain) {
+        if (!resolvedShopDomain) {
             setLoading(false);
+            setLoadError('Missing Shopify shop context. Re-open the app from Shopify Admin so the shop parameter is available.');
             return;
         }
 
         let isMounted = true;
         setLoading(true);
 
-        fetch(`/api/settings/opt-in?shop=${encodeURIComponent(shopDomain)}`)
+        fetch(`/api/settings/opt-in?shop=${encodeURIComponent(resolvedShopDomain)}`)
             .then(async (res) => {
                 const data = (await res.json()) as OptInSettingsResponse;
                 if (!res.ok || !data?.ok || !isMounted) {
@@ -298,10 +314,10 @@ export default function CustomPromptPage() {
         return () => {
             isMounted = false;
         };
-    }, [shopDomain, setLogo, toast]);
+    }, [resolvedShopDomain, setLogo, toast]);
 
     const saveChanges = async () => {
-        if (!shopDomain) {
+        if (!resolvedShopDomain) {
             const message = 'Open the dashboard from a connected Shopify store before saving opt-in settings.';
             setSaveStatus({ type: 'error', message });
             toast({
@@ -321,7 +337,7 @@ export default function CustomPromptPage() {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    shopDomain,
+                    shopDomain: resolvedShopDomain,
                     promptType: 'custom',
                     title,
                     message,
