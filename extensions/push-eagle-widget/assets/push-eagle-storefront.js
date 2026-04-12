@@ -364,15 +364,15 @@
     var requestUrl = bootstrapUrl + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&') + '_pe_ts=' + String(Date.now());
     var cacheKey = getStorageKey(config.shopDomain, 'bootstrap_cache');
 
-    // Try the Shopify App Proxy path first
-    var data = await tryBootstrapFetch(requestUrl, config.shopDomain);
+    // Try the Shopify App Proxy path first (same-origin, with credentials)
+    var data = await tryBootstrapFetch(requestUrl, config.shopDomain, true);
 
-    // If proxy failed (404 or non-JSON from Shopify), fall back to the direct app URL
+    // If proxy failed (404 or non-JSON from Shopify), fall back to the direct app URL (cross-origin, no credentials)
     if (!data && config.appUrl) {
       var directUrl = config.appUrl.replace(/\/$/, '') + '/api/storefront/bootstrap'
         + '?shop=' + encodeURIComponent(config.shopDomain)
         + '&_pe_ts=' + String(Date.now());
-      data = await tryBootstrapFetch(directUrl, config.shopDomain);
+      data = await tryBootstrapFetch(directUrl, config.shopDomain, false);
     }
 
     if (data && data.ok) {
@@ -403,13 +403,17 @@
     };
   }
 
-  async function tryBootstrapFetch(url, shopDomain) {
+  async function tryBootstrapFetch(url, shopDomain, withCredentials) {
     try {
-      var response = await fetch(url, {
-        credentials: 'include',
+      var fetchOptions = {
         cache: 'no-store',
         headers: { 'cache-control': 'no-cache' }
-      });
+      };
+      // Only send credentials on same-origin proxy requests, not cross-origin Vercel calls
+      if (withCredentials) {
+        fetchOptions.credentials = 'include';
+      }
+      var response = await fetch(url, fetchOptions);
       var contentType = response.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
         console.error('[PushEagle] Bootstrap non-JSON response', response.status, url);
