@@ -3,7 +3,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, Upload, Crop, Smile, Check, Trash2, ImageIcon, Wifi, Signal, Battery, Square, Circle as CircleIcon, Triangle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -199,7 +198,6 @@ const MobilePreview = ({ title, message, allowText, laterText, allowBgColor, all
 
 
 export default function CustomPromptPage() {
-    const searchParams = useSearchParams();
     const [desktopPosition, setDesktopPosition] = useState<DesktopPosition>('top-center');
     const [mobilePosition, setMobilePosition] = useState<MobilePosition>('top');
     const [title, setTitle] = useState('Never miss a sale 🛍️');
@@ -220,6 +218,7 @@ export default function CustomPromptPage() {
     const [loadError, setLoadError] = useState<string | null>(null);
     const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
     const [resolvedShopDomain, setResolvedShopDomain] = useState('');
+    const [queryShopDomain, setQueryShopDomain] = useState('');
     const { logo, setLogo, shopDomain } = useSettings();
     const { toast } = useToast();
     const logoInputRef = useRef<HTMLInputElement | null>(null);
@@ -232,13 +231,17 @@ export default function CustomPromptPage() {
     const isValidShopDomain = (value: string) => value.endsWith('.myshopify.com');
 
     useEffect(() => {
+        const fromQuery = normalizeShopDomain(new URLSearchParams(window.location.search).get('shop') || '');
+        setQueryShopDomain(fromQuery);
+    }, []);
+
+    useEffect(() => {
         const fromContext = normalizeShopDomain(shopDomain || '');
-        const fromQuery = normalizeShopDomain(searchParams.get('shop') || '');
         const fromStorage = normalizeShopDomain(localStorage.getItem('shopDomain') || '');
 
-        const candidate = [fromContext, fromQuery, fromStorage].find((value) => value && isValidShopDomain(value)) || '';
+        const candidate = [fromContext, queryShopDomain, fromStorage].find((value) => value && isValidShopDomain(value)) || '';
         setResolvedShopDomain(candidate);
-    }, [searchParams, shopDomain]);
+    }, [queryShopDomain, shopDomain]);
 
     const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {

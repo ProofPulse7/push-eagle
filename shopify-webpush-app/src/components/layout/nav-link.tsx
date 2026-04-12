@@ -2,13 +2,12 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import type { LucideIcon } from 'lucide-react';
 
 export function NavLink({ href, icon: Icon, children }: { href: string; icon: LucideIcon; children: React.ReactNode; }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
 
   let isActive = pathname.startsWith(href);
   if (href === '/dashboard') {
@@ -18,9 +17,10 @@ export function NavLink({ href, icon: Icon, children }: { href: string; icon: Lu
       isActive = false;
   }
 
+  const currentParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
   const preservedParams = new URLSearchParams();
-  const shop = searchParams.get('shop');
-  const host = searchParams.get('host');
+  const shop = currentParams.get('shop');
+  const host = currentParams.get('host');
   if (shop) {
     preservedParams.set('shop', shop);
   }
