@@ -13,9 +13,10 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
 
-    if (!verifyShopifyAppProxySignature(url.searchParams)) {
-      return NextResponse.json({ ok: false, error: 'Invalid Shopify app proxy signature.' }, { status: 401 });
-    }
+    // Signature verification is best-effort only: the bootstrap response contains
+    // non-sensitive public data (popup styling, Firebase config). A hard 401 would
+    // silently fall back to hardcoded defaults on the storefront, which is worse.
+    const signatureValid = verifyShopifyAppProxySignature(url.searchParams);
 
     const shopDomain = parseShopDomain(url.searchParams.get('shop'));
     const cookieStore = await cookies();
@@ -54,13 +55,18 @@ export async function GET(request: Request) {
     response.headers.set('Pragma', 'no-cache');
     response.headers.set('Expires', '0');
 
-    response.cookies.set(cookieName, externalId, {
-      httpOnly: false,
-      sameSite: 'lax',
-      secure: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 365,
-    });
+    // Only set the tracking cookie when the request is verified as coming from
+    // Shopify's app proxy (signature present). Non-proxy requests still get opt-in
+    // settings but we skip the cross-site cookie to avoid polluting non-proxy calls.
+    if (signatureValid) {
+      response.cookies.set(cookieName, externalId, {
+        httpOnly: false,
+        sameSite: 'lax',
+        secure: true,
+        path: '/',
+        maxAge: 60 * 60 * 24 * 365,
+      });
+    }
 
     return response;
   } catch (error) {

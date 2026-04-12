@@ -361,15 +361,39 @@
 
   async function bootstrap(config) {
     var bootstrapUrl = config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH;
+    var requestUrl = bootstrapUrl + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&') + '_pe_ts=' + String(Date.now());
+    var cacheKey = getStorageKey(config.shopDomain, 'bootstrap_cache');
 
     try {
-      var response = await fetch(bootstrapUrl, { credentials: 'include' });
+      var response = await fetch(requestUrl, {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: {
+          'cache-control': 'no-cache'
+        }
+      });
       var data = await response.json();
       if (response.ok && data && data.ok) {
+        safeLocalStorageSet(cacheKey, JSON.stringify(data));
         return data;
       }
+      // Log non-OK responses so merchants can debug via DevTools
+      console.error('[PushEagle] Bootstrap returned error', response.status, data);
     } catch (_error) {
+      console.error('[PushEagle] Bootstrap fetch failed', _error);
       // fallback below
+    }
+
+    var cached = safeLocalStorageGet(cacheKey);
+    if (cached) {
+      try {
+        var cachedBoot = JSON.parse(cached);
+        if (cachedBoot && cachedBoot.ok) {
+          return cachedBoot;
+        }
+      } catch (_error) {
+        // ignore invalid cache
+      }
     }
 
     return {
@@ -715,7 +739,29 @@
     }
   }
 
+  function schedulePrompt(root) {
+    var start = function () {
+      if ('requestIdleCallback' in window) {
+        window.requestIdleCallback(function () {
+          runPrompt(root);
+        }, { timeout: 1500 });
+        return;
+      }
+
+      setTimeout(function () {
+        runPrompt(root);
+      }, 0);
+    };
+
+    if (document.readyState === 'complete') {
+      start();
+      return;
+    }
+
+    window.addEventListener('load', start, { once: true });
+  }
+
   for (var i = 0; i < roots.length; i += 1) {
-    runPrompt(roots[i]);
+    schedulePrompt(roots[i]);
   }
 })();
