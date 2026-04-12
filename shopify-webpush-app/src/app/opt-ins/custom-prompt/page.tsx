@@ -215,6 +215,8 @@ export default function CustomPromptPage() {
     const [offsetY, setOffsetY] = useState('0');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
     const { logo, setLogo, shopDomain } = useSettings();
     const { toast } = useToast();
     const logoInputRef = useRef<HTMLInputElement | null>(null);
@@ -240,6 +242,7 @@ export default function CustomPromptPage() {
     };
 
     useEffect(() => {
+        setLoadError(null);
         if (!shopDomain) {
             setLoading(false);
             return;
@@ -277,10 +280,13 @@ export default function CustomPromptPage() {
                     return;
                 }
 
+                const message = error instanceof Error ? error.message : 'Unexpected error while loading prompt settings.';
+                setLoadError(message);
+
                 toast({
                     variant: 'destructive',
                     title: 'Failed to load custom prompt settings',
-                    description: error instanceof Error ? error.message : 'Unexpected error while loading prompt settings.',
+                    description: message,
                 });
             })
             .finally(() => {
@@ -296,15 +302,18 @@ export default function CustomPromptPage() {
 
     const saveChanges = async () => {
         if (!shopDomain) {
+            const message = 'Open the dashboard from a connected Shopify store before saving opt-in settings.';
+            setSaveStatus({ type: 'error', message });
             toast({
                 variant: 'destructive',
                 title: 'Shop domain required',
-                description: 'Open the dashboard from a connected Shopify store before saving opt-in settings.',
+                description: message,
             });
             return;
         }
 
         setSaving(true);
+        setSaveStatus(null);
         try {
             const response = await fetch('/api/settings/opt-in', {
                 method: 'PUT',
@@ -333,20 +342,26 @@ export default function CustomPromptPage() {
                 }),
             });
 
-            const result = (await response.json()) as OptInSettingsResponse;
+            const raw = await response.text();
+            const result = (raw ? JSON.parse(raw) : {}) as OptInSettingsResponse;
             if (!response.ok || !result?.ok) {
                 throw new Error(result?.error ?? 'Failed to save custom prompt settings.');
             }
+
+            const savedAt = new Date().toLocaleTimeString();
+            setSaveStatus({ type: 'success', message: `Settings saved successfully at ${savedAt}.` });
 
             toast({
                 title: 'Custom prompt saved',
                 description: 'The live storefront popup now uses these settings.',
             });
         } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unexpected error while saving custom prompt settings.';
+            setSaveStatus({ type: 'error', message });
             toast({
                 variant: 'destructive',
                 title: 'Save failed',
-                description: error instanceof Error ? error.message : 'Unexpected error while saving custom prompt settings.',
+                description: message,
             });
         } finally {
             setSaving(false);
@@ -368,6 +383,11 @@ export default function CustomPromptPage() {
             </div>
             
             <div className="p-4 sm:p-6 md:p-8 flex-grow">
+                {loadError && (
+                    <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                        Failed to load saved settings: {loadError}
+                    </div>
+                )}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-2 space-y-8">
                         <Card>
@@ -631,6 +651,16 @@ export default function CustomPromptPage() {
                 </div>
 
                 <div className="fixed bottom-8 right-8 z-50 flex gap-2">
+                    {saveStatus && (
+                        <div className={cn(
+                            'rounded-md border px-3 py-2 text-sm max-w-[360px]',
+                            saveStatus.type === 'success'
+                                ? 'border-green-300 bg-green-50 text-green-900'
+                                : 'border-destructive/40 bg-destructive/10 text-destructive'
+                        )}>
+                            {saveStatus.message}
+                        </div>
+                    )}
                     <Button variant="outline" size="lg" asChild>
                       <Link href="/opt-ins">Cancel</Link>
                     </Button>
