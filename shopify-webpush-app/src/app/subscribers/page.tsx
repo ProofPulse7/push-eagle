@@ -29,13 +29,13 @@ export default function SubscribersPage() {
             <TabsTrigger value="list">Subscriber List</TabsTrigger>
         </TabsList>
         <TabsContent value="overview">
-            <div className="mt-4 grid gap-8 grid-cols-1 lg:grid-cols-2 items-start">
-                <SubscriberBreakdown />
-                <GeolocationChart />
-            </div>
-             <div className="mt-8">
+           <div className="mt-4">
                 <SubscriberGrowthChart showDatePicker={true} />
             </div>
+          <div className="mt-8 grid gap-8 grid-cols-1 lg:grid-cols-2 items-start">
+            <SubscriberBreakdown />
+            <GeolocationChart />
+          </div>
         </TabsContent>
         <TabsContent value="list">
             <Card className="mt-4">
