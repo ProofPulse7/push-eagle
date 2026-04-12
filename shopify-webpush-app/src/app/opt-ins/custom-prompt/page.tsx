@@ -46,6 +46,16 @@ type OptInSettingsResponse = {
     error?: string;
 };
 
+const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 25000) => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(input, { ...init, signal: controller.signal });
+    } finally {
+        window.clearTimeout(timeoutId);
+    }
+};
+
 
 const DesktopScreen = ({ selected, onSelect }: { selected: string, onSelect: (pos: string) => void }) => {
     const positions = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
@@ -270,7 +280,7 @@ export default function CustomPromptPage() {
         let isMounted = true;
         setLoading(true);
 
-        fetch(`/api/settings/opt-in?shop=${encodeURIComponent(resolvedShopDomain)}`)
+        fetchWithTimeout(`/api/settings/opt-in?shop=${encodeURIComponent(resolvedShopDomain)}`)
             .then(async (res) => {
                 const data = (await res.json()) as OptInSettingsResponse;
                 if (!res.ok || !data?.ok || !isMounted) {
@@ -299,7 +309,9 @@ export default function CustomPromptPage() {
                     return;
                 }
 
-                const message = error instanceof Error ? error.message : 'Unexpected error while loading prompt settings.';
+                const message = error instanceof Error
+                    ? (error.name === 'AbortError' ? 'Loading settings timed out. Please refresh and try again.' : error.message)
+                    : 'Unexpected error while loading prompt settings.';
                 setLoadError(message);
 
                 toast({
@@ -334,7 +346,12 @@ export default function CustomPromptPage() {
         setSaving(true);
         setSaveStatus(null);
         try {
-            const response = await fetch('/api/settings/opt-in', {
+            const normalizedLogoUrl = !logo.preview || logo.preview.startsWith('blob:') ? null : logo.preview;
+            if (normalizedLogoUrl && normalizedLogoUrl.startsWith('data:') && normalizedLogoUrl.length > 700000) {
+                throw new Error('Logo image is too large. Please upload a smaller image (recommended under 200 KB).');
+            }
+
+            const response = await fetchWithTimeout('/api/settings/opt-in', {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -348,7 +365,7 @@ export default function CustomPromptPage() {
                     allowBgColor,
                     allowTextColor,
                     laterText,
-                    logoUrl: logo.preview ?? null,
+                    logoUrl: normalizedLogoUrl,
                     desktopDelaySeconds: Number(desktopDelaySeconds),
                     mobileDelaySeconds: Number(mobileDelaySeconds),
                     maxDisplaysPerSession: Number(maxDisplaysPerSession),
@@ -375,7 +392,9 @@ export default function CustomPromptPage() {
                 description: 'The live storefront popup now uses these settings.',
             });
         } catch (error) {
-            const message = error instanceof Error ? error.message : 'Unexpected error while saving custom prompt settings.';
+            const message = error instanceof Error
+                ? (error.name === 'AbortError' ? 'Save request timed out. Please try again.' : error.message)
+                : 'Unexpected error while saving custom prompt settings.';
             setSaveStatus({ type: 'error', message });
             toast({
                 variant: 'destructive',
