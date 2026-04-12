@@ -1287,6 +1287,14 @@
 
       await maybeReportIosHomeScreen();
 
+      // Best-effort token reconciliation: if permission is already granted,
+      // silently sync token so previously failed browsers can self-heal.
+      if (clientProfile.permissionState === 'granted') {
+        await registerToken(config, boot, { silent: true }, clientProfile);
+        closePrompt(root);
+        return;
+      }
+
       if (clientProfile.permissionState !== 'default' && effectiveMode === 'custom') {
         closePrompt(root);
         return;
