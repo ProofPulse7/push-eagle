@@ -696,27 +696,48 @@
     var primaryButton = root.querySelector('[data-push-eagle-action]');
     var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
 
+    // For custom prompts: check permission state and device early
+    // Don't show custom popup if permission is already granted or denied, or if on iOS
+    if (effectiveMode === 'custom') {
+      if (Notification.permission !== 'default') {
+        // Permission already selected by user or unavailable
+        closePrompt(root);
+        return;
+      }
+
+      if (isIosSafari() && !isStandaloneIos()) {
+        // On iOS: can't request notification permission directly
+        closePrompt(root);
+        return;
+      }
+    }
+
+    // For browser mode: check if already subscribed or permission denied
+    if (effectiveMode === 'browser') {
+      if (Notification.permission === 'granted' || isMarkedSubscribed(config.shopDomain)) {
+        await registerToken(config, boot, { silent: true });
+        closePrompt(root);
+        return;
+      }
+
+      if (Notification.permission === 'denied') {
+        closePrompt(root);
+        return;
+      }
+    }
+
     if (secondaryButton) {
       secondaryButton.addEventListener('click', function () {
-        if (effectiveMode !== 'browser') {
+        // Don't use long-term dismiss for custom prompts that respect permission state
+        // On next reload, permission will be checked fresh
+        if (effectiveMode !== 'browser' && effectiveMode !== 'custom') {
           dismissPrompt(config.shopDomain, config.remindAfterDays);
         }
         closePrompt(root);
       });
     }
 
-    if (Notification.permission === 'granted' || isMarkedSubscribed(config.shopDomain)) {
-      await registerToken(config, boot, { silent: true });
-      closePrompt(root);
-      return;
-    }
-
-    if (Notification.permission === 'denied') {
-      closePrompt(root);
-      return;
-    }
-
-    if (!support.supported) {
+    if (!support.supported && effectiveMode !== 'custom') {
       explainUnsupported(root, support.reason);
       if (config.displayTrigger === 'manual') {
         bindManualTrigger(root, config, function () {
@@ -793,6 +814,26 @@
         primaryButton.setAttribute('aria-busy', 'true');
 
         var result = await registerToken(config, boot, { silent: false });
+        
+        // For custom prompts, close immediately after response (permission dialog handled case)
+        // On reload, permission will be checked fresh
+        if (effectiveMode === 'custom') {
+          closePrompt(root);
+          if (!result.ok) {
+            // Show brief error status before closing
+            if (result.reason === 'permission-denied') {
+              showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+            } else {
+              showStatus(root, 'Setup failed. Please try again.', 'error');
+            }
+            // Re-enable for manual retry
+            primaryButton.disabled = false;
+            primaryButton.removeAttribute('aria-busy');
+          }
+          return;
+        }
+
+        // For other modes, use existing logic
         if (result.ok) {
           showStatus(root, 'Notifications enabled.', 'success');
           closePrompt(root);
