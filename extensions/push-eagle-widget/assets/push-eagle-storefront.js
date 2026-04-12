@@ -97,6 +97,56 @@
     }
   }
 
+  function waitForActiveServiceWorker(registration, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var timeout = Number(timeoutMs || 10000);
+
+      if (registration && registration.active) {
+        resolve(registration);
+        return;
+      }
+
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(new Error('Service worker activation timed out'));
+      }, timeout);
+
+      function finish(ok, error) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        if (ok) {
+          resolve(registration);
+        } else {
+          reject(error || new Error('Service worker is not active'));
+        }
+      }
+
+      var worker = registration && (registration.installing || registration.waiting || registration.active);
+      if (!worker) {
+        finish(false, new Error('No service worker instance available'));
+        return;
+      }
+
+      if (worker.state === 'activated') {
+        finish(true);
+        return;
+      }
+
+      worker.addEventListener('statechange', function () {
+        if (worker.state === 'activated') {
+          finish(true);
+        }
+      });
+    });
+  }
+
   function safeLocalStorageGet(key) {
     try {
       return window.localStorage.getItem(key);
@@ -996,6 +1046,13 @@
         }
       }
 
+      try {
+        await waitForActiveServiceWorker(registration, 12000);
+      } catch (activationError) {
+        var activationMessage = activationError && activationError.message ? String(activationError.message) : '';
+        return { ok: false, reason: 'sw-not-active', message: activationMessage };
+      }
+
       var token = await messaging.getToken({
         vapidKey: (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey,
         serviceWorkerRegistration: registration
@@ -1365,6 +1422,8 @@
               openPrompt(root);
               if (result.reason === 'sw-script-missing') {
                 showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+              } else if (result.reason === 'sw-not-active') {
+                showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
               } else if (result.reason === 'permission-denied') {
                 showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
               } else {
@@ -1381,6 +1440,8 @@
             closePrompt(root);
           } else if (result.reason === 'sw-script-missing') {
             showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+          } else if (result.reason === 'sw-not-active') {
+            showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
           } else if (result.reason === 'unsupported' || result.reason === 'https-required') {
             explainUnsupported(root, result.reason);
           } else if (result.reason === 'permission-denied') {
