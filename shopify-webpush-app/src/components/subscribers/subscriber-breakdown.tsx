@@ -1,26 +1,14 @@
 
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatNumber } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
+import { useSettings } from '@/context/settings-context';
 
-const osData = [
-  { name: 'Android', value: 377193, color: 'var(--color-android)' },
-  { name: 'Windows', value: 565789, color: 'var(--color-windows)' },
-  { name: 'macOS', value: 251462, color: 'var(--color-macos)' },
-  { name: 'iOS', value: 62865, color: 'var(--color-ios)' },
-  { name: 'Linux', value: 12573, color: 'var(--color-linux)' },
-];
-
-const browserData = [
-  { name: 'Chrome', value: 817251, color: 'var(--color-chrome)' },
-  { name: 'Safari', value: 188596, color: 'var(--color-safari)' },
-  { name: 'Firefox', value: 125731, color: 'var(--color-firefox)' },
-  { name: 'Edge', value: 125731, color: 'var(--color-edge)' },
-  { name: 'Opera', value: 25146, color: 'var(--color-opera)' },
-];
+type BreakdownItem = { name: string; value: number; color?: string };
 
 const chartConfig = {
   windows: { label: 'Windows', color: 'hsl(var(--chart-2))' },
@@ -36,7 +24,7 @@ const chartConfig = {
   opera: { label: 'Opera', color: 'hsl(var(--chart-5))' },
 };
 
-const addOthersCategory = (data: { name: string; value: number; color: string }[]) => {
+const addOthersCategory = (data: BreakdownItem[]) => {
     if (data.length <= 4) return data;
     const top4 = data.slice(0, 4);
     const othersTotal = data.slice(4).reduce((acc, curr) => acc + curr.value, 0);
@@ -46,10 +34,7 @@ const addOthersCategory = (data: { name: string; value: number; color: string }[
     ];
 };
 
-const processedOsData = addOthersCategory(osData);
-const processedBrowserData = addOthersCategory(browserData);
-
-const BreakdownList = ({ data }: { data: typeof processedOsData | typeof processedBrowserData }) => {
+    const BreakdownList = ({ data }: { data: BreakdownItem[] }) => {
     const total = data.reduce((acc, curr) => acc + curr.value, 0);
 
     return (
@@ -76,6 +61,38 @@ const BreakdownList = ({ data }: { data: typeof processedOsData | typeof process
 };
 
 export function SubscriberBreakdown() {
+  const { shopDomain } = useSettings();
+  const [browserData, setBrowserData] = useState<BreakdownItem[]>([]);
+  const [osData, setOsData] = useState<BreakdownItem[]>([]);
+
+  useEffect(() => {
+    if (!shopDomain) {
+      return;
+    }
+
+    let active = true;
+    fetch(`/api/subscribers/overview?shop=${encodeURIComponent(shopDomain)}`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (!active || !data?.ok) {
+          return;
+        }
+
+        const browsers = Array.isArray(data.browsers) ? data.browsers : [];
+        const platforms = Array.isArray(data.platforms) ? data.platforms : [];
+        setBrowserData(browsers.map((item: { name: string; value: number }) => ({ name: item.name, value: Number(item.value ?? 0) })));
+        setOsData(platforms.map((item: { name: string; value: number }) => ({ name: item.name, value: Number(item.value ?? 0) })));
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+    };
+  }, [shopDomain]);
+
+  const processedBrowserData = useMemo(() => addOthersCategory(browserData), [browserData]);
+  const processedOsData = useMemo(() => addOthersCategory(osData), [osData]);
+
   return (
     <Card className="h-full">
       <CardHeader>

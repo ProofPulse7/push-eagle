@@ -24,7 +24,9 @@ type UpsertTokenInput = {
   platform?: string | null;
   locale?: string | null;
   country?: string | null;
+  city?: string | null;
   userAgent?: string | null;
+  deviceContext?: Record<string, unknown> | null;
 };
 
 type UpdateAttributionSettingsInput = {
@@ -52,11 +54,42 @@ type OptInSettings = {
   placementPreset: 'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom';
   offsetX: number;
   offsetY: number;
+  iosWidgetEnabled: boolean;
+  iosWidgetTitle: string;
+  iosWidgetMessage: string;
 };
 
 type UpdateOptInSettingsInput = {
   shopDomain: string;
 } & OptInSettings;
+
+type RecordIosHomeScreenInput = {
+  shopDomain: string;
+  externalId: string;
+  browser?: string | null;
+  platform?: string | null;
+  locale?: string | null;
+  country?: string | null;
+  city?: string | null;
+  deviceContext?: Record<string, unknown> | null;
+};
+
+type SubscriberSortOrder = 'asc' | 'desc';
+
+type SubscriberListRow = {
+  subscriber: string;
+  subscriberId: string;
+  createdAt: string;
+  webBrowser: string;
+  os: string;
+  deviceUsed: string;
+  cityCountry: string;
+};
+
+type SubscriberGrowthPoint = {
+  date: string;
+  subscribers: number;
+};
 
 type TrackCampaignClickInput = {
   campaignId: string;
@@ -125,7 +158,16 @@ const defaultOptInSettings: OptInSettings = {
   placementPreset: 'balanced',
   offsetX: 0,
   offsetY: 0,
+  iosWidgetEnabled: true,
+  iosWidgetTitle: 'Get notifications on your iPhone or iPad',
+  iosWidgetMessage: 'Add this store to your Home Screen. When you open it from there, we will ask for notification permission using your saved prompt settings.',
 };
+
+const parseScopes = (value?: string | null) =>
+  String(value || '')
+    .split(',')
+    .map((scope) => scope.trim())
+    .filter(Boolean);
 
 const ensureSchema = async () => {
   if (!schemaReadyPromise) {
@@ -230,6 +272,10 @@ const ensureSchema = async () => {
         last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (shop_domain, external_id)
       )`;
+      await sql`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS ios_home_screen_confirmed_at TIMESTAMPTZ`;
+      await sql`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS ios_home_screen_last_seen_at TIMESTAMPTZ`;
+      await sql`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS device_context JSONB`;
+      await sql`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS city TEXT`;
 
       await sql`CREATE TABLE IF NOT EXISTS subscriber_tokens (
         id BIGSERIAL PRIMARY KEY,
@@ -287,6 +333,9 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_placement_preset TEXT NOT NULL DEFAULT 'balanced'`;
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_offset_x INTEGER NOT NULL DEFAULT 0`;
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_offset_y INTEGER NOT NULL DEFAULT 0`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS ios_widget_enabled BOOLEAN NOT NULL DEFAULT TRUE`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS ios_widget_title TEXT`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS ios_widget_message TEXT`;
 
       await sql`CREATE TABLE IF NOT EXISTS campaign_deliveries (
         id BIGSERIAL PRIMARY KEY,
@@ -338,7 +387,7 @@ const ensureSchema = async () => {
   await schemaReadyPromise;
 };
 
-const buildTrackedUrl = (targetUrl: string | null | undefined, campaignId: string, shopDomain: string) => {
+const buildTrackedUrl = (targetUrl: string | null | undefined, campaignId: string, shopDomain: string, externalId?: string | null) => {
   if (!targetUrl) {
     return null;
   }
@@ -353,6 +402,9 @@ const buildTrackedUrl = (targetUrl: string | null | undefined, campaignId: strin
     trackerBase.searchParams.set('c', campaignId);
     trackerBase.searchParams.set('s', shopDomain);
     trackerBase.searchParams.set('u', target.toString());
+    if (externalId) {
+      trackerBase.searchParams.set('e', externalId);
+    }
     return trackerBase.toString();
   } catch {
     return targetUrl;
@@ -548,14 +600,54 @@ export const getMerchantOverview = async (shopDomain: string) => {
   };
 };
 
+export const getMerchantCapabilitySnapshot = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  const rows = await sql`
+    SELECT
+      m.primary_domain,
+      m.myshopify_domain,
+      m.scopes
+    FROM merchants m
+    WHERE m.shop_domain = ${shopDomain}
+    LIMIT 1
+  `;
+
+  const row = rows[0] as
+    | {
+        primary_domain?: string | null;
+        myshopify_domain?: string | null;
+        scopes?: string | null;
+      }
+    | undefined;
+
+  const grantedScopes = parseScopes(row?.scopes);
+
+  return {
+    shopDomain,
+    primaryDomain: row?.primary_domain ?? null,
+    myshopifyDomain: row?.myshopify_domain ?? shopDomain,
+    grantedScopes,
+    hasReadCustomerEvents: grantedScopes.includes('read_customer_events'),
+    hasWritePixels: grantedScopes.includes('write_pixels'),
+    hasReadThemes: grantedScopes.includes('read_themes'),
+    hasWriteThemes: grantedScopes.includes('write_themes'),
+    hasReadLocales: grantedScopes.includes('read_locales'),
+    hasWriteLocales: grantedScopes.includes('write_locales'),
+  };
+};
+
 export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const serializedDeviceContext = input.deviceContext ? JSON.stringify(input.deviceContext) : null;
 
   await ensureMerchant(input.shopDomain);
 
   const subscriberRows = await sql`
-    INSERT INTO subscribers (shop_domain, external_id, browser, platform, locale, country, last_seen_at)
+    INSERT INTO subscribers (shop_domain, external_id, browser, platform, locale, country, city, device_context, last_seen_at)
     VALUES (
       ${input.shopDomain},
       ${input.externalId},
@@ -563,6 +655,8 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
       ${input.platform ?? null},
       ${input.locale ?? null},
       ${input.country ?? null},
+      ${input.city ?? null},
+      ${serializedDeviceContext}::jsonb,
       NOW()
     )
     ON CONFLICT (shop_domain, external_id)
@@ -571,6 +665,8 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
       platform = EXCLUDED.platform,
       locale = EXCLUDED.locale,
       country = EXCLUDED.country,
+      city = COALESCE(EXCLUDED.city, subscribers.city),
+      device_context = COALESCE(EXCLUDED.device_context, subscribers.device_context),
       last_seen_at = NOW()
     RETURNING id
   `;
@@ -601,6 +697,273 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   return {
     subscriberId,
     tokenId: Number(tokenRows[0]?.id),
+  };
+};
+
+export const recordIosHomeScreenConfirmed = async (input: RecordIosHomeScreenInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const serializedDeviceContext = input.deviceContext ? JSON.stringify(input.deviceContext) : null;
+
+  await ensureMerchant(input.shopDomain);
+
+  const subscriberRows = await sql`
+    INSERT INTO subscribers (
+      shop_domain,
+      external_id,
+      browser,
+      platform,
+      locale,
+      country,
+      city,
+      device_context,
+      last_seen_at,
+      ios_home_screen_confirmed_at,
+      ios_home_screen_last_seen_at
+    )
+    VALUES (
+      ${input.shopDomain},
+      ${input.externalId},
+      ${input.browser ?? null},
+      ${input.platform ?? 'ios'},
+      ${input.locale ?? null},
+      ${input.country ?? null},
+      ${input.city ?? null},
+      ${serializedDeviceContext}::jsonb,
+      NOW(),
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (shop_domain, external_id)
+    DO UPDATE SET
+      browser = COALESCE(EXCLUDED.browser, subscribers.browser),
+      platform = COALESCE(EXCLUDED.platform, subscribers.platform),
+      locale = COALESCE(EXCLUDED.locale, subscribers.locale),
+      country = COALESCE(EXCLUDED.country, subscribers.country),
+      city = COALESCE(EXCLUDED.city, subscribers.city),
+      device_context = COALESCE(EXCLUDED.device_context, subscribers.device_context),
+      last_seen_at = NOW(),
+      ios_home_screen_confirmed_at = COALESCE(subscribers.ios_home_screen_confirmed_at, NOW()),
+      ios_home_screen_last_seen_at = NOW()
+    RETURNING id, ios_home_screen_confirmed_at, ios_home_screen_last_seen_at
+  `;
+
+  return {
+    subscriberId: Number(subscriberRows[0]?.id),
+    confirmedAt: subscriberRows[0]?.ios_home_screen_confirmed_at ? String(subscriberRows[0].ios_home_screen_confirmed_at) : null,
+    lastSeenAt: subscriberRows[0]?.ios_home_screen_last_seen_at ? String(subscriberRows[0].ios_home_screen_last_seen_at) : null,
+  };
+};
+
+export const getSubscriberKpis = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const totalRows = await sql`
+    SELECT COUNT(*)::BIGINT AS count
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+  `;
+
+  const newLast7Rows = await sql`
+    SELECT COUNT(*)::BIGINT AS count
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+      AND created_at >= NOW() - INTERVAL '7 days'
+  `;
+
+  const prev7Rows = await sql`
+    SELECT COUNT(*)::BIGINT AS count
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+      AND created_at >= NOW() - INTERVAL '14 days'
+      AND created_at < NOW() - INTERVAL '7 days'
+  `;
+
+  const totalSubscribers = Number(totalRows[0]?.count ?? 0);
+  const newSubscribersLast7Days = Number(newLast7Rows[0]?.count ?? 0);
+  const previousPeriodCount = Number(prev7Rows[0]?.count ?? 0);
+  const growthPercent = previousPeriodCount > 0
+    ? ((newSubscribersLast7Days - previousPeriodCount) / previousPeriodCount) * 100
+    : (newSubscribersLast7Days > 0 ? 100 : 0);
+
+  return {
+    totalSubscribers,
+    newSubscribersLast7Days,
+    growthPercent,
+  };
+};
+
+export const listSubscribers = async (shopDomain: string, limit = 100, offset = 0, sortOrder: SubscriberSortOrder = 'desc') => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const safeLimit = Math.min(Math.max(limit, 1), 500);
+  const safeOffset = Math.max(offset, 0);
+
+  const rows = sortOrder === 'asc'
+    ? await sql`
+      SELECT
+        external_id,
+        created_at,
+        COALESCE(NULLIF(browser, ''), NULLIF(device_context ->> 'browserName', ''), 'unknown') AS web_browser,
+        COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
+        COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
+        NULLIF(city, '') AS city,
+        NULLIF(country, '') AS country
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+      ORDER BY created_at ASC
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
+    `
+    : await sql`
+      SELECT
+        external_id,
+        created_at,
+        COALESCE(NULLIF(browser, ''), NULLIF(device_context ->> 'browserName', ''), 'unknown') AS web_browser,
+        COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
+        COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
+        NULLIF(city, '') AS city,
+        NULLIF(country, '') AS country
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+      ORDER BY created_at DESC
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
+    `;
+
+  const totalRows = await sql`
+    SELECT COUNT(*)::BIGINT AS count
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+  `;
+
+  const subscribers: SubscriberListRow[] = rows.map((row) => {
+    const city = row?.city ? String(row.city) : null;
+    const country = row?.country ? String(row.country) : null;
+    const cityCountry = city && country
+      ? `${city}, ${country}`
+      : city
+        ? city
+        : country
+          ? country
+          : 'Unknown';
+
+    return {
+      subscriber: 'Anonymous',
+      subscriberId: String(row?.external_id ?? ''),
+      createdAt: row?.created_at ? String(row.created_at) : '',
+      webBrowser: String(row?.web_browser ?? 'unknown'),
+      os: String(row?.os_name ?? 'unknown'),
+      deviceUsed: String(row?.device_used ?? 'unknown'),
+      cityCountry,
+    };
+  });
+
+  const total = Number(totalRows[0]?.count ?? 0);
+
+  return {
+    subscribers,
+    total,
+    hasMore: safeOffset + subscribers.length < total,
+  };
+};
+
+export const getSubscriberBreakdown = async (shopDomain: string, limit = 8) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const safeLimit = Math.min(Math.max(limit, 1), 20);
+
+  const browsers = await sql`
+    SELECT
+      LOWER(COALESCE(NULLIF(browser, ''), NULLIF(device_context ->> 'browserName', ''), 'unknown')) AS name,
+      COUNT(*)::BIGINT AS value
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+    GROUP BY 1
+    ORDER BY 2 DESC
+    LIMIT ${safeLimit}
+  `;
+
+  const platforms = await sql`
+    SELECT
+      LOWER(COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown')) AS name,
+      COUNT(*)::BIGINT AS value
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+    GROUP BY 1
+    ORDER BY 2 DESC
+    LIMIT ${safeLimit}
+  `;
+
+  return {
+    browsers: browsers.map((row) => ({ name: String(row.name), value: Number(row.value ?? 0) })),
+    platforms: platforms.map((row) => ({ name: String(row.name), value: Number(row.value ?? 0) })),
+  };
+};
+
+export const getSubscriberLocationBreakdown = async (shopDomain: string, limit = 8) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const safeLimit = Math.min(Math.max(limit, 1), 20);
+
+  const countries = await sql`
+    SELECT
+      COALESCE(NULLIF(country, ''), 'Unknown') AS name,
+      COUNT(*)::BIGINT AS value
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+    GROUP BY 1
+    ORDER BY 2 DESC
+    LIMIT ${safeLimit}
+  `;
+
+  const cities = await sql`
+    SELECT
+      COALESCE(NULLIF(city, ''), 'Unknown') AS name,
+      COUNT(*)::BIGINT AS value
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+    GROUP BY 1
+    ORDER BY 2 DESC
+    LIMIT ${safeLimit}
+  `;
+
+  return {
+    countries: countries.map((row) => ({ name: String(row.name), value: Number(row.value ?? 0) })),
+    cities: cities.map((row) => ({ name: String(row.name), value: Number(row.value ?? 0) })),
+  };
+};
+
+export const getSubscriberGrowth = async (shopDomain: string, from: Date, to: Date) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const start = from <= to ? from : to;
+  const end = from <= to ? to : from;
+
+  const rows = await sql`
+    SELECT
+      gs.day::date AS day,
+      COALESCE(COUNT(s.id), 0)::BIGINT AS subscribers
+    FROM generate_series(${start}::timestamptz, ${end}::timestamptz, interval '1 day') AS gs(day)
+    LEFT JOIN subscribers s
+      ON s.shop_domain = ${shopDomain}
+      AND s.created_at >= gs.day
+      AND s.created_at < gs.day + interval '1 day'
+    GROUP BY gs.day
+    ORDER BY gs.day ASC
+  `;
+
+  const points: SubscriberGrowthPoint[] = rows.map((row) => ({
+    date: row?.day ? String(row.day) : '',
+    subscribers: Number(row?.subscribers ?? 0),
+  }));
+
+  return {
+    points,
+    totalNewSubscribers: points.reduce((sum, item) => sum + item.subscribers, 0),
   };
 };
 
@@ -724,11 +1087,11 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
   const previousStatus = campaign.status;
 
   const recipients = (await sql`
-    SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id
+    SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id
     FROM subscriber_tokens t
     JOIN subscribers s ON s.id = t.subscriber_id
     WHERE t.shop_domain = ${shopDomain} AND t.status = 'active'
-  `) as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number }>;
+  `) as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null }>;
 
   if (recipients.length === 0) {
     await sql`
@@ -745,7 +1108,6 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
   }
 
   try {
-    const trackedUrl = buildTrackedUrl(campaign.target_url, campaignId, shopDomain);
     const messaging = getFirebaseAdminMessaging();
     const chunkSize = 500;
     let successCount = 0;
@@ -753,27 +1115,33 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
 
     for (let i = 0; i < recipients.length; i += chunkSize) {
       const chunk = recipients.slice(i, i + chunkSize);
-      const multicast = await messaging.sendEachForMulticast({
-        tokens: chunk.map((item) => item.fcm_token),
-        notification: {
-          title: campaign.title,
-          body: campaign.body,
-          imageUrl: campaign.image_url ?? undefined,
-        },
-        webpush: {
-          fcmOptions: {
-            link: trackedUrl ?? undefined,
-          },
+      const messages = chunk.map((item) => {
+        const trackedUrl = buildTrackedUrl(campaign.target_url, campaignId, shopDomain, item.external_id);
+
+        return {
+          token: item.fcm_token,
           notification: {
-            icon: campaign.icon_url ?? undefined,
-            image: campaign.image_url ?? undefined,
+            title: campaign.title,
+            body: campaign.body,
+            imageUrl: campaign.image_url ?? undefined,
           },
-        },
-        data: {
-          campaignId,
-          shopDomain,
-        },
+          webpush: {
+            fcmOptions: {
+              link: trackedUrl ?? undefined,
+            },
+            notification: {
+              icon: campaign.icon_url ?? undefined,
+              image: campaign.image_url ?? undefined,
+            },
+          },
+          data: {
+            campaignId,
+            shopDomain,
+          },
+        };
       });
+
+      const multicast = await messaging.sendEach(messages);
 
       successCount += multicast.successCount;
       failureCount += multicast.failureCount;
@@ -906,7 +1274,10 @@ export const getOptInSettings = async (shopDomain: string): Promise<OptInSetting
       opt_in_mobile_position,
       opt_in_placement_preset,
       opt_in_offset_x,
-      opt_in_offset_y
+      opt_in_offset_y,
+      ios_widget_enabled,
+      ios_widget_title,
+      ios_widget_message
     FROM merchant_settings
     WHERE shop_domain = ${shopDomain}
     LIMIT 1
@@ -932,14 +1303,18 @@ export const getOptInSettings = async (shopDomain: string): Promise<OptInSetting
     placementPreset: (row?.opt_in_placement_preset as OptInSettings['placementPreset']) ?? defaultOptInSettings.placementPreset,
     offsetX: Number(row?.opt_in_offset_x ?? defaultOptInSettings.offsetX),
     offsetY: Number(row?.opt_in_offset_y ?? defaultOptInSettings.offsetY),
+    iosWidgetEnabled: row?.ios_widget_enabled === undefined ? defaultOptInSettings.iosWidgetEnabled : Boolean(row.ios_widget_enabled),
+    iosWidgetTitle: String(row?.ios_widget_title ?? defaultOptInSettings.iosWidgetTitle),
+    iosWidgetMessage: String(row?.ios_widget_message ?? defaultOptInSettings.iosWidgetMessage),
   };
 };
 
 export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
   await ensureSchema();
   const sql = getNeonSql();
-  const upsertSettings = async () =>
-    sql`
+  await ensureMerchant(input.shopDomain);
+
+  await sql`
     INSERT INTO merchant_settings (
       shop_domain,
       opt_in_prompt_type,
@@ -959,6 +1334,9 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
       opt_in_placement_preset,
       opt_in_offset_x,
       opt_in_offset_y,
+      ios_widget_enabled,
+      ios_widget_title,
+      ios_widget_message,
       updated_at
     )
     VALUES (
@@ -980,6 +1358,9 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
       ${input.placementPreset},
       ${input.offsetX},
       ${input.offsetY},
+      ${input.iosWidgetEnabled},
+      ${input.iosWidgetTitle},
+      ${input.iosWidgetMessage},
       NOW()
     )
     ON CONFLICT (shop_domain)
@@ -1001,21 +1382,11 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
         opt_in_placement_preset = EXCLUDED.opt_in_placement_preset,
         opt_in_offset_x = EXCLUDED.opt_in_offset_x,
         opt_in_offset_y = EXCLUDED.opt_in_offset_y,
+      ios_widget_enabled = EXCLUDED.ios_widget_enabled,
+      ios_widget_title = EXCLUDED.ios_widget_title,
+      ios_widget_message = EXCLUDED.ios_widget_message,
       updated_at = NOW()
-    `;
-
-    try {
-      await upsertSettings();
-    } catch (error) {
-      // Fast path assumes merchant already exists. If this is the first ever save
-      // for a shop and FK is missing, create merchant and retry once.
-      if ((error as { code?: string } | null)?.code === '23503') {
-        await ensureMerchant(input.shopDomain);
-        await upsertSettings();
-      } else {
-        throw error;
-      }
-    }
+  `;
 
   return {
     promptType: input.promptType,
@@ -1035,6 +1406,9 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
     placementPreset: input.placementPreset,
     offsetX: Number(input.offsetX),
     offsetY: Number(input.offsetY),
+    iosWidgetEnabled: Boolean(input.iosWidgetEnabled),
+    iosWidgetTitle: input.iosWidgetTitle,
+    iosWidgetMessage: input.iosWidgetMessage,
   };
 };
 

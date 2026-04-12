@@ -1,26 +1,14 @@
 
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatNumber } from '@/lib/utils';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '../ui/progress';
+import { useSettings } from '@/context/settings-context';
 
-const topCountriesData = [
-  { name: 'Pakistan', value: 450123 },
-  { name: 'United States', value: 380987 },
-  { name: 'United Kingdom', value: 210456 },
-  { name: 'Germany', value: 150765 },
-  { name: 'Canada', value: 98543 },
-];
-
-const topCitiesData = [
-  { name: 'Karachi', value: 210987 },
-  { name: 'New York', value: 180123 },
-  { name: 'London', value: 150456 },
-  { name: 'Munich', value: 98765 },
-  { name: 'Toronto', value: 76543 },
-];
+type LocationItem = { name: string; value: number };
 
 const chartConfig = {
     pakistan: { color: 'hsl(var(--chart-1))' },
@@ -37,7 +25,7 @@ const chartConfig = {
 };
 
 
-const addOthersCategory = (data: { name: string; value: number }[]) => {
+const addOthersCategory = (data: LocationItem[]) => {
     if (data.length <= 4) return data;
     const top4 = data.slice(0, 4);
     const othersTotal = data.slice(4).reduce((acc, curr) => acc + curr.value, 0);
@@ -47,10 +35,7 @@ const addOthersCategory = (data: { name: string; value: number }[]) => {
     ];
 };
 
-const processedCountriesData = addOthersCategory(topCountriesData);
-const processedCitiesData = addOthersCategory(topCitiesData);
-
-const BreakdownList = ({ data }: { data: { name: string, value: number }[] }) => {
+const BreakdownList = ({ data }: { data: LocationItem[] }) => {
     const total = data.reduce((acc, curr) => acc + curr.value, 0);
 
     return (
@@ -78,6 +63,45 @@ const BreakdownList = ({ data }: { data: { name: string, value: number }[] }) =>
 
 
 export function GeolocationChart() {
+    const { shopDomain } = useSettings();
+    const [countries, setCountries] = useState<LocationItem[]>([]);
+    const [cities, setCities] = useState<LocationItem[]>([]);
+
+    useEffect(() => {
+        if (!shopDomain) {
+            return;
+        }
+
+        let active = true;
+        fetch(`/api/subscribers/overview?shop=${encodeURIComponent(shopDomain)}`)
+            .then((response) => response.json())
+            .then((data) => {
+                if (!active || !data?.ok) {
+                    return;
+                }
+
+                const nextCountries = Array.isArray(data.countries) ? data.countries : [];
+                const nextCities = Array.isArray(data.cities) ? data.cities : [];
+
+                setCountries(nextCountries.map((item: { name: string; value: number }) => ({
+                    name: item.name,
+                    value: Number(item.value ?? 0),
+                })));
+                setCities(nextCities.map((item: { name: string; value: number }) => ({
+                    name: item.name,
+                    value: Number(item.value ?? 0),
+                })));
+            })
+            .catch(() => undefined);
+
+        return () => {
+            active = false;
+        };
+    }, [shopDomain]);
+
+    const processedCountriesData = useMemo(() => addOthersCategory(countries), [countries]);
+    const processedCitiesData = useMemo(() => addOthersCategory(cities), [cities]);
+
   return (
     <Card className="h-full">
       <CardHeader>

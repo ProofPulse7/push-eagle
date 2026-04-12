@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
+import { getRequestGeo } from '@/lib/server/request-geo';
 import { upsertSubscriberToken } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
@@ -18,6 +19,8 @@ const schema = z.object({
   platform: z.string().optional(),
   locale: z.string().optional(),
   country: z.string().optional(),
+  city: z.string().optional(),
+  deviceContext: z.object({}).passthrough().optional(),
 });
 
 const appOrigin = (() => {
@@ -46,6 +49,30 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Domain',
 };
 
+const detectBrowserFromUserAgent = (userAgent: string | null) => {
+  const ua = String(userAgent || '').toLowerCase();
+  if (!ua) return 'unknown';
+  if (ua.includes('edg/')) return 'edge';
+  if (ua.includes('opr/') || ua.includes('opera')) return 'opera';
+  if (ua.includes('samsungbrowser/')) return 'samsung';
+  if (ua.includes('firefox/') || ua.includes('fxios/')) return 'firefox';
+  if (ua.includes('chrome/') || ua.includes('crios/')) return 'chrome';
+  if (ua.includes('safari/')) return 'safari';
+  return 'unknown';
+};
+
+const detectPlatformFromUserAgent = (userAgent: string | null) => {
+  const ua = String(userAgent || '').toLowerCase();
+  if (!ua) return 'unknown';
+  if (ua.includes('android')) return 'android';
+  if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ipod') || ua.includes('ios')) return 'ios';
+  if (ua.includes('windows')) return 'windows';
+  if (ua.includes('mac os') || ua.includes('macintosh')) return 'macos';
+  if (ua.includes('cros')) return 'chromeos';
+  if (ua.includes('linux')) return 'linux';
+  return 'unknown';
+};
+
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
@@ -68,12 +95,25 @@ export async function POST(request: Request) {
     }
 
     const userAgent = request.headers.get('user-agent');
+    const requestGeo = getRequestGeo(request);
     const externalId = body.externalId?.trim()
       ? body.externalId.trim()
       : createHash('sha256').update(`${shopDomain}:${body.token}`).digest('hex').slice(0, 24);
 
-    const browser = body.browser ?? (userAgent?.includes('Safari') ? 'safari' : userAgent?.includes('Firefox') ? 'firefox' : 'chrome');
-    const platform = body.platform ?? (userAgent?.includes('Android') ? 'android' : userAgent?.includes('iPhone') ? 'ios' : 'desktop');
+    const browser = body.browser
+      ?? (typeof body.deviceContext?.browserName === 'string' ? body.deviceContext.browserName : undefined)
+      ?? detectBrowserFromUserAgent(userAgent);
+    const platform = body.platform
+      ?? (typeof body.deviceContext?.osName === 'string' ? body.deviceContext.osName : undefined)
+      ?? detectPlatformFromUserAgent(userAgent);
+    const locale = body.locale
+      ?? (typeof body.deviceContext?.language === 'string' ? body.deviceContext.language : undefined)
+      ?? (typeof body.deviceContext?.shopifyLocale === 'string' ? body.deviceContext.shopifyLocale : undefined);
+    const country = body.country
+      ?? requestGeo.country
+      ?? (typeof body.deviceContext?.shopifyCountry === 'string' ? body.deviceContext.shopifyCountry : undefined);
+    const city = body.city
+      ?? requestGeo.city;
 
     const saved = await upsertSubscriberToken({
       shopDomain,
@@ -81,9 +121,11 @@ export async function POST(request: Request) {
       token: body.token,
       browser,
       platform,
-      locale: body.locale,
-      country: body.country,
+      locale,
+      country,
+      city,
       userAgent,
+      deviceContext: body.deviceContext ?? null,
     });
 
     return NextResponse.json(

@@ -1,48 +1,21 @@
 
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis, Area, AreaChart, Text } from 'recharts';
+import { useState, useEffect } from 'react';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis, Area, AreaChart } from 'recharts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
-import { addDays, eachDayOfInterval, format, differenceInDays, eachMonthOfInterval, startOfMonth, subYears } from 'date-fns';
+import { differenceInDays, eachMonthOfInterval, format } from 'date-fns';
 import { AreaChart as AreaChartIcon, BarChart3 } from 'lucide-react';
 import type { DateRange } from 'react-day-picker';
 import { DateRangePicker } from '../analytics/date-range-picker';
+import { useSettings } from '@/context/settings-context';
 
-const generateData = (dateRange?: DateRange) => {
-    // Default to last year for "All time"
-    const from = dateRange?.from ?? subYears(new Date(), 1);
-    const to = dateRange?.to ?? new Date();
-
-    if (from > to) return { data: [], total: 0 };
-
-    const interval = { start: from, end: to };
-    const days = differenceInDays(to, from);
-
-    let data;
-
-    if (days > 90) { // Monthly data for ranges > 90 days
-        const months = eachMonthOfInterval(interval);
-
-        data = months.map(month => ({
-            date: format(month, 'MMM yy'),
-            subscribers: Math.floor(Math.random() * 8000) + 1000,
-        }));
-
-    } else { // Daily data
-        const dayArray = eachDayOfInterval(interval);
-        data = dayArray.map(day => ({
-            date: format(day, 'MMM d'),
-            subscribers: Math.floor(Math.random() * 500) + 50,
-        }));
-    }
-  
-    const total = data.reduce((acc, item) => acc + item.subscribers, 0);
-
-    return { data, total };
+type GrowthPoint = {
+  date: string;
+  subscribers: number;
 };
 
 
@@ -69,21 +42,95 @@ const getXAxisProps = (dataCount: number) => {
 
 
 export function SubscriberGrowthChart({ showDatePicker = false }: { showDatePicker?: boolean }) {
+    const { shopDomain } = useSettings();
     const [date, setDate] = useState<DateRange | undefined>(undefined);
-    const [chartData, setChartData] = useState<{ data: any[], total: number }>({ data: [], total: 0 });
+    const [chartData, setChartData] = useState<{ data: GrowthPoint[]; total: number }>({ data: [], total: 0 });
     const [chartType, setChartType] = useState<'area' | 'bar'>('area');
     const [isClient, setIsClient] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
         setIsClient(true);
     }, []);
 
     useEffect(() => {
-        if (isClient) {
-            const { data, total } = generateData(date);
-            setChartData({ data, total });
+        if (!isClient || !shopDomain) {
+            return;
         }
-    }, [isClient, date]);
+
+        const to = date?.to ?? new Date();
+        const from = date?.from ?? new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+        let active = true;
+        setIsLoading(true);
+
+        fetch(`/api/subscribers/growth?shop=${encodeURIComponent(shopDomain)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`)
+            .then((response) => response.json())
+            .then((payload) => {
+                if (!active || !payload?.ok) {
+                    return;
+                }
+
+                const rawPoints = Array.isArray(payload.points) ? payload.points : [];
+                const pointDates = rawPoints
+                    .map((item: { date?: string }) => (item?.date ? new Date(item.date) : null))
+                    .filter((value: Date | null): value is Date => value instanceof Date && !Number.isNaN(value.getTime()));
+
+                const rangeDays = pointDates.length > 1
+                    ? differenceInDays(pointDates[pointDates.length - 1], pointDates[0])
+                    : 0;
+
+                if (rangeDays > 90) {
+                    const monthly = new Map<string, number>();
+                    for (const item of rawPoints) {
+                        const day = item?.date ? new Date(item.date) : null;
+                        if (!day || Number.isNaN(day.getTime())) {
+                            continue;
+                        }
+                        const label = format(day, 'MMM yy');
+                        monthly.set(label, (monthly.get(label) ?? 0) + Number(item?.subscribers ?? 0));
+                    }
+
+                    const interval = eachMonthOfInterval({ start: from, end: to });
+                    const monthPoints = interval.map((month) => {
+                        const label = format(month, 'MMM yy');
+                        return {
+                            date: label,
+                            subscribers: monthly.get(label) ?? 0,
+                        };
+                    });
+
+                    setChartData({
+                        data: monthPoints,
+                        total: monthPoints.reduce((sum, item) => sum + item.subscribers, 0),
+                    });
+                    return;
+                }
+
+                const normalized = rawPoints.map((item: { date?: string; subscribers?: number }) => {
+                    const parsedDate = item?.date ? new Date(item.date) : null;
+                    return {
+                        date: parsedDate && !Number.isNaN(parsedDate.getTime()) ? format(parsedDate, 'MMM d') : 'Unknown',
+                        subscribers: Number(item?.subscribers ?? 0),
+                    };
+                });
+
+                setChartData({
+                    data: normalized,
+                    total: Number(payload.totalNewSubscribers ?? normalized.reduce((sum, item) => sum + item.subscribers, 0)),
+                });
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                if (active) {
+                    setIsLoading(false);
+                }
+            });
+
+        return () => {
+            active = false;
+        };
+    }, [isClient, shopDomain, date]);
 
     const xAxisProps = getXAxisProps(chartData.data.length);
 
@@ -146,6 +193,7 @@ export function SubscriberGrowthChart({ showDatePicker = false }: { showDatePick
                         </ResponsiveContainer>
                     )}
                 </ChartContainer>
+                {isLoading && <p className="text-xs text-muted-foreground mt-2">Refreshing growth data...</p>}
             </CardContent>
         </Card>
     );

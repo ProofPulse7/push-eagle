@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from 'react';
 import {
   Table,
   TableBody,
@@ -9,57 +9,97 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"
-import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils";
-import { ChevronsUpDown } from "lucide-react";
+} from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import { ChevronsUpDown } from 'lucide-react';
+import { useSettings } from '@/context/settings-context';
 
 type Subscriber = {
-    id: number;
-    name: string;
+    subscriber: string;
+    subscriberId: string;
     createdAt: string;
-    browser: string;
+    webBrowser: string;
     os: string;
-    device: string;
-    location: string;
+    deviceUsed: string;
+    cityCountry: string;
 };
 
-const allSubscribersData: Subscriber[] = [
-    { id: 414880337, name: 'Anonymous', createdAt: 'Jun 19, 2025, 5:03:34 AM', browser: 'chrome', os: 'Android', device: 'mobile', location: 'Karachi, Pakistan' },
-    { id: 414816110, name: 'Anonymous', createdAt: 'Jun 18, 2025, 8:19:22 PM', browser: 'chrome', os: 'Windows 10', device: 'pc', location: 'Karachi, Pakistan' },
-    { id: 414815562, name: 'Anonymous', createdAt: 'Jun 18, 2025, 8:16:08 PM', browser: 'chrome', os: 'Windows 10', device: 'pc', location: 'Karachi, Pakistan' },
-    { id: 411786046, name: 'Anonymous', createdAt: 'May 30, 2025, 3:12:08 AM', browser: 'chrome', os: 'Android', device: 'mobile', location: 'Karachi, Pakistan' },
-    { id: 407234357, name: 'Anonymous', createdAt: 'May 2, 2025, 3:52:52 AM', browser: 'chrome', os: 'Android', device: 'mobile', location: 'Karachi, Pakistan' },
-    { id: 407232711, name: 'Anonymous', createdAt: 'May 2, 2025, 3:33:11 AM', browser: 'chrome', os: 'Windows 10', device: 'pc', location: 'Karachi, Pakistan' },
-    ...Array.from({ length: 50 }, (_, i) => ({
-        id: 407232711 + i + 1,
-        name: 'Anonymous',
-        createdAt: `May ${Math.floor(Math.random() * 30) + 1}, 2025, 3:33:11 AM`,
-        browser: ['chrome', 'firefox', 'safari'][Math.floor(Math.random() * 3)],
-        os: ['Windows 10', 'Android', 'macOS'][Math.floor(Math.random() * 3)],
-        device: ['pc', 'mobile'][Math.floor(Math.random() * 2)],
-        location: 'Karachi, Pakistan'
-    }))
-];
-
 export function SubscribersTable() {
-    const [visibleCount, setVisibleCount] = useState(50);
+    const { shopDomain } = useSettings();
     const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+    const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
+    const [offset, setOffset] = useState(0);
+    const [hasMore, setHasMore] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [loadingMore, setLoadingMore] = useState(false);
+    const pageSize = 100;
 
-    const sortedSubscribers = useMemo(() => {
-        return [...allSubscribersData].sort((a, b) => {
-            const dateA = new Date(a.createdAt).getTime();
-            const dateB = new Date(b.createdAt).getTime();
-            return sortOrder === 'asc' ? dateA - dateB : dateB - dateA;
-        });
-    }, [sortOrder]);
+    useEffect(() => {
+        if (!shopDomain) {
+            return;
+        }
 
-    const loadMore = () => {
-        setVisibleCount(prevCount => prevCount + 50);
+        let active = true;
+        setLoading(true);
+
+        fetch(`/api/subscribers/list?shop=${encodeURIComponent(shopDomain)}&limit=${pageSize}&offset=0&sort=${sortOrder}`)
+            .then((response) => response.json())
+            .then((data) => {
+                if (!active || !data?.ok) {
+                    return;
+                }
+                setSubscribers(Array.isArray(data.subscribers) ? data.subscribers : []);
+                setOffset(Array.isArray(data.subscribers) ? data.subscribers.length : 0);
+                setHasMore(Boolean(data.hasMore));
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                if (active) {
+                    setLoading(false);
+                }
+            });
+
+        return () => {
+            active = false;
+        };
+    }, [shopDomain, sortOrder]);
+
+    const visibleSubscribers = useMemo(() => {
+        return subscribers.map((subscriber) => ({
+            ...subscriber,
+            createdAt: subscriber.createdAt
+                ? new Date(subscriber.createdAt).toLocaleString()
+                : 'Unknown',
+        }));
+    }, [subscribers]);
+
+    const loadMore = async () => {
+        if (!shopDomain || !hasMore || loadingMore) {
+            return;
+        }
+
+        setLoadingMore(true);
+        try {
+            const response = await fetch(`/api/subscribers/list?shop=${encodeURIComponent(shopDomain)}&limit=${pageSize}&offset=${offset}&sort=${sortOrder}`);
+            const data = await response.json();
+            if (!data?.ok) {
+                return;
+            }
+
+            const nextRows = Array.isArray(data.subscribers) ? data.subscribers : [];
+            setSubscribers((prev) => [...prev, ...nextRows]);
+            setOffset((prev) => prev + nextRows.length);
+            setHasMore(Boolean(data.hasMore));
+        } catch (_error) {
+            // Keep the current list if load-more fails.
+        } finally {
+            setLoadingMore(false);
+        }
     };
 
     const toggleSortOrder = () => {
-        setSortOrder(prevOrder => prevOrder === 'asc' ? 'desc' : 'asc');
+        setSortOrder((prevOrder) => (prevOrder === 'asc' ? 'desc' : 'asc'));
     };
 
     return (
@@ -82,24 +122,34 @@ export function SubscribersTable() {
                     </TableRow>
                 </TableHeader>
                 <TableBody>
-                    {sortedSubscribers.slice(0, visibleCount).map((subscriber, index) => (
-                        <TableRow key={subscriber.id} className={cn(index % 2 === 0 ? 'bg-card' : 'bg-muted/50')}>
-                            <TableCell className="font-medium">{subscriber.name}</TableCell>
-                            <TableCell>{subscriber.id}</TableCell>
+                    {visibleSubscribers.map((subscriber, index) => (
+                        <TableRow key={`${subscriber.subscriberId}-${index}`} className={cn(index % 2 === 0 ? 'bg-card' : 'bg-muted/50')}>
+                            <TableCell className="font-medium">{subscriber.subscriber}</TableCell>
+                            <TableCell>{subscriber.subscriberId}</TableCell>
                             <TableCell>{subscriber.createdAt}</TableCell>
-                            <TableCell>{subscriber.browser}</TableCell>
+                            <TableCell>{subscriber.webBrowser}</TableCell>
                             <TableCell>{subscriber.os}</TableCell>
-                            <TableCell>{subscriber.device}</TableCell>
-                            <TableCell>{subscriber.location}</TableCell>
+                            <TableCell>{subscriber.deviceUsed}</TableCell>
+                            <TableCell>{subscriber.cityCountry}</TableCell>
                         </TableRow>
                     ))}
+                    {!loading && visibleSubscribers.length === 0 && (
+                        <TableRow>
+                            <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                                No subscribers yet.
+                            </TableCell>
+                        </TableRow>
+                    )}
                 </TableBody>
             </Table>
-            {visibleCount < allSubscribersData.length && (
-                <div className="text-center mt-4">
-                    <Button onClick={loadMore}>Load More</Button>
-                </div>
-            )}
+            <div className="text-center mt-4">
+                {hasMore && (
+                    <Button onClick={loadMore} disabled={loadingMore}>
+                        {loadingMore ? 'Loading...' : 'Load More'}
+                    </Button>
+                )}
+                {loading && <p className="text-sm text-muted-foreground">Loading subscribers...</p>}
+            </div>
         </div>
     );
 }
