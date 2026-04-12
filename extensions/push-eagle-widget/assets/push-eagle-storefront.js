@@ -364,26 +364,23 @@
     var requestUrl = bootstrapUrl + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&') + '_pe_ts=' + String(Date.now());
     var cacheKey = getStorageKey(config.shopDomain, 'bootstrap_cache');
 
-    try {
-      var response = await fetch(requestUrl, {
-        credentials: 'include',
-        cache: 'no-store',
-        headers: {
-          'cache-control': 'no-cache'
-        }
-      });
-      var data = await response.json();
-      if (response.ok && data && data.ok) {
-        safeLocalStorageSet(cacheKey, JSON.stringify(data));
-        return data;
-      }
-      // Log non-OK responses so merchants can debug via DevTools
-      console.error('[PushEagle] Bootstrap returned error', response.status, data);
-    } catch (_error) {
-      console.error('[PushEagle] Bootstrap fetch failed', _error);
-      // fallback below
+    // Try the Shopify App Proxy path first
+    var data = await tryBootstrapFetch(requestUrl, config.shopDomain);
+
+    // If proxy failed (404 or non-JSON from Shopify), fall back to the direct app URL
+    if (!data && config.appUrl) {
+      var directUrl = config.appUrl.replace(/\/$/, '') + '/api/storefront/bootstrap'
+        + '?shop=' + encodeURIComponent(config.shopDomain)
+        + '&_pe_ts=' + String(Date.now());
+      data = await tryBootstrapFetch(directUrl, config.shopDomain);
     }
 
+    if (data && data.ok) {
+      safeLocalStorageSet(cacheKey, JSON.stringify(data));
+      return data;
+    }
+
+    // Last resort: localStorage cache from a previous successful fetch
     var cached = safeLocalStorageGet(cacheKey);
     if (cached) {
       try {
@@ -404,6 +401,30 @@
       optIn: defaultOptInSettings,
       firebase: fallbackFirebaseConfig
     };
+  }
+
+  async function tryBootstrapFetch(url, shopDomain) {
+    try {
+      var response = await fetch(url, {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { 'cache-control': 'no-cache' }
+      });
+      var contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        console.error('[PushEagle] Bootstrap non-JSON response', response.status, url);
+        return null;
+      }
+      var data = await response.json();
+      if (response.ok && data && data.ok) {
+        return data;
+      }
+      console.error('[PushEagle] Bootstrap error response', response.status, data);
+      return null;
+    } catch (_error) {
+      console.error('[PushEagle] Bootstrap fetch failed', url, _error);
+      return null;
+    }
   }
 
   async function initFirebaseMessaging(firebase) {
