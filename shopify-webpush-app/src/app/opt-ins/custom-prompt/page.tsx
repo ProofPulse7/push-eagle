@@ -232,6 +232,7 @@ export default function CustomPromptPage() {
     const { logo, setLogo, shopDomain } = useSettings();
     const { toast } = useToast();
     const logoInputRef = useRef<HTMLInputElement | null>(null);
+    const loadedShopRef = useRef<string | null>(null);
 
     const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
 
@@ -277,6 +278,11 @@ export default function CustomPromptPage() {
             return;
         }
 
+        if (loadedShopRef.current === resolvedShopDomain) {
+            setLoading(false);
+            return;
+        }
+
         let isMounted = true;
         setLoading(true);
 
@@ -303,6 +309,7 @@ export default function CustomPromptPage() {
                 setOffsetX(String(data.offsetX));
                 setOffsetY(String(data.offsetY));
                 setLogo({ file: null, preview: data.logoUrl ?? null });
+                loadedShopRef.current = resolvedShopDomain;
             })
             .catch((error) => {
                 if (!isMounted) {
@@ -329,7 +336,7 @@ export default function CustomPromptPage() {
         return () => {
             isMounted = false;
         };
-    }, [resolvedShopDomain, setLogo, toast]);
+    }, [resolvedShopDomain]);
 
     const saveChanges = async () => {
         if (!resolvedShopDomain) {
