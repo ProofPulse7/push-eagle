@@ -1012,7 +1012,25 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
       updated_at = NOW()
   `;
 
-  return getOptInSettings(input.shopDomain);
+  return {
+    promptType: input.promptType,
+    title: input.title,
+    message: input.message,
+    allowText: input.allowText,
+    allowBgColor: input.allowBgColor,
+    allowTextColor: input.allowTextColor,
+    laterText: input.laterText,
+    logoUrl: input.logoUrl ?? null,
+    desktopDelaySeconds: Number(input.desktopDelaySeconds),
+    mobileDelaySeconds: Number(input.mobileDelaySeconds),
+    maxDisplaysPerSession: Number(input.maxDisplaysPerSession),
+    hideForDays: Number(input.hideForDays),
+    desktopPosition: input.desktopPosition,
+    mobilePosition: input.mobilePosition,
+    placementPreset: input.placementPreset,
+    offsetX: Number(input.offsetX),
+    offsetY: Number(input.offsetY),
+  };
 };
 
 export const updateAttributionSettings = async (input: UpdateAttributionSettingsInput) => {
