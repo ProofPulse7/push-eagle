@@ -696,31 +696,45 @@
     var primaryButton = root.querySelector('[data-push-eagle-action]');
     var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
 
-    // For custom prompts: check permission state and device early
-    // Don't show custom popup if permission is already granted or denied, or if on iOS
+    // iOS-specific logic: check if standalone (added to home screen)
+    var isOnIos = isIosSafari();
+    var isStandalone = isStandaloneIos();
+    
+    // If on iOS but NOT standalone, show "Add to Home Screen" prompt instead of notification prompt
+    if (isOnIos && !isStandalone) {
+      closePrompt(root);
+      
+      // Show status message to add to home screen
+      var statusEl = root.querySelector('[data-push-eagle-status]');
+      if (statusEl) {
+        showStatus(root, 'To enable notifications, tap Share and select "Add to Home Screen" first.', 'info');
+        openPrompt(root);
+      }
+      return;
+    }
+
+    // For custom prompts: check permission state
+    // Don't show if permission is already granted or denied
     if (effectiveMode === 'custom') {
       if (Notification.permission !== 'default') {
-        // Permission already selected by user or unavailable
-        closePrompt(root);
-        return;
-      }
-
-      if (isIosSafari() && !isStandaloneIos()) {
-        // On iOS: can't request notification permission directly
+        // Permission already selected by user
         closePrompt(root);
         return;
       }
     }
 
-    // For browser mode: check if already subscribed or permission denied
+    // For browser mode: check permission state
     if (effectiveMode === 'browser') {
-      if (Notification.permission === 'granted' || isMarkedSubscribed(config.shopDomain)) {
+      // If on iOS: only show if standalone (already checked above)
+      // If already subscribed, don't show
+      if (isMarkedSubscribed(config.shopDomain)) {
         await registerToken(config, boot, { silent: true });
         closePrompt(root);
         return;
       }
 
-      if (Notification.permission === 'denied') {
+      // If permission already selected, don't show
+      if (Notification.permission !== 'default') {
         closePrompt(root);
         return;
       }
