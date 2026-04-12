@@ -571,7 +571,7 @@ export default function CustomPromptPage() {
                                     <Label>Max count per session</Label>
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm text-muted-foreground">Show the prompt maximum</p>
-                                        <Input type="number" value={maxDisplaysPerSession} onChange={(e) => setMaxDisplaysPerSession(e.target.value)} min="1" max="10" className="w-20" />
+                                        <Input type="number" value={maxDisplaysPerSession} onChange={(e) => setMaxDisplaysPerSession(e.target.value)} min="1" max="20" className="w-20" />
                                         <p className="text-sm text-muted-foreground">times per session</p>
                                     </div>
                                 </div>

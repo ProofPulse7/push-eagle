@@ -887,13 +887,6 @@ export const getAttributionSettings = async (shopDomain: string) => {
 export const getOptInSettings = async (shopDomain: string): Promise<OptInSettings> => {
   await ensureSchema();
   const sql = getNeonSql();
-  await ensureMerchant(shopDomain);
-
-  await sql`
-    INSERT INTO merchant_settings (shop_domain)
-    VALUES (${shopDomain})
-    ON CONFLICT (shop_domain) DO NOTHING
-  `;
 
   const rows = await sql`
     SELECT

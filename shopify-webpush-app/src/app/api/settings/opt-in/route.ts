@@ -18,7 +18,7 @@ const updateSchema = z.object({
   logoUrl: z.string().nullable().optional(),
   desktopDelaySeconds: z.coerce.number().int().min(0).max(60).optional(),
   mobileDelaySeconds: z.coerce.number().int().min(0).max(60).optional(),
-  maxDisplaysPerSession: z.coerce.number().int().min(1).max(10).optional(),
+  maxDisplaysPerSession: z.coerce.number().int().min(1).max(20).optional(),
   hideForDays: z.coerce.number().int().min(1).max(30).optional(),
   desktopPosition: z.enum(['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right']).optional(),
   mobilePosition: z.enum(['top', 'bottom']).optional(),
