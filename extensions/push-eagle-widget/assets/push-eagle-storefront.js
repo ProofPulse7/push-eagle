@@ -37,6 +37,9 @@
     offsetX: 0,
     offsetY: 0
   };
+  var BROWSER_PROMPT_MAX_DISPLAYS_PER_SESSION = 1;
+  var BROWSER_PROMPT_MAX_ATTEMPTS = 3;
+  var BROWSER_PROMPT_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
@@ -166,6 +169,40 @@
 
   function clearSessionDisplayCount(shopDomain) {
     safeSessionStorageSet(getStorageKey(shopDomain, 'session_displays'), '0');
+  }
+
+  function getRecentPromptAttempts(shopDomain) {
+    var key = getStorageKey(shopDomain, 'prompt_attempts');
+    var cutoff = Date.now() - BROWSER_PROMPT_WINDOW_MS;
+    var raw = safeLocalStorageGet(key);
+    var attempts = [];
+
+    if (raw) {
+      try {
+        var parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          attempts = parsed
+            .map(function (value) { return Number(value); })
+            .filter(function (value) { return !isNaN(value) && value >= cutoff; });
+        }
+      } catch (_error) {
+        attempts = [];
+      }
+    }
+
+    safeLocalStorageSet(key, JSON.stringify(attempts));
+    return attempts;
+  }
+
+  function recordPromptAttempt(shopDomain) {
+    var key = getStorageKey(shopDomain, 'prompt_attempts');
+    var attempts = getRecentPromptAttempts(shopDomain);
+    attempts.push(Date.now());
+    safeLocalStorageSet(key, JSON.stringify(attempts));
+  }
+
+  function hasReachedBrowserPromptLimit(shopDomain) {
+    return getRecentPromptAttempts(shopDomain).length >= BROWSER_PROMPT_MAX_ATTEMPTS;
   }
 
   function dismissPrompt(shopDomain, remindAfterDays) {
@@ -342,8 +379,10 @@
 
     runtimeConfig.mode = settings.promptType === 'browser' ? 'browser' : runtimeConfig.mode;
     runtimeConfig.delayMs = (isMobileViewport() ? settings.mobileDelaySeconds : settings.desktopDelaySeconds) * 1000;
-    runtimeConfig.maxDisplaysPerSession = settings.maxDisplaysPerSession;
-    runtimeConfig.remindAfterDays = settings.hideForDays;
+    runtimeConfig.maxDisplaysPerSession = settings.promptType === 'browser'
+      ? BROWSER_PROMPT_MAX_DISPLAYS_PER_SESSION
+      : settings.maxDisplaysPerSession;
+    runtimeConfig.remindAfterDays = settings.promptType === 'browser' ? 0 : settings.hideForDays;
     runtimeConfig.resolvedOptIn = settings;
     applyPosition(root, settings);
     syncSettingsVersion(runtimeConfig.shopDomain, settings);
@@ -659,22 +698,21 @@
 
     if (secondaryButton) {
       secondaryButton.addEventListener('click', function () {
-        dismissPrompt(config.shopDomain, config.remindAfterDays);
+        if (effectiveMode !== 'browser') {
+          dismissPrompt(config.shopDomain, config.remindAfterDays);
+        }
         closePrompt(root);
       });
     }
 
     if (Notification.permission === 'granted' || isMarkedSubscribed(config.shopDomain)) {
-      var syncResult = await registerToken(config, boot, { silent: true });
-      if (syncResult.ok) {
-        closePrompt(root);
-        return;
-      }
+      await registerToken(config, boot, { silent: true });
+      closePrompt(root);
+      return;
     }
 
     if (Notification.permission === 'denied') {
-      explainUnsupported(root, 'permission-denied');
-      openPrompt(root);
+      closePrompt(root);
       return;
     }
 
@@ -700,12 +738,20 @@
     }
 
     var showPrompt = function () {
+      if (effectiveMode === 'browser' && hasReachedBrowserPromptLimit(config.shopDomain)) {
+        closePrompt(root);
+        return;
+      }
+
       if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
         closePrompt(root);
         return;
       }
 
       incrementSessionDisplayCount(config.shopDomain);
+      if (effectiveMode === 'browser') {
+        recordPromptAttempt(config.shopDomain);
+      }
       openPrompt(root);
       if (effectiveMode === 'ios' && !isStandaloneIos()) {
         explainUnsupported(root, 'ios-home-screen');
@@ -725,7 +771,7 @@
       }
     }
 
-    if (isPromptDismissed(config.shopDomain)) {
+    if (effectiveMode !== 'browser' && isPromptDismissed(config.shopDomain)) {
       closePrompt(root);
       return;
     }

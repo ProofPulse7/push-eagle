@@ -243,7 +243,9 @@ export default function OptInsPage() {
               <p>{statusLabel}</p>
               {settingsSummary ? (
                 <p className="mt-1">
-                  Position: {settingsSummary.position}. Delays: {settingsSummary.desktopDelay}s desktop / {settingsSummary.mobileDelay}s mobile. Hide for {settingsSummary.hideForDays} days, max {settingsSummary.maxDisplaysPerSession} displays per session.
+                  {promptType === 'browser'
+                    ? `Delays: ${settingsSummary.desktopDelay}s desktop / ${settingsSummary.mobileDelay}s mobile. Browser mode asks at most once per session and up to 3 times in 2 days.`
+                    : `Position: ${settingsSummary.position}. Delays: ${settingsSummary.desktopDelay}s desktop / ${settingsSummary.mobileDelay}s mobile. Hide for ${settingsSummary.hideForDays} days, max ${settingsSummary.maxDisplaysPerSession} displays per session.`}
                 </p>
               ) : null}
             </div>

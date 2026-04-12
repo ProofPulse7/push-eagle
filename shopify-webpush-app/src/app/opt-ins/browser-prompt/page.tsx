@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -9,8 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ArrowLeft, Bell } from 'lucide-react';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
 import { useSettings } from '@/context/settings-context';
+import { useToast } from '@/hooks/use-toast';
 
 const BrowserPromptPreview = () => {
     const { storeUrl } = useSettings();
@@ -53,8 +53,101 @@ const BrowserPromptPreview = () => {
 
 
 export default function BrowserPromptPage() {
+    const { shopDomain, storeUrl } = useSettings();
+    const { toast } = useToast();
     const delayOptions = [3, 5, 10, ...Array.from({ length: 11 }, (_, i) => 15 + i * 5)];
-    const countOptions = Array.from({ length: 10 }, (_, i) => i + 1);
+    const [desktopDelaySeconds, setDesktopDelaySeconds] = useState('5');
+    const [mobileDelaySeconds, setMobileDelaySeconds] = useState('10');
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        if (!shopDomain) {
+            setLoading(false);
+            return;
+        }
+
+        let isMounted = true;
+        setLoading(true);
+
+        fetch(`/api/settings/opt-in?shop=${encodeURIComponent(shopDomain)}`)
+            .then(async (response) => {
+                const data = await response.json();
+                if (!response.ok || !data?.ok || !isMounted) {
+                    throw new Error(data?.error ?? 'Failed to load browser prompt settings.');
+                }
+
+                setDesktopDelaySeconds(String(data.desktopDelaySeconds ?? 5));
+                setMobileDelaySeconds(String(data.mobileDelaySeconds ?? 10));
+            })
+            .catch((error) => {
+                if (!isMounted) {
+                    return;
+                }
+
+                const message = error instanceof Error ? error.message : 'Unexpected error while loading browser prompt settings.';
+                toast({
+                    variant: 'destructive',
+                    title: 'Failed to load browser prompt settings',
+                    description: message,
+                });
+            })
+            .finally(() => {
+                if (isMounted) {
+                    setLoading(false);
+                }
+            });
+
+        return () => {
+            isMounted = false;
+        };
+    }, [shopDomain, toast]);
+
+    const saveChanges = async () => {
+        if (!shopDomain) {
+            toast({
+                variant: 'destructive',
+                title: 'Shop domain required',
+                description: 'Open the dashboard from Shopify Admin before saving browser prompt settings.',
+            });
+            return;
+        }
+
+        setSaving(true);
+        try {
+            const response = await fetch('/api/settings/opt-in', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    shopDomain,
+                    promptType: 'browser',
+                    desktopDelaySeconds: Number(desktopDelaySeconds),
+                    mobileDelaySeconds: Number(mobileDelaySeconds),
+                }),
+            });
+
+            const data = await response.json();
+            if (!response.ok || !data?.ok) {
+                throw new Error(data?.error ?? 'Failed to save browser prompt settings.');
+            }
+
+            toast({
+                title: 'Browser prompt saved',
+                description: 'Desktop and mobile timings are now live on the storefront.',
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unexpected error while saving browser prompt settings.';
+            toast({
+                variant: 'destructive',
+                title: 'Save failed',
+                description: message,
+            });
+        } finally {
+            setSaving(false);
+        }
+    };
 
     return (
         <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
@@ -92,7 +185,7 @@ export default function BrowserPromptPage() {
                                     <Label>Desktop</Label>
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm text-muted-foreground whitespace-nowrap">Show prompt after</p>
-                                        <Select defaultValue="5">
+                                        <Select value={desktopDelaySeconds} onValueChange={setDesktopDelaySeconds} disabled={loading || saving}>
                                             <SelectTrigger className="w-full">
                                                 <SelectValue />
                                             </SelectTrigger>
@@ -107,7 +200,7 @@ export default function BrowserPromptPage() {
                                     <Label>Mobile</Label>
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm text-muted-foreground whitespace-nowrap">Show prompt after</p>
-                                        <Select defaultValue="10">
+                                        <Select value={mobileDelaySeconds} onValueChange={setMobileDelaySeconds} disabled={loading || saving}>
                                             <SelectTrigger className="w-full">
                                                 <SelectValue />
                                             </SelectTrigger>
@@ -119,21 +212,11 @@ export default function BrowserPromptPage() {
                                     </div>
                                 </div>
                             </div>
-                            <div className="space-y-2">
-                                <Label>Max count per session</Label>
-                                <div className="flex items-center gap-2">
-                                    <p className="text-sm text-muted-foreground">Show the prompt maximum</p>
-                                    <Input type="number" defaultValue={10} min="1" max="10" className="w-20" />
-                                    <p className="text-sm text-muted-foreground">times per session</p>
-                                </div>
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Frequency</Label>
-                                <div className="flex items-center gap-2">
-                                    <p className="text-sm text-muted-foreground">Hide the prompt for</p>
-                                    <Input type="number" defaultValue={2} min="1" max="10" className="w-20" />
-                                    <p className="text-sm text-muted-foreground">days after it is shown to a visitor</p>
-                                </div>
+                            <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
+                                <p className="font-medium text-foreground">Browser-safe defaults</p>
+                                <p className="mt-1">We show the allow-notifications prompt at most once per browser session.</p>
+                                <p className="mt-1">We stop after 3 prompt attempts within any 2-day window for the same visitor.</p>
+                                <p className="mt-1">If the browser permission is already granted or denied, we do not ask again.</p>
                             </div>
                         </CardContent>
                     </Card>
@@ -155,7 +238,7 @@ export default function BrowserPromptPage() {
                 <Button variant="outline" asChild>
                     <Link href="/opt-ins">CANCEL</Link>
                 </Button>
-                <Button>SAVE CHANGES</Button>
+                <Button onClick={saveChanges} disabled={loading || saving}>{saving ? 'SAVING...' : 'SAVE CHANGES'}</Button>
             </div>
         </div>
     );
