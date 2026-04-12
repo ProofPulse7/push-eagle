@@ -40,14 +40,24 @@ const isTrustedRequest = (request: Request) => {
   }
 
   const origin = request.headers.get('origin');
-  return Boolean(origin && appOrigin && origin === appOrigin);
+  if (!origin) {
+    return false;
+  }
+
+  if (appOrigin && origin === appOrigin) {
+    return true;
+  }
+
+  // Allow direct storefront fallback calls (custom domains and myshopify domains).
+  return /^https:\/\/[a-z0-9.-]+$/i.test(origin);
 };
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': appOrigin || '*',
+const buildCorsHeaders = (origin: string | null) => ({
+  'Access-Control-Allow-Origin': origin || appOrigin || '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Domain',
-};
+  Vary: 'Origin',
+});
 
 const detectBrowserFromUserAgent = (userAgent: string | null) => {
   const ua = String(userAgent || '').toLowerCase();
@@ -74,13 +84,14 @@ const detectPlatformFromUserAgent = (userAgent: string | null) => {
 };
 
 export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: corsHeaders });
+  return new NextResponse(null, { status: 204, headers: buildCorsHeaders(null) });
 }
 
 export async function POST(request: Request) {
   try {
+    const origin = request.headers.get('origin');
     if (!isTrustedRequest(request)) {
-      return NextResponse.json({ ok: false, error: 'Unauthorized token registration request.' }, { status: 401, headers: corsHeaders });
+      return NextResponse.json({ ok: false, error: 'Unauthorized token registration request.' }, { status: 401, headers: buildCorsHeaders(origin) });
     }
 
     const url = new URL(request.url);
@@ -90,7 +101,7 @@ export async function POST(request: Request) {
     if (url.searchParams.has('shop')) {
       const proxiedShopDomain = parseShopDomain(url.searchParams.get('shop'));
       if (proxiedShopDomain !== shopDomain) {
-        return NextResponse.json({ ok: false, error: 'Shop domain mismatch.' }, { status: 400, headers: corsHeaders });
+        return NextResponse.json({ ok: false, error: 'Shop domain mismatch.' }, { status: 400, headers: buildCorsHeaders(origin) });
       }
     }
 
@@ -135,10 +146,11 @@ export async function POST(request: Request) {
         subscriberId: saved.subscriberId,
         tokenId: saved.tokenId,
       },
-      { headers: corsHeaders },
+      { headers: buildCorsHeaders(origin) },
     );
   } catch (error) {
+    const origin = request.headers.get('origin');
     const message = error instanceof Error ? error.message : 'Failed to register storefront token.';
-    return NextResponse.json({ ok: false, error: message }, { status: 400, headers: corsHeaders });
+    return NextResponse.json({ ok: false, error: message }, { status: 400, headers: buildCorsHeaders(origin) });
   }
 }

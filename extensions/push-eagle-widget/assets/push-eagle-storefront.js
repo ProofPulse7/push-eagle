@@ -35,11 +35,15 @@
     mobilePosition: 'top',
     placementPreset: 'balanced',
     offsetX: 0,
-    offsetY: 0
+    offsetY: 0,
+    iosWidgetEnabled: true,
+    iosWidgetTitle: 'Get notifications on your iPhone or iPad',
+    iosWidgetMessage: 'Add this store to your Home Screen. When you open it from there, we will ask for notification permission using your saved opt-in settings.'
   };
   var BROWSER_PROMPT_MAX_DISPLAYS_PER_SESSION = 1;
   var BROWSER_PROMPT_MAX_ATTEMPTS = 3;
   var BROWSER_PROMPT_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+  var IOS_HOME_SCREEN_POLL_MS = 1000;
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
@@ -66,6 +70,17 @@
     return new Promise(function (resolve) {
       setTimeout(resolve, ms);
     });
+  }
+
+  function getRemainingDelayMs(startedAt, delayMs) {
+    var started = Number(startedAt || 0);
+    var configuredDelay = Math.max(0, Number(delayMs || 0));
+
+    if (!started || configuredDelay <= 0) {
+      return configuredDelay;
+    }
+
+    return Math.max(0, configuredDelay - (Date.now() - started));
   }
 
   function safeLocalStorageGet(key) {
@@ -124,38 +139,384 @@
     return random;
   }
 
-  function detectBrowser() {
-    var ua = navigator.userAgent || '';
-    if (/Edg\//.test(ua)) return 'edge';
-    if (/OPR\//.test(ua) || /Opera/.test(ua)) return 'opera';
-    if (/SamsungBrowser\//.test(ua)) return 'samsung';
-    if (/Firefox\//.test(ua)) return 'firefox';
-    if (/CriOS\//.test(ua) || /Chrome\//.test(ua)) return 'chrome';
-    if (/Safari\//.test(ua) && !/Chrome|CriOS|Edg\//.test(ua)) return 'safari';
+  function normalizeVersion(value) {
+    return value ? String(value).replace(/_/g, '.') : null;
+  }
+
+  function normalizeBrowserName(value) {
+    var raw = String(value || '').toLowerCase();
+    if (raw.indexOf('edge') !== -1 || raw.indexOf('edg') !== -1) return 'edge';
+    if (raw.indexOf('opera') !== -1 || raw.indexOf('opr') !== -1) return 'opera';
+    if (raw.indexOf('samsung') !== -1) return 'samsung';
+    if (raw.indexOf('firefox') !== -1 || raw.indexOf('fxios') !== -1) return 'firefox';
+    if (raw.indexOf('webview') !== -1 || raw === 'wv') return 'webview';
+    if (raw.indexOf('chrome') !== -1 || raw.indexOf('chromium') !== -1 || raw.indexOf('crios') !== -1) return 'chrome';
+    if (raw.indexOf('safari') !== -1) return 'safari';
     return 'unknown';
   }
 
-  function detectPlatform() {
-    var ua = navigator.userAgent || '';
-    if (/Android/.test(ua)) return 'android';
-    if (/iPhone|iPad|iPod/.test(ua)) return 'ios';
+  function normalizeOsName(value) {
+    var raw = String(value || '').toLowerCase();
+    if (raw.indexOf('ios') !== -1 || raw.indexOf('iphone') !== -1 || raw.indexOf('ipad') !== -1) return 'ios';
+    if (raw.indexOf('android') !== -1) return 'android';
+    if (raw.indexOf('mac') !== -1) return 'macos';
+    if (raw.indexOf('win') !== -1) return 'windows';
+    if (raw.indexOf('cros') !== -1 || raw.indexOf('chrome os') !== -1) return 'chromeos';
+    if (raw.indexOf('linux') !== -1) return 'linux';
     return 'desktop';
   }
 
-  function getBrowserSupport() {
+  function detectBrowserFromUserAgent(ua) {
+    var match;
+    if ((match = ua.match(/SamsungBrowser\/([\d.]+)/i))) return { name: 'samsung', version: match[1], source: 'userAgent' };
+    if ((match = ua.match(/EdgA?\/([\d.]+)/i))) return { name: 'edge', version: match[1], source: 'userAgent' };
+    if ((match = ua.match(/OPR\/([\d.]+)/i))) return { name: 'opera', version: match[1], source: 'userAgent' };
+    if ((match = ua.match(/FxiOS\/([\d.]+)/i))) return { name: 'firefox', version: match[1], source: 'userAgent' };
+    if ((match = ua.match(/Firefox\/([\d.]+)/i))) return { name: 'firefox', version: match[1], source: 'userAgent' };
+    if (/\bwv\b/i.test(ua) && (match = ua.match(/Chrome\/([\d.]+)/i))) return { name: 'webview', version: match[1], source: 'userAgent' };
+    if ((match = ua.match(/CriOS\/([\d.]+)/i))) return { name: 'chrome', version: match[1], source: 'userAgent' };
+    if ((match = ua.match(/Chrome\/([\d.]+)/i))) return { name: 'chrome', version: match[1], source: 'userAgent' };
+    if ((match = ua.match(/Version\/([\d.]+).+Safari/i))) return { name: 'safari', version: match[1], source: 'userAgent' };
+    return { name: 'unknown', version: null, source: 'userAgent' };
+  }
+
+  function detectOsFromUserAgent(ua) {
+    var match;
+    if ((match = ua.match(/Android\s([\d.]+)/i))) return { name: 'android', version: normalizeVersion(match[1]), source: 'userAgent' };
+    if ((match = ua.match(/(?:iPhone|CPU(?: iPhone)?|iPad).*OS\s([\d_]+)/i))) return { name: 'ios', version: normalizeVersion(match[1]), source: 'userAgent' };
+    if ((match = ua.match(/Windows NT\s([\d.]+)/i))) return { name: 'windows', version: normalizeVersion(match[1]), source: 'userAgent' };
+    if ((match = ua.match(/Mac OS X\s([\d_]+)/i))) return { name: 'macos', version: normalizeVersion(match[1]), source: 'userAgent' };
+    if ((match = ua.match(/CrOS [^ ]+\s([\d.]+)/i))) return { name: 'chromeos', version: normalizeVersion(match[1]), source: 'userAgent' };
+    if (/Linux/i.test(ua)) return { name: 'linux', version: null, source: 'userAgent' };
+    return { name: 'desktop', version: null, source: 'userAgent' };
+  }
+
+  function detectDeviceType(ua, osName, uaDataMobile) {
+    if (uaDataMobile === true) {
+      return osName === 'ios' && /iPad/i.test(ua) ? 'tablet' : 'mobile';
+    }
+    if (/iPad|Tablet/i.test(ua)) return 'tablet';
+    if (osName === 'android') return /Mobile/i.test(ua) ? 'mobile' : 'tablet';
+    if (osName === 'ios') return /iPad/i.test(ua) ? 'tablet' : 'mobile';
+    return 'desktop';
+  }
+
+  function detectDeviceModel(ua, uaDataModel) {
+    if (uaDataModel) {
+      return String(uaDataModel);
+    }
+    if (/iPhone/i.test(ua)) return 'iPhone';
+    if (/iPad/i.test(ua)) return 'iPad';
+    if (/iPod/i.test(ua)) return 'iPod';
+    return null;
+  }
+
+  function getUaDataBrandInfo(uaData) {
+    if (!uaData) {
+      return { name: 'unknown', version: null, source: 'userAgentData' };
+    }
+
+    var brands = Array.isArray(uaData.fullVersionList) && uaData.fullVersionList.length > 0
+      ? uaData.fullVersionList
+      : Array.isArray(uaData.brands)
+        ? uaData.brands
+        : [];
+
+    var preferred = ['Microsoft Edge', 'Google Chrome', 'Opera', 'Samsung Internet', 'Chromium'];
+    for (var preferredIndex = 0; preferredIndex < preferred.length; preferredIndex += 1) {
+      for (var brandIndex = 0; brandIndex < brands.length; brandIndex += 1) {
+        if (brands[brandIndex] && brands[brandIndex].brand === preferred[preferredIndex]) {
+          return {
+            name: normalizeBrowserName(brands[brandIndex].brand),
+            version: normalizeVersion(brands[brandIndex].version),
+            source: 'userAgentData'
+          };
+        }
+      }
+    }
+
+    for (var index = 0; index < brands.length; index += 1) {
+      var brand = brands[index];
+      if (!brand || !brand.brand || /not.?a.?brand/i.test(brand.brand)) {
+        continue;
+      }
+      return {
+        name: normalizeBrowserName(brand.brand),
+        version: normalizeVersion(brand.version),
+        source: 'userAgentData'
+      };
+    }
+
+    return { name: 'unknown', version: null, source: 'userAgentData' };
+  }
+
+  function getCurrentStandaloneState() {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  }
+
+  function getShopifyConsentState(shopify) {
+    var privacy = shopify && shopify.customerPrivacy ? shopify.customerPrivacy : null;
+    var consent = {
+      apiAvailable: !!privacy,
+      userCanBeTracked: null,
+      analyticsProcessingAllowed: null,
+      marketingAllowed: null,
+      preferencesProcessingAllowed: null,
+      saleOfDataAllowed: null,
+      currentVisitorConsent: null
+    };
+
+    if (!privacy) {
+      return consent;
+    }
+
+    try {
+      if (typeof privacy.userCanBeTracked === 'function') {
+        consent.userCanBeTracked = privacy.userCanBeTracked();
+      }
+      if (typeof privacy.analyticsProcessingAllowed === 'function') {
+        consent.analyticsProcessingAllowed = privacy.analyticsProcessingAllowed();
+      }
+      if (typeof privacy.marketingAllowed === 'function') {
+        consent.marketingAllowed = privacy.marketingAllowed();
+      }
+      if (typeof privacy.preferencesProcessingAllowed === 'function') {
+        consent.preferencesProcessingAllowed = privacy.preferencesProcessingAllowed();
+      }
+      if (typeof privacy.saleOfDataAllowed === 'function') {
+        consent.saleOfDataAllowed = privacy.saleOfDataAllowed();
+      }
+      if (typeof privacy.currentVisitorConsent === 'function') {
+        consent.currentVisitorConsent = privacy.currentVisitorConsent();
+      }
+    } catch (_error) {
+      return consent;
+    }
+
+    return consent;
+  }
+
+  function getShopifyContext(root, boot) {
+    var shopify = window.Shopify || {};
+    var consent = getShopifyConsentState(shopify);
+    return {
+      shopId: root.dataset.shopifyShopId || shopify.shopId || null,
+      shopName: root.dataset.shopifyShopName || shopify.shopName || null,
+      shopDomain: (boot && boot.shopDomain) || root.dataset.shopDomain || shopify.shop || null,
+      locale: root.dataset.shopifyLocale || shopify.locale || null,
+      country: root.dataset.shopifyCountry || shopify.country || null,
+      analyticsAvailable: !!shopify.analytics,
+      customerPrivacy: consent,
+      designMode: shopify.designMode === true,
+      themeName: shopify.theme && shopify.theme.name ? shopify.theme.name : null,
+      themeId: shopify.theme && shopify.theme.id ? String(shopify.theme.id) : null,
+      routesRoot: shopify.routes && shopify.routes.root ? shopify.routes.root : null,
+      capabilities: boot && boot.shopifyCapabilities ? boot.shopifyCapabilities : null
+    };
+  }
+
+  async function getUserAgentDataDetails() {
+    var uaData = navigator.userAgentData;
+    if (!uaData) {
+      return null;
+    }
+
+    var base = {
+      brands: Array.isArray(uaData.brands) ? uaData.brands : [],
+      mobile: uaData.mobile === true,
+      platform: uaData.platform || null,
+      source: 'userAgentData'
+    };
+
+    if (typeof uaData.getHighEntropyValues !== 'function') {
+      return base;
+    }
+
+    try {
+      var highEntropy = await uaData.getHighEntropyValues([
+        'architecture',
+        'bitness',
+        'fullVersionList',
+        'model',
+        'platform',
+        'platformVersion'
+      ]);
+      return Object.assign({}, base, highEntropy || {});
+    } catch (_error) {
+      return base;
+    }
+  }
+
+  async function buildClientProfile(root, boot) {
+    var ua = navigator.userAgent || '';
+    var uaData = await getUserAgentDataDetails();
+    var uaBrowser = detectBrowserFromUserAgent(ua);
+    var uaOs = detectOsFromUserAgent(ua);
+    var hintBrowser = getUaDataBrandInfo(uaData);
+    var hintOsName = uaData && uaData.platform ? normalizeOsName(uaData.platform) : null;
+    var hintOsVersion = uaData && uaData.platformVersion ? normalizeVersion(uaData.platformVersion) : null;
+    var osName = hintOsName || uaOs.name;
+    var shopifyContext = getShopifyContext(root, boot);
+    var deviceType = detectDeviceType(ua, osName, uaData && uaData.mobile);
+
+    if ((navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) && osName === 'macos') {
+      osName = 'ios';
+      if (deviceType === 'desktop') {
+        deviceType = 'tablet';
+      }
+    }
+
+    var browserName = hintBrowser.name !== 'unknown' ? hintBrowser.name : uaBrowser.name;
+    var browserVersion = hintBrowser.version || uaBrowser.version;
+    var standalone = getCurrentStandaloneState();
+
+    return {
+      browserName: browserName,
+      browserVersion: browserVersion,
+      browserSource: hintBrowser.name !== 'unknown' ? hintBrowser.source : uaBrowser.source,
+      osName: osName,
+      osVersion: hintOsVersion || uaOs.version,
+      osSource: hintOsName ? 'userAgentData' : uaOs.source,
+      deviceType: deviceType,
+      deviceModel: detectDeviceModel(ua, uaData && uaData.model),
+      isMobile: deviceType === 'mobile' || deviceType === 'tablet',
+      isStandalone: standalone,
+      isSecureContext: window.isSecureContext === true,
+      supportsServiceWorker: 'serviceWorker' in navigator,
+      supportsNotifications: 'Notification' in window,
+      supportsPushManager: 'PushManager' in window,
+      supportsPermissionsApi: 'permissions' in navigator,
+      permissionState: 'Notification' in window ? Notification.permission : 'unsupported',
+      language: navigator.language || shopifyContext.locale || null,
+      languages: Array.isArray(navigator.languages) ? navigator.languages.slice(0, 5) : [],
+      timezone: (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || null,
+      maxTouchPoints: Number(navigator.maxTouchPoints || 0),
+      hardwareConcurrency: Number(navigator.hardwareConcurrency || 0) || null,
+      deviceMemory: typeof navigator.deviceMemory === 'number' ? navigator.deviceMemory : null,
+      userAgent: ua,
+      navigatorPlatform: navigator.platform || null,
+      vendor: navigator.vendor || null,
+      uaData: uaData ? {
+        brands: uaData.brands || [],
+        mobile: uaData.mobile === true,
+        platform: uaData.platform || null,
+        platformVersion: uaData.platformVersion || null,
+        fullVersionList: uaData.fullVersionList || [],
+        model: uaData.model || null,
+        architecture: uaData.architecture || null,
+        bitness: uaData.bitness || null
+      } : null,
+      shopifyShopId: shopifyContext.shopId,
+      shopifyShopName: shopifyContext.shopName,
+      shopifyShopDomain: shopifyContext.shopDomain,
+      shopifyLocale: shopifyContext.locale,
+      shopifyCountry: shopifyContext.country,
+      shopifyAnalyticsAvailable: shopifyContext.analyticsAvailable,
+      shopifyCustomerPrivacy: shopifyContext.customerPrivacy,
+      shopifyDesignMode: shopifyContext.designMode,
+      shopifyThemeName: shopifyContext.themeName,
+      shopifyThemeId: shopifyContext.themeId,
+      shopifyRoutesRoot: shopifyContext.routesRoot,
+      shopifyCapabilities: shopifyContext.capabilities
+    };
+  }
+
+  function refreshClientProfile(profile) {
+    if (!profile) {
+      return profile;
+    }
+
+    profile.isStandalone = getCurrentStandaloneState();
+    profile.permissionState = 'Notification' in window ? Notification.permission : 'unsupported';
+    profile.isSecureContext = window.isSecureContext === true;
+    profile.supportsServiceWorker = 'serviceWorker' in navigator;
+    profile.supportsNotifications = 'Notification' in window;
+    profile.supportsPushManager = 'PushManager' in window;
+    return profile;
+  }
+
+  function serializeClientProfile(profile) {
+    if (!profile) {
+      return null;
+    }
+
+    return {
+      browserName: profile.browserName,
+      browserVersion: profile.browserVersion,
+      browserSource: profile.browserSource,
+      osName: profile.osName,
+      osVersion: profile.osVersion,
+      osSource: profile.osSource,
+      deviceType: profile.deviceType,
+      deviceModel: profile.deviceModel,
+      isMobile: profile.isMobile,
+      isStandalone: profile.isStandalone,
+      isSecureContext: profile.isSecureContext,
+      supportsServiceWorker: profile.supportsServiceWorker,
+      supportsNotifications: profile.supportsNotifications,
+      supportsPushManager: profile.supportsPushManager,
+      supportsPermissionsApi: profile.supportsPermissionsApi,
+      permissionState: profile.permissionState,
+      language: profile.language,
+      languages: profile.languages,
+      timezone: profile.timezone,
+      maxTouchPoints: profile.maxTouchPoints,
+      hardwareConcurrency: profile.hardwareConcurrency,
+      deviceMemory: profile.deviceMemory,
+      userAgent: profile.userAgent,
+      navigatorPlatform: profile.navigatorPlatform,
+      vendor: profile.vendor,
+      uaData: profile.uaData,
+      shopifyShopId: profile.shopifyShopId,
+      shopifyShopName: profile.shopifyShopName,
+      shopifyShopDomain: profile.shopifyShopDomain,
+      shopifyLocale: profile.shopifyLocale,
+      shopifyCountry: profile.shopifyCountry,
+      shopifyAnalyticsAvailable: profile.shopifyAnalyticsAvailable,
+      shopifyCustomerPrivacy: profile.shopifyCustomerPrivacy,
+      shopifyDesignMode: profile.shopifyDesignMode,
+      shopifyThemeName: profile.shopifyThemeName,
+      shopifyThemeId: profile.shopifyThemeId,
+      shopifyRoutesRoot: profile.shopifyRoutesRoot,
+      shopifyCapabilities: profile.shopifyCapabilities
+    };
+  }
+
+  function detectBrowser() {
+    return detectBrowserFromUserAgent(navigator.userAgent || '').name;
+  }
+
+  function detectPlatform() {
+    var platform = detectOsFromUserAgent(navigator.userAgent || '').name;
+    if (platform === 'macos' && navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) {
+      return 'ios';
+    }
+    return platform;
+  }
+
+  function getBrowserSupport(profile) {
+    var clientProfile = refreshClientProfile(profile) || {
+      osName: detectPlatform(),
+      isStandalone: getCurrentStandaloneState(),
+      isSecureContext: window.isSecureContext === true,
+      supportsServiceWorker: 'serviceWorker' in navigator,
+      supportsNotifications: 'Notification' in window,
+      supportsPushManager: 'PushManager' in window
+    };
+
     if (typeof window === 'undefined') {
       return { supported: false, reason: 'unsupported' };
     }
 
-    if (!window.isSecureContext) {
+    if (!clientProfile.isSecureContext) {
       return { supported: false, reason: 'https-required' };
     }
 
-    if (detectPlatform() === 'ios' && !isStandaloneIos()) {
+    if (clientProfile.osName === 'ios' && !clientProfile.isStandalone) {
       return { supported: false, reason: 'ios-home-screen' };
     }
 
-    if (!('serviceWorker' in navigator) || !('Notification' in window) || !('PushManager' in window)) {
+    if (!clientProfile.supportsServiceWorker || !clientProfile.supportsNotifications || !clientProfile.supportsPushManager) {
       return { supported: false, reason: 'unsupported' };
     }
 
@@ -271,7 +632,10 @@
       settings.mobilePosition,
       settings.placementPreset || 'balanced',
       String(settings.offsetX || 0),
-      String(settings.offsetY || 0)
+      String(settings.offsetY || 0),
+      String(settings.iosWidgetEnabled !== false),
+      settings.iosWidgetTitle || '',
+      settings.iosWidgetMessage || ''
     ];
 
     return keys.join('|');
@@ -377,7 +741,7 @@
       }
     }
 
-    runtimeConfig.mode = settings.promptType === 'browser' ? 'browser' : runtimeConfig.mode;
+    runtimeConfig.mode = settings.promptType === 'browser' ? 'browser' : 'custom';
     runtimeConfig.delayMs = (isMobileViewport() ? settings.mobileDelaySeconds : settings.desktopDelaySeconds) * 1000;
     runtimeConfig.maxDisplaysPerSession = settings.promptType === 'browser'
       ? BROWSER_PROMPT_MAX_DISPLAYS_PER_SESSION
@@ -392,6 +756,78 @@
     var finalOffsetY = presetOffset.y + settings.offsetY;
     root.style.setProperty('--pe-offset-x', finalOffsetX + 'px');
     root.style.setProperty('--pe-offset-y', finalOffsetY + 'px');
+  }
+
+  function applyIosWidgetSettings(root, settings) {
+    var headline = root.querySelector('[data-push-eagle-headline]');
+    var message = root.querySelector('[data-push-eagle-message]');
+    var allowButton = root.querySelector('[data-push-eagle-action]');
+    var laterButton = root.querySelector('[data-push-eagle-dismiss]');
+
+    if (headline) {
+      headline.textContent = settings.iosWidgetTitle || defaultOptInSettings.iosWidgetTitle;
+    }
+    if (message) {
+      message.textContent = settings.iosWidgetMessage || defaultOptInSettings.iosWidgetMessage;
+    }
+    if (allowButton) {
+      allowButton.textContent = "I've added it";
+      allowButton.style.backgroundColor = '#111827';
+      allowButton.style.color = '#ffffff';
+    }
+    if (laterButton) {
+      laterButton.textContent = 'Maybe later';
+    }
+  }
+
+  function isIosWidgetDismissedForSession(shopDomain) {
+    return safeSessionStorageGet(getStorageKey(shopDomain, 'ios_widget_dismissed')) === '1';
+  }
+
+  function dismissIosWidgetForSession(shopDomain) {
+    safeSessionStorageSet(getStorageKey(shopDomain, 'ios_widget_dismissed'), '1');
+  }
+
+  function hasReportedIosHomeScreen(shopDomain, externalId) {
+    return safeLocalStorageGet(getStorageKey(shopDomain, 'ios_home_screen_reported')) === externalId;
+  }
+
+  function markIosHomeScreenReported(shopDomain, externalId) {
+    safeLocalStorageSet(getStorageKey(shopDomain, 'ios_home_screen_reported'), externalId);
+  }
+
+  async function reportIosHomeScreenConfirmed(boot, profile) {
+    if (!boot || !boot.shopDomain || !boot.externalId || !boot.iosHomeScreenEndpoint) {
+      return;
+    }
+
+    if (hasReportedIosHomeScreen(boot.shopDomain, boot.externalId)) {
+      return;
+    }
+
+    try {
+      var response = await fetch(boot.iosHomeScreenEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          shopDomain: boot.shopDomain,
+          externalId: boot.externalId,
+          browser: profile && profile.browserName ? profile.browserName : detectBrowser(),
+          platform: profile && profile.osName ? profile.osName : detectPlatform(),
+          locale: profile && profile.language ? profile.language : navigator.language,
+          country: profile && profile.shopifyCountry ? profile.shopifyCountry : null,
+          deviceContext: serializeClientProfile(profile)
+        })
+      });
+
+      if (response.ok) {
+        markIosHomeScreenReported(boot.shopDomain, boot.externalId);
+      }
+    } catch (_error) {
+      // Retry on a future iOS Home Screen open.
+    }
   }
 
   function canShowPromptForSession(shopDomain, maxDisplaysPerSession) {
@@ -437,6 +873,7 @@
       shopDomain: config.shopDomain,
       externalId: getOrCreateAnonExternalId(config.shopDomain),
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
+      iosHomeScreenEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/ios-home-screen' : '',
       optIn: defaultOptInSettings,
       firebase: fallbackFirebaseConfig
     };
@@ -495,14 +932,15 @@
     return window.firebase.messaging();
   }
 
-  async function registerToken(runtimeConfig, boot, options) {
-    var support = getBrowserSupport();
+  async function registerToken(runtimeConfig, boot, options, profile) {
+    var clientProfile = refreshClientProfile(profile);
+    var support = getBrowserSupport(clientProfile);
     if (!support.supported) {
       return { ok: false, reason: support.reason || 'unsupported' };
     }
 
     var settings = options || {};
-    var permission = Notification.permission;
+    var permission = clientProfile && clientProfile.permissionState ? clientProfile.permissionState : Notification.permission;
     if (permission === 'denied') {
       return { ok: false, reason: 'permission-denied' };
     }
@@ -516,6 +954,10 @@
 
     if (permission !== 'granted') {
       return { ok: false, reason: 'permission-denied' };
+    }
+
+    if (clientProfile) {
+      clientProfile.permissionState = permission;
     }
 
     try {
@@ -533,24 +975,56 @@
         return { ok: false, reason: 'token-empty' };
       }
 
-      var tokenResponse = await fetch(boot.tokenEndpoint || runtimeConfig.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          shopDomain: boot.shopDomain,
-          externalId: boot.externalId,
-          token: token,
-          browser: detectBrowser(),
-          platform: detectPlatform(),
-          locale: navigator.language
-        })
-      });
+      var payload = {
+        shopDomain: boot.shopDomain,
+        externalId: boot.externalId,
+        token: token,
+        browser: clientProfile && clientProfile.browserName ? clientProfile.browserName : detectBrowser(),
+        platform: clientProfile && clientProfile.osName ? clientProfile.osName : detectPlatform(),
+        locale: clientProfile && clientProfile.language ? clientProfile.language : navigator.language,
+        country: clientProfile && clientProfile.shopifyCountry ? clientProfile.shopifyCountry : null,
+        deviceContext: serializeClientProfile(clientProfile)
+      };
 
-      if (!tokenResponse.ok) {
-        return { ok: false, reason: 'token-save-failed' };
+      var primaryTokenEndpoint = boot.tokenEndpoint || runtimeConfig.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH;
+      var tokenEndpoints = [primaryTokenEndpoint];
+
+      if (runtimeConfig.appUrl) {
+        var directTokenEndpoint = runtimeConfig.appUrl.replace(/\/$/, '') + '/api/storefront/token?shop=' + encodeURIComponent(boot.shopDomain);
+        if (tokenEndpoints.indexOf(directTokenEndpoint) === -1) {
+          tokenEndpoints.push(directTokenEndpoint);
+        }
+      }
+
+      var tokenSaved = false;
+      var tokenSaveReason = '';
+
+      for (var endpointIndex = 0; endpointIndex < tokenEndpoints.length; endpointIndex += 1) {
+        var endpoint = tokenEndpoints[endpointIndex];
+
+        try {
+          var tokenResponse = await fetch(endpoint, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          });
+
+          if (tokenResponse.ok) {
+            tokenSaved = true;
+            break;
+          }
+
+          tokenSaveReason = 'http-' + String(tokenResponse.status || 'error');
+        } catch (_tokenSaveError) {
+          tokenSaveReason = 'network-error';
+        }
+      }
+
+      if (!tokenSaved) {
+        return { ok: false, reason: 'token-save-failed', message: tokenSaveReason };
       }
 
       markSubscribed(boot.shopDomain, token);
@@ -669,7 +1143,8 @@
       manualSelector: root.dataset.manualSelector || '[data-push-eagle-open]',
       remindAfterDays: Number(root.dataset.remindAfterDays || '7'),
       maxDisplaysPerSession: 10,
-      delayMs: Number(root.dataset.delayMs || '0')
+      delayMs: Number(root.dataset.delayMs || '0'),
+      startedAt: Date.now()
     };
 
     if (!config.enabled) {
@@ -684,207 +1159,327 @@
     }
 
     var boot = await bootstrap(config);
-  applyOptInSettings(root, config, boot);
+    var clientProfile = await buildClientProfile(root, boot);
+    applyOptInSettings(root, config, boot);
 
-    var effectiveMode = config.mode;
-    if (isIosSafari() && config.mode !== 'browser') {
-      effectiveMode = 'ios';
-    }
+    var settings = config.resolvedOptIn || getResolvedOptInSettings(boot);
+    var isOnIos = clientProfile.osName === 'ios';
+    var iosWatcherCleanup = null;
 
-    var support = getBrowserSupport();
-
-    var primaryButton = root.querySelector('[data-push-eagle-action]');
-    var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
-
-    // iOS-specific logic: check if standalone (added to home screen)
-    var isOnIos = isIosSafari();
-    var isStandalone = isStandaloneIos();
-    
-    // If on iOS but NOT standalone, show "Add to Home Screen" prompt instead of notification prompt
-    if (isOnIos && !isStandalone) {
-      closePrompt(root);
-      
-      // Show status message to add to home screen
-      var statusEl = root.querySelector('[data-push-eagle-status]');
-      if (statusEl) {
-        showStatus(root, 'To enable notifications, tap Share and select "Add to Home Screen" first.', 'info');
-        openPrompt(root);
-      }
-      return;
-    }
-
-    // For custom prompts: check permission state
-    // Don't show if permission is already granted or denied
-    if (effectiveMode === 'custom') {
-      if (Notification.permission !== 'default') {
-        // Permission already selected by user
-        closePrompt(root);
-        return;
+    function cleanupIosWatcher() {
+      if (iosWatcherCleanup) {
+        iosWatcherCleanup();
+        iosWatcherCleanup = null;
       }
     }
 
-    // For browser mode: check permission state
-    if (effectiveMode === 'browser') {
-      // If on iOS: only show if standalone (already checked above)
-      // If already subscribed, don't show
-      if (isMarkedSubscribed(config.shopDomain)) {
-        await registerToken(config, boot, { silent: true });
+    async function maybeReportIosHomeScreen() {
+      if (isOnIos && isStandaloneIos()) {
+        refreshClientProfile(clientProfile);
+        await reportIosHomeScreenConfirmed(boot, clientProfile);
+      }
+    }
+
+    async function startStandardPromptFlow() {
+      cleanupIosWatcher();
+      applyOptInSettings(root, config, boot);
+
+      var primaryButton = root.querySelector('[data-push-eagle-action]');
+      var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
+      refreshClientProfile(clientProfile);
+      var support = getBrowserSupport(clientProfile);
+      var effectiveMode = config.mode;
+
+      await maybeReportIosHomeScreen();
+
+      if (clientProfile.permissionState !== 'default' && effectiveMode === 'custom') {
         closePrompt(root);
         return;
       }
 
-      // If permission already selected, don't show
-      if (Notification.permission !== 'default') {
-        closePrompt(root);
-        return;
-      }
-    }
-
-    if (secondaryButton) {
-      secondaryButton.addEventListener('click', function () {
-        // Don't use long-term dismiss for custom prompts that respect permission state
-        // On next reload, permission will be checked fresh
-        if (effectiveMode !== 'browser' && effectiveMode !== 'custom') {
-          dismissPrompt(config.shopDomain, config.remindAfterDays);
-        }
-        closePrompt(root);
-      });
-    }
-
-    if (!support.supported && effectiveMode !== 'custom') {
-      explainUnsupported(root, support.reason);
-      if (config.displayTrigger === 'manual') {
-        bindManualTrigger(root, config, function () {
-          openPrompt(root);
-        });
-        return;
-      }
-
-      if (config.delayMs > 0) {
-        await delay(config.delayMs);
-      }
-
-      openPrompt(root);
-      return;
-    }
-
-    if (effectiveMode === 'ios' && !isStandaloneIos()) {
-      explainUnsupported(root, 'ios-home-screen');
-    }
-
-    var showPrompt = function () {
-      if (effectiveMode === 'browser' && hasReachedBrowserPromptLimit(config.shopDomain)) {
-        closePrompt(root);
-        return;
-      }
-
-      if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
-        closePrompt(root);
-        return;
-      }
-
-      incrementSessionDisplayCount(config.shopDomain);
       if (effectiveMode === 'browser') {
+        if (isMarkedSubscribed(config.shopDomain)) {
+          await registerToken(config, boot, { silent: true }, clientProfile);
+          closePrompt(root);
+          return;
+        }
+
+        if (clientProfile.permissionState !== 'default') {
+          closePrompt(root);
+          return;
+        }
+      }
+
+      if (secondaryButton) {
+        secondaryButton.onclick = function () {
+          if (effectiveMode === 'custom') {
+            dismissPrompt(config.shopDomain, config.remindAfterDays);
+          }
+          closePrompt(root);
+        };
+      }
+
+      if (!support.supported && effectiveMode !== 'custom') {
+        explainUnsupported(root, support.reason);
+        if (config.displayTrigger === 'manual') {
+          bindManualTrigger(root, config, function () {
+            openPrompt(root);
+          });
+          return;
+        }
+
+        var unsupportedDelayMs = getRemainingDelayMs(config.startedAt, config.delayMs);
+        if (unsupportedDelayMs > 0) {
+          await delay(unsupportedDelayMs);
+        }
+
+        openPrompt(root);
+        return;
+      }
+
+      var showPrompt = function () {
+        if (effectiveMode === 'browser' && hasReachedBrowserPromptLimit(config.shopDomain)) {
+          closePrompt(root);
+          return;
+        }
+
+        if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
+          closePrompt(root);
+          return;
+        }
+
+        incrementSessionDisplayCount(config.shopDomain);
+        if (effectiveMode === 'browser') {
+          recordPromptAttempt(config.shopDomain);
+        }
+        openPrompt(root);
+      };
+
+      if (config.displayTrigger === 'manual') {
+        var bound = bindManualTrigger(root, config, function () {
+          showPrompt();
+        });
+
+        if (!bound) {
+          showStatus(root, 'No manual trigger element found. Falling back to automatic display.', 'info');
+        } else {
+          closePrompt(root);
+          return;
+        }
+      }
+
+      if (effectiveMode !== 'browser' && isPromptDismissed(config.shopDomain)) {
+        closePrompt(root);
+        return;
+      }
+
+      var standardDelayMs = getRemainingDelayMs(config.startedAt, config.delayMs);
+      if (standardDelayMs > 0) {
+        await delay(standardDelayMs);
+      }
+
+      // Browser mode: fire native dialog directly — no custom popup shown at all
+      if (effectiveMode === 'browser') {
+        if (hasReachedBrowserPromptLimit(config.shopDomain)) { closePrompt(root); return; }
+        if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) { closePrompt(root); return; }
+        incrementSessionDisplayCount(config.shopDomain);
         recordPromptAttempt(config.shopDomain);
+        await registerToken(config, boot, { silent: false }, clientProfile);
+        return;
       }
-      openPrompt(root);
-      if (effectiveMode === 'ios' && !isStandaloneIos()) {
-        explainUnsupported(root, 'ios-home-screen');
+
+      showPrompt();
+
+      if (primaryButton) {
+        primaryButton.onclick = async function () {
+          if (isOnIos && !isStandaloneIos()) {
+            showStatus(root, 'Open this store from Home Screen first, then try again.', 'info');
+            return;
+          }
+
+          refreshClientProfile(clientProfile);
+
+          primaryButton.disabled = true;
+          primaryButton.setAttribute('aria-busy', 'true');
+
+          // Custom mode should dismiss instantly after click.
+          if (effectiveMode === 'custom') {
+            closePrompt(root);
+          }
+
+          var result = await registerToken(config, boot, { silent: false }, clientProfile);
+
+          if (effectiveMode === 'custom') {
+            if (!result.ok) {
+              if (result.reason === 'permission-denied') {
+                showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+              } else {
+                showStatus(root, 'Setup failed. Please try again.', 'error');
+              }
+              primaryButton.disabled = false;
+              primaryButton.removeAttribute('aria-busy');
+            }
+            return;
+          }
+
+          if (result.ok) {
+            showStatus(root, 'Notifications enabled.', 'success');
+            closePrompt(root);
+          } else if (result.reason === 'unsupported' || result.reason === 'https-required') {
+            explainUnsupported(root, result.reason);
+          } else if (result.reason === 'permission-denied') {
+            showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+          } else {
+            showStatus(root, 'Setup failed (' + result.reason + '). Please retry.', 'error');
+          }
+
+          primaryButton.disabled = false;
+          primaryButton.removeAttribute('aria-busy');
+        };
       }
-    };
+    }
 
-    if (config.displayTrigger === 'manual') {
-      var bound = bindManualTrigger(root, config, function () {
-        showPrompt();
-      });
+    async function startIosOnboardingFlow() {
+      var primaryButton = root.querySelector('[data-push-eagle-action]');
+      var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
 
-      if (!bound) {
-        showStatus(root, 'No manual trigger element found. Falling back to automatic display.', 'info');
+      applyIosWidgetSettings(root, settings);
+
+      function handleStandaloneReady() {
+        cleanupIosWatcher();
+        refreshClientProfile(clientProfile);
+        showStatus(root, 'Home Screen mode detected. Continuing with your notification prompt...', 'success');
+        startStandardPromptFlow();
+      }
+
+      function watchStandalone() {
+        var intervalId = window.setInterval(function () {
+          if (isStandaloneIos()) {
+            handleStandaloneReady();
+          }
+        }, IOS_HOME_SCREEN_POLL_MS);
+
+        var mediaQuery = null;
+        var mediaQueryHandler = function (event) {
+          if (event.matches) {
+            handleStandaloneReady();
+          }
+        };
+        if (window.matchMedia) {
+          mediaQuery = window.matchMedia('(display-mode: standalone)');
+          if (mediaQuery.addEventListener) {
+            mediaQuery.addEventListener('change', mediaQueryHandler);
+          } else if (mediaQuery.addListener) {
+            mediaQuery.addListener(mediaQueryHandler);
+          }
+        }
+
+        var visibilityHandler = function () {
+          if (document.visibilityState === 'visible' && isStandaloneIos()) {
+            handleStandaloneReady();
+          }
+        };
+        var focusHandler = function () {
+          if (isStandaloneIos()) {
+            handleStandaloneReady();
+          }
+        };
+
+        document.addEventListener('visibilitychange', visibilityHandler);
+        window.addEventListener('focus', focusHandler);
+        window.addEventListener('pageshow', focusHandler);
+
+        iosWatcherCleanup = function () {
+          window.clearInterval(intervalId);
+          document.removeEventListener('visibilitychange', visibilityHandler);
+          window.removeEventListener('focus', focusHandler);
+          window.removeEventListener('pageshow', focusHandler);
+          if (mediaQuery) {
+            if (mediaQuery.removeEventListener) {
+              mediaQuery.removeEventListener('change', mediaQueryHandler);
+            } else if (mediaQuery.removeListener) {
+              mediaQuery.removeListener(mediaQueryHandler);
+            }
+          }
+        };
+      }
+
+      if (secondaryButton) {
+        secondaryButton.onclick = function () {
+          dismissIosWidgetForSession(config.shopDomain);
+          cleanupIosWatcher();
+          closePrompt(root);
+        };
+      }
+
+      if (primaryButton) {
+        primaryButton.onclick = function () {
+          if (isStandaloneIos()) {
+            handleStandaloneReady();
+            return;
+          }
+
+          showStatus(root, 'Tap Share, choose "Add to Home Screen", then open the store from that icon. We will continue automatically.', 'info');
+        };
+      }
+
+      var showWidget = function () {
+        if (isIosWidgetDismissedForSession(config.shopDomain)) {
+          closePrompt(root);
+          return;
+        }
+
+        showStatus(root, 'Add this store to Home Screen. We will keep checking while this widget is open.', 'info');
+        openPrompt(root);
+        watchStandalone();
+      };
+
+      if (config.displayTrigger === 'manual') {
+        var bound = bindManualTrigger(root, config, function () {
+          showWidget();
+        });
+
+        if (!bound) {
+          showStatus(root, 'No manual trigger element found. Falling back to automatic display.', 'info');
+        } else {
+          closePrompt(root);
+          return;
+        }
+      }
+
+      var iosDelayMs = getRemainingDelayMs(config.startedAt, config.delayMs);
+      if (iosDelayMs > 0) {
+        await delay(iosDelayMs);
+      }
+
+      showWidget();
+    }
+
+    if (isOnIos && !isStandaloneIos()) {
+      if (settings.iosWidgetEnabled !== false) {
+        await startIosOnboardingFlow();
       } else {
         closePrompt(root);
-        return;
       }
-    }
-
-    if (effectiveMode !== 'browser' && isPromptDismissed(config.shopDomain)) {
-      closePrompt(root);
       return;
     }
 
-    if (config.delayMs > 0) {
-      await delay(config.delayMs);
-    }
-
-    showPrompt();
-
-    if (primaryButton) {
-      primaryButton.addEventListener('click', async function () {
-        if (effectiveMode === 'ios' && !isStandaloneIos()) {
-          showStatus(root, 'iOS requires Home Screen mode first. Tap Share -> Add to Home Screen, then reopen this app.', 'info');
-          return;
-        }
-
-        primaryButton.disabled = true;
-        primaryButton.setAttribute('aria-busy', 'true');
-
-        var result = await registerToken(config, boot, { silent: false });
-        
-        // For custom prompts, close immediately after response (permission dialog handled case)
-        // On reload, permission will be checked fresh
-        if (effectiveMode === 'custom') {
-          closePrompt(root);
-          if (!result.ok) {
-            // Show brief error status before closing
-            if (result.reason === 'permission-denied') {
-              showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
-            } else {
-              showStatus(root, 'Setup failed. Please try again.', 'error');
-            }
-            // Re-enable for manual retry
-            primaryButton.disabled = false;
-            primaryButton.removeAttribute('aria-busy');
-          }
-          return;
-        }
-
-        // For other modes, use existing logic
-        if (result.ok) {
-          showStatus(root, 'Notifications enabled.', 'success');
-          closePrompt(root);
-        } else if (result.reason === 'unsupported' || result.reason === 'https-required') {
-          explainUnsupported(root, result.reason);
-        } else if (result.reason === 'permission-denied') {
-          showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
-        } else {
-          showStatus(root, 'Setup failed (' + result.reason + '). Please retry.', 'error');
-        }
-
-        primaryButton.disabled = false;
-        primaryButton.removeAttribute('aria-busy');
-      });
-    }
+    await startStandardPromptFlow();
   }
 
   function schedulePrompt(root) {
     var start = function () {
-      if ('requestIdleCallback' in window) {
-        window.requestIdleCallback(function () {
-          runPrompt(root);
-        }, { timeout: 1500 });
-        return;
-      }
-
       setTimeout(function () {
         runPrompt(root);
       }, 0);
     };
 
-    if (document.readyState === 'complete') {
+    if (document.readyState !== 'loading') {
       start();
       return;
     }
 
-    window.addEventListener('load', start, { once: true });
+    document.addEventListener('DOMContentLoaded', start, { once: true });
   }
 
   for (var i = 0; i < roots.length; i += 1) {
