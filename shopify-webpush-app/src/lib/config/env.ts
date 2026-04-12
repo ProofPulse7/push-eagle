@@ -11,6 +11,7 @@ const EnvSchema = z.object({
   SHOPIFY_WEBHOOK_SECRET: z.string().default(''),
   SHOPIFY_DASHBOARD_SSO_SECRET: z.string().default(''),
   DATABASE_PROVIDER: z.enum(['neon', 'supabase']).default('neon'),
+  DATABASE_URL: z.string().default(''),
   NEON_DATABASE_URL: z.string().default(''),
   SUPABASE_URL: z.string().default(''),
   SUPABASE_ANON_KEY: z.string().default(''),
