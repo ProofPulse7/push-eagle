@@ -8,9 +8,13 @@
   data-mode="{{ block.settings.mode }}"
   data-app-url="https://push-eagle-dashboard.vercel.app"
   data-shop-domain="{{ shop.permanent_domain }}"
-  data-proxy-bootstrap-path="/apps/push-eagle/bootstrap"
-  data-proxy-service-worker-path="/apps/push-eagle/sw.js"
-  data-proxy-token-path="/apps/push-eagle/token"
+  data-shopify-shop-id="{{ shop.id }}"
+  data-shopify-shop-name="{{ shop.name | escape }}"
+  data-shopify-locale="{{ request.locale.iso_code }}"
+  data-shopify-country="{{ localization.country.iso_code }}"
+  data-proxy-bootstrap-path="{{ block.settings.proxy_base_path | default: '/apps/push-eagle' | append: '/bootstrap' }}"
+  data-proxy-service-worker-path="{{ block.settings.proxy_base_path | default: '/apps/push-eagle' | append: '/sw.js' }}"
+  data-proxy-token-path="{{ block.settings.proxy_base_path | default: '/apps/push-eagle' | append: '/token' }}"
   data-display-trigger="{{ block.settings.display_trigger | default: 'auto' | strip }}"
   data-manual-selector="{{ block.settings.manual_selector | escape }}"
   data-remind-after-days="{{ block.settings.remind_after_days }}"
@@ -122,6 +126,17 @@
         { "value": "browser", "label": "Browser native dialog" }
       ],
       "default": "custom"
+    },
+    {
+      "type": "header",
+      "content": "App Proxy"
+    },
+    {
+      "type": "text",
+      "id": "proxy_base_path",
+      "label": "Proxy base path",
+      "info": "Match your Shopify app proxy URL path, for example /apps/push-eagle or /tools/push-eagle.",
+      "default": "/apps/push-eagle"
     },
     {
       "type": "header",

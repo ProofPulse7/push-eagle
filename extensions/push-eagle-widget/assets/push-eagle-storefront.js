@@ -83,6 +83,20 @@
     return Math.max(0, configuredDelay - (Date.now() - started));
   }
 
+  function deriveServiceWorkerScope(swPath) {
+    try {
+      var parsed = new URL(swPath, window.location.origin);
+      var path = parsed.pathname || '/';
+      var lastSlash = path.lastIndexOf('/');
+      if (lastSlash <= 0) {
+        return '/';
+      }
+      return path.slice(0, lastSlash + 1);
+    } catch (_error) {
+      return '/';
+    }
+  }
+
   function safeLocalStorageGet(key) {
     try {
       return window.localStorage.getItem(key);
@@ -964,14 +978,22 @@
       var messaging = await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
 
       var swPath = runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH;
+      var swScope = deriveServiceWorkerScope(swPath);
       var registration;
 
       try {
-        // Keep scope under /apps/push-eagle/ to satisfy browser max-scope rules for app-proxy SW scripts.
-        registration = await navigator.serviceWorker.register(swPath, { scope: '/apps/push-eagle/' });
+        registration = await navigator.serviceWorker.register(swPath, { scope: swScope });
       } catch (_scopedRegisterError) {
-        // Fallback to default scope derived from script directory for stricter browser/proxy combinations.
-        registration = await navigator.serviceWorker.register(swPath);
+        try {
+          // Fallback to default scope derived from script directory for stricter browser/proxy combinations.
+          registration = await navigator.serviceWorker.register(swPath);
+        } catch (swRegisterError) {
+          var swMessage = swRegisterError && swRegisterError.message ? String(swRegisterError.message) : '';
+          if (/404|bad http response|script/i.test(swMessage)) {
+            return { ok: false, reason: 'sw-script-missing', message: swMessage };
+          }
+          throw swRegisterError;
+        }
       }
 
       var token = await messaging.getToken({
@@ -1292,7 +1314,20 @@
         if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) { closePrompt(root); return; }
         incrementSessionDisplayCount(config.shopDomain);
         recordPromptAttempt(config.shopDomain);
-        await registerToken(config, boot, { silent: false }, clientProfile);
+        var browserModeResult = await registerToken(config, boot, { silent: false }, clientProfile);
+        if (!browserModeResult.ok) {
+          if (browserModeResult.reason === 'sw-script-missing') {
+            showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+          } else if (browserModeResult.reason === 'permission-denied') {
+            showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+          } else if (browserModeResult.reason === 'unsupported' || browserModeResult.reason === 'https-required') {
+            explainUnsupported(root, browserModeResult.reason);
+          } else {
+            showStatus(root, 'Setup failed (' + browserModeResult.reason + '). Please retry.', 'error');
+          }
+          openPrompt(root);
+          return;
+        }
         return;
       }
 
@@ -1319,7 +1354,9 @@
 
           if (effectiveMode === 'custom') {
             if (!result.ok) {
-              if (result.reason === 'permission-denied') {
+              if (result.reason === 'sw-script-missing') {
+                showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+              } else if (result.reason === 'permission-denied') {
                 showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
               } else {
                 showStatus(root, 'Setup failed. Please try again.', 'error');
@@ -1333,6 +1370,8 @@
           if (result.ok) {
             showStatus(root, 'Notifications enabled.', 'success');
             closePrompt(root);
+          } else if (result.reason === 'sw-script-missing') {
+            showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
           } else if (result.reason === 'unsupported' || result.reason === 'https-required') {
             explainUnsupported(root, result.reason);
           } else if (result.reason === 'permission-denied') {
