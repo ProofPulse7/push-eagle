@@ -46,6 +46,27 @@ type OptInSettingsResponse = {
     error?: string;
 };
 
+type OptInSettingsSavePayload = {
+    shopDomain: string;
+    promptType: 'browser' | 'custom';
+    title: string;
+    message: string;
+    allowText: string;
+    allowBgColor: string;
+    allowTextColor: string;
+    laterText: string;
+    logoUrl: string | null;
+    desktopDelaySeconds: number;
+    mobileDelaySeconds: number;
+    maxDisplaysPerSession: number;
+    hideForDays: number;
+    desktopPosition: DesktopPosition;
+    mobilePosition: MobilePosition;
+    placementPreset: 'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom';
+    offsetX: number;
+    offsetY: number;
+};
+
 const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 25000) => {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -229,6 +250,7 @@ export default function CustomPromptPage() {
     const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
     const [resolvedShopDomain, setResolvedShopDomain] = useState('');
     const [queryShopDomain, setQueryShopDomain] = useState('');
+    const [lastSavedSignature, setLastSavedSignature] = useState<string>('');
     const { logo, setLogo, shopDomain } = useSettings();
     const { toast } = useToast();
     const logoInputRef = useRef<HTMLInputElement | null>(null);
@@ -309,6 +331,27 @@ export default function CustomPromptPage() {
                 setOffsetX(String(data.offsetX));
                 setOffsetY(String(data.offsetY));
                 setLogo({ file: null, preview: data.logoUrl ?? null });
+                const initialPayload: OptInSettingsSavePayload = {
+                    shopDomain: resolvedShopDomain,
+                    promptType: 'custom',
+                    title: data.title,
+                    message: data.message,
+                    allowText: data.allowText,
+                    allowBgColor: data.allowBgColor,
+                    allowTextColor: data.allowTextColor,
+                    laterText: data.laterText,
+                    logoUrl: data.logoUrl ?? null,
+                    desktopDelaySeconds: Number(data.desktopDelaySeconds),
+                    mobileDelaySeconds: Number(data.mobileDelaySeconds),
+                    maxDisplaysPerSession: Number(data.maxDisplaysPerSession),
+                    hideForDays: Number(data.hideForDays),
+                    desktopPosition: data.desktopPosition,
+                    mobilePosition: data.mobilePosition,
+                    placementPreset: data.placementPreset,
+                    offsetX: Number(data.offsetX),
+                    offsetY: Number(data.offsetY),
+                };
+                setLastSavedSignature(JSON.stringify(initialPayload));
                 loadedShopRef.current = resolvedShopDomain;
             })
             .catch((error) => {
@@ -350,46 +393,61 @@ export default function CustomPromptPage() {
             return;
         }
 
-        setSaving(true);
-        setSaveStatus(null);
         try {
             const normalizedLogoUrl = !logo.preview || logo.preview.startsWith('blob:') ? null : logo.preview;
             if (normalizedLogoUrl && normalizedLogoUrl.startsWith('data:') && normalizedLogoUrl.length > 700000) {
                 throw new Error('Logo image is too large. Please upload a smaller image (recommended under 200 KB).');
             }
 
+            const payload: OptInSettingsSavePayload = {
+                shopDomain: resolvedShopDomain,
+                promptType: 'custom',
+                title,
+                message,
+                allowText,
+                allowBgColor,
+                allowTextColor,
+                laterText,
+                logoUrl: normalizedLogoUrl,
+                desktopDelaySeconds: Number(desktopDelaySeconds),
+                mobileDelaySeconds: Number(mobileDelaySeconds),
+                maxDisplaysPerSession: Number(maxDisplaysPerSession),
+                hideForDays: Number(hideForDays),
+                desktopPosition,
+                mobilePosition,
+                placementPreset,
+                offsetX: Number(offsetX),
+                offsetY: Number(offsetY),
+            };
+
+            const payloadSignature = JSON.stringify(payload);
+            if (payloadSignature === lastSavedSignature) {
+                const message = 'No changes to save.';
+                setSaveStatus({ type: 'success', message });
+                toast({
+                    title: 'Already up to date',
+                    description: message,
+                });
+                return;
+            }
+
+            setSaving(true);
+            setSaveStatus(null);
+
             const response = await fetchWithTimeout('/api/settings/opt-in', {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    shopDomain: resolvedShopDomain,
-                    promptType: 'custom',
-                    title,
-                    message,
-                    allowText,
-                    allowBgColor,
-                    allowTextColor,
-                    laterText,
-                    logoUrl: normalizedLogoUrl,
-                    desktopDelaySeconds: Number(desktopDelaySeconds),
-                    mobileDelaySeconds: Number(mobileDelaySeconds),
-                    maxDisplaysPerSession: Number(maxDisplaysPerSession),
-                    hideForDays: Number(hideForDays),
-                    desktopPosition,
-                    mobilePosition,
-                    placementPreset,
-                    offsetX: Number(offsetX),
-                    offsetY: Number(offsetY),
-                }),
+                body: JSON.stringify(payload),
             });
 
-            const raw = await response.text();
-            const result = (raw ? JSON.parse(raw) : {}) as OptInSettingsResponse;
+            const result = (await response.json()) as OptInSettingsResponse;
             if (!response.ok || !result?.ok) {
                 throw new Error(result?.error ?? 'Failed to save custom prompt settings.');
             }
+
+            setLastSavedSignature(payloadSignature);
 
             const savedAt = new Date().toLocaleTimeString();
             setSaveStatus({ type: 'success', message: `Settings saved successfully at ${savedAt}.` });

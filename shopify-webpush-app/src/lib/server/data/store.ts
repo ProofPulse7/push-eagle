@@ -938,9 +938,8 @@ export const getOptInSettings = async (shopDomain: string): Promise<OptInSetting
 export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
   await ensureSchema();
   const sql = getNeonSql();
-  await ensureMerchant(input.shopDomain);
-
-  await sql`
+  const upsertSettings = async () =>
+    sql`
     INSERT INTO merchant_settings (
       shop_domain,
       opt_in_prompt_type,
@@ -1003,7 +1002,20 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
         opt_in_offset_x = EXCLUDED.opt_in_offset_x,
         opt_in_offset_y = EXCLUDED.opt_in_offset_y,
       updated_at = NOW()
-  `;
+    `;
+
+    try {
+      await upsertSettings();
+    } catch (error) {
+      // Fast path assumes merchant already exists. If this is the first ever save
+      // for a shop and FK is missing, create merchant and retry once.
+      if ((error as { code?: string } | null)?.code === '23503') {
+        await ensureMerchant(input.shopDomain);
+        await upsertSettings();
+      } else {
+        throw error;
+      }
+    }
 
   return {
     promptType: input.promptType,
