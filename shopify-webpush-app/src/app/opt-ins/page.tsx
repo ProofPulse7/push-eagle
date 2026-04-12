@@ -44,7 +44,9 @@ const TopStat = ({ label, value, tooltipText }: { label: string, value: string |
 
 export default function OptInsPage() {
   const { shopDomain } = useSettings();
-  const [promptType, setPromptType] = useState<'browser' | 'custom'>('custom');
+  const [livePromptType, setLivePromptType] = useState<'browser' | 'custom'>('custom');
+  const [selectedPromptType, setSelectedPromptType] = useState<'browser' | 'custom'>('custom');
+  const [savingPromptType, setSavingPromptType] = useState(false);
   const [iosWidgetEnabled, setIosWidgetEnabled] = useState(true);
   const [stats, setStats] = useState({ viewed: 0, subscribed: 0, conversion: '0.0%' });
   const [loading, setLoading] = useState(false);
@@ -75,7 +77,10 @@ export default function OptInsPage() {
         }
 
         if (optIn?.ok) {
-          setPromptType(optIn.promptType === 'browser' ? 'browser' : 'custom');
+          const serverPromptType = optIn.promptType === 'browser' ? 'browser' : 'custom';
+          setLivePromptType(serverPromptType);
+          setSelectedPromptType(serverPromptType);
+          setIosWidgetEnabled(optIn.iosWidgetEnabled !== false);
           setSettingsSummary({
             title: optIn.title,
             position: `${optIn.desktopPosition} (desktop), ${optIn.mobilePosition} (mobile)`,
@@ -105,9 +110,41 @@ export default function OptInsPage() {
     };
   }, [shopDomain]);
 
-  const updatePromptType = async (value: string) => {
+  const updatePromptTypeSelection = (value: string) => {
     const next = value === 'browser' ? 'browser' : 'custom';
-    setPromptType(next);
+    setSelectedPromptType(next);
+  };
+
+  const savePromptType = async () => {
+    if (!shopDomain) {
+      return;
+    }
+
+    try {
+      setSavingPromptType(true);
+      const res = await fetch('/api/settings/opt-in', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          shopDomain,
+          promptType: selectedPromptType,
+        }),
+      });
+      const data = await res.json().catch(() => ({ ok: false }));
+      if (data?.ok) {
+        setLivePromptType(selectedPromptType);
+      }
+    } catch (_error) {
+      // Non-blocking; UI already reflects user selection.
+    } finally {
+      setSavingPromptType(false);
+    }
+  };
+
+  const updateIosWidgetEnabled = async (checked: boolean) => {
+    setIosWidgetEnabled(checked);
 
     if (!shopDomain) {
       return;
@@ -121,7 +158,7 @@ export default function OptInsPage() {
         },
         body: JSON.stringify({
           shopDomain,
-          promptType: next,
+          iosWidgetEnabled: checked,
         }),
       });
     } catch (_error) {
@@ -172,12 +209,12 @@ export default function OptInsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <RadioGroup value={promptType} onValueChange={updatePromptType} className="space-y-4">
+            <RadioGroup value={selectedPromptType} onValueChange={updatePromptTypeSelection} className="space-y-4">
               
               <div
                 className={cn(
                   'rounded-lg border p-4 transition-all',
-                  promptType === 'browser' ? 'border-primary bg-primary/5' : 'bg-card hover:bg-muted/50'
+                  selectedPromptType === 'browser' ? 'border-primary bg-primary/5' : 'bg-card hover:bg-muted/50'
                 )}
               >
                 <div className="flex items-center justify-between">
@@ -186,7 +223,8 @@ export default function OptInsPage() {
                          <div className="grid gap-1.5">
                             <Label htmlFor="browser-prompt" className="font-semibold text-base cursor-pointer">
                                 Browser Prompt
-                                {promptType === 'browser' && <Badge variant="default" className="ml-2">LIVE</Badge>}
+                            {livePromptType === 'browser' && <Badge variant="default" className="ml-2">LIVE</Badge>}
+                            {selectedPromptType === 'browser' && livePromptType !== 'browser' && <Badge variant="secondary" className="ml-2">SELECTED</Badge>}
                             </Label>
                             <p className="text-sm text-muted-foreground">
                                 One step opt-in process for better results
@@ -209,7 +247,7 @@ export default function OptInsPage() {
               <div
                 className={cn(
                   'rounded-lg border p-4 transition-all',
-                  promptType === 'custom' ? 'border-primary bg-primary/5' : 'bg-card hover:bg-muted/50'
+                  selectedPromptType === 'custom' ? 'border-primary bg-primary/5' : 'bg-card hover:bg-muted/50'
                 )}
               >
                 <div className="flex items-center justify-between">
@@ -218,7 +256,8 @@ export default function OptInsPage() {
                          <div className="grid gap-1.5">
                             <Label htmlFor="custom-prompt" className="font-semibold text-base cursor-pointer">
                                 Custom Prompt
-                                {promptType === 'custom' && <Badge variant="default" className="ml-2">LIVE</Badge>}
+                            {livePromptType === 'custom' && <Badge variant="default" className="ml-2">LIVE</Badge>}
+                            {selectedPromptType === 'custom' && livePromptType !== 'custom' && <Badge variant="secondary" className="ml-2">SELECTED</Badge>}
                             </Label>
                             <p className="text-sm text-muted-foreground">
                                 Give your store visitors more context with a customizable opt-in
@@ -238,12 +277,20 @@ export default function OptInsPage() {
                 </div>
               </div>
             </RadioGroup>
+            <div className="mt-4 flex justify-end">
+              <Button
+                onClick={savePromptType}
+                disabled={!shopDomain || savingPromptType || selectedPromptType === livePromptType}
+              >
+                {savingPromptType ? 'SAVING...' : 'SAVE PROMPT TYPE'}
+              </Button>
+            </div>
             <div className="mt-4 rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
               <p className="font-medium text-foreground">Settings status</p>
               <p>{statusLabel}</p>
               {settingsSummary ? (
                 <p className="mt-1">
-                  {promptType === 'browser'
+                  {livePromptType === 'browser'
                     ? `Delays: ${settingsSummary.desktopDelay}s desktop / ${settingsSummary.mobileDelay}s mobile. Browser mode asks at most once per session and up to 3 times in 2 days.`
                     : `Position: ${settingsSummary.position}. Delays: ${settingsSummary.desktopDelay}s desktop / ${settingsSummary.mobileDelay}s mobile. Hide for ${settingsSummary.hideForDays} days, max ${settingsSummary.maxDisplaysPerSession} displays per session.`}
                 </p>
@@ -264,7 +311,7 @@ export default function OptInsPage() {
                     <Checkbox 
                         id="ios-widget" 
                         checked={iosWidgetEnabled}
-                        onCheckedChange={(checked) => setIosWidgetEnabled(!!checked)}
+                      onCheckedChange={(checked) => updateIosWidgetEnabled(!!checked)}
                         className="mt-1"
                     />
                     <div className="grid gap-1.5">
