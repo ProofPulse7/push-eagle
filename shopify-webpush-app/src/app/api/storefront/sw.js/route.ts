@@ -53,7 +53,7 @@ const handleRequest = async (request: Request) => {
     headers: {
       'Content-Type': 'application/javascript; charset=utf-8',
       'Cache-Control': 'no-store, must-revalidate',
-      'Service-Worker-Allowed': '/',
+      'Service-Worker-Allowed': '/apps/push-eagle/',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
     },

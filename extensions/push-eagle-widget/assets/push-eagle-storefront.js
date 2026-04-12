@@ -964,7 +964,15 @@
       var messaging = await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
 
       var swPath = runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH;
-      var registration = await navigator.serviceWorker.register(swPath, { scope: '/' });
+      var registration;
+
+      try {
+        // Keep scope under /apps/push-eagle/ to satisfy browser max-scope rules for app-proxy SW scripts.
+        registration = await navigator.serviceWorker.register(swPath, { scope: '/apps/push-eagle/' });
+      } catch (_scopedRegisterError) {
+        // Fallback to default scope derived from script directory for stricter browser/proxy combinations.
+        registration = await navigator.serviceWorker.register(swPath);
+      }
 
       var token = await messaging.getToken({
         vapidKey: (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey,
