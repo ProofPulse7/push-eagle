@@ -33,7 +33,7 @@ export function SubscribersTable() {
     const [hasMore, setHasMore] = useState(false);
     const [loading, setLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
-    const pageSize = 100;
+    const pageSize = 50;
 
     useEffect(() => {
         if (!shopDomain) {
