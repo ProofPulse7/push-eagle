@@ -1047,7 +1047,15 @@
             break;
           }
 
-          tokenSaveReason = 'http-' + String(tokenResponse.status || 'error');
+          var responseError = '';
+          try {
+            var responseJson = await tokenResponse.json();
+            responseError = responseJson && responseJson.error ? String(responseJson.error) : '';
+          } catch (_jsonError) {
+            responseError = '';
+          }
+
+          tokenSaveReason = 'http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
         } catch (_tokenSaveError) {
           tokenSaveReason = 'network-error';
         }
@@ -1354,12 +1362,13 @@
 
           if (effectiveMode === 'custom') {
             if (!result.ok) {
+              openPrompt(root);
               if (result.reason === 'sw-script-missing') {
                 showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
               } else if (result.reason === 'permission-denied') {
                 showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
               } else {
-                showStatus(root, 'Setup failed. Please try again.', 'error');
+                showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
               }
               primaryButton.disabled = false;
               primaryButton.removeAttribute('aria-busy');
