@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useState, useContext, ReactNode, useEffect } from 'react';
+import { createContext, useState, useContext, ReactNode, useEffect, useRef } from 'react';
 import { useSettings } from '@/context/settings-context';
 
 type ActionButton = { title: string; link: string };
@@ -43,6 +43,7 @@ export function useCampaignState() {
 }
 
 export function CampaignStateProvider({ children }: { children: ReactNode }) {
+    const blobUrlsRef = useRef<Set<string>>(new Set());
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
     const [primaryLink, setPrimaryLink] = useState('');
@@ -72,15 +73,37 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     };
 
     useEffect(() => {
-        const allPreviews = [windowsHero.preview, macHero.preview, androidHero.preview, logo.preview];
+        const candidates = [
+            windowsHero.preview,
+            windowsHero.originalPreview,
+            macHero.preview,
+            macHero.originalPreview,
+            androidHero.preview,
+            androidHero.originalPreview,
+            logo.preview,
+        ];
+
+        candidates.forEach((url) => {
+            if (url && url.startsWith('blob:')) {
+                blobUrlsRef.current.add(url);
+            }
+        });
+    }, [
+        windowsHero.preview,
+        windowsHero.originalPreview,
+        macHero.preview,
+        macHero.originalPreview,
+        androidHero.preview,
+        androidHero.originalPreview,
+        logo.preview,
+    ]);
+
+    useEffect(() => {
         return () => {
-            allPreviews.forEach(p => {
-                if (p && p.startsWith('blob:')) {
-                    URL.revokeObjectURL(p);
-                }
-            });
+            blobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+            blobUrlsRef.current.clear();
         };
-    }, [windowsHero.preview, macHero.preview, androidHero.preview, logo.preview]);
+    }, []);
 
     return (
         <CampaignContext.Provider value={value}>
