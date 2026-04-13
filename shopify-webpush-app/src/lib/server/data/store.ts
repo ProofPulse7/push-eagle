@@ -29,6 +29,13 @@ type UpsertTokenInput = {
   deviceContext?: Record<string, unknown> | null;
 };
 
+type TokenValidationResult = {
+  ok: boolean;
+  permanent: boolean;
+  code?: string;
+  message?: string;
+};
+
 type UpdateAttributionSettingsInput = {
   shopDomain: string;
   attributionModel: 'click' | 'impression';
@@ -349,6 +356,10 @@ const ensureSchema = async () => {
         last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (shop_domain, fcm_token)
       )`;
+      await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ`;
+      await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0`;
+      await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS last_error_code TEXT`;
+      await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ`;
 
       await sql`CREATE TABLE IF NOT EXISTS campaigns (
         id TEXT PRIMARY KEY,
@@ -536,6 +547,42 @@ const ensureMerchant = async (shopDomain: string) => {
   `;
 };
 
+const permanentTokenErrorCodes = [
+  'registration-token-not-registered',
+  'invalid-registration-token',
+  'mismatched-credential',
+  'invalid-argument',
+];
+
+const isPermanentTokenErrorCode = (code: string) =>
+  permanentTokenErrorCodes.some((permanentCode) => code.includes(permanentCode));
+
+const validateNotificationToken = async (token: string): Promise<TokenValidationResult> => {
+  try {
+    const messaging = getFirebaseAdminMessaging();
+    await messaging.send(
+      {
+        token,
+        data: {
+          pe_probe: '1',
+        },
+      },
+      true,
+    );
+
+    return { ok: true, permanent: false };
+  } catch (error) {
+    const code = (error as { code?: string } | undefined)?.code ?? 'token-validation-failed';
+    const message = error instanceof Error ? error.message : 'Token validation failed.';
+    return {
+      ok: false,
+      permanent: isPermanentTokenErrorCode(code),
+      code,
+      message,
+    };
+  }
+};
+
 export const ensureMerchantAccount = async (shopDomain: string) => {
   await ensureSchema();
   await ensureMerchant(shopDomain);
@@ -697,7 +744,7 @@ const buildCriteriaSummary = (conditionGroups: SegmentConditionGroup[]) => {
     return 'Custom audience criteria';
   }
 
-  const parts = [first.type];
+  const parts: string[] = [first.type];
   if (first.textValue) {
     parts.push(String(first.textValue));
   }
@@ -1226,6 +1273,27 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
 
   await ensureMerchant(input.shopDomain);
 
+  const validation = await validateNotificationToken(input.token);
+  if (!validation.ok) {
+    await sql`
+      UPDATE subscriber_tokens
+      SET
+        status = 'revoked',
+        updated_at = NOW(),
+        last_error_code = ${validation.code ?? null},
+        last_error_at = NOW(),
+        failure_count = COALESCE(failure_count, 0) + 1
+      WHERE shop_domain = ${input.shopDomain}
+        AND fcm_token = ${input.token}
+    `;
+
+    if (validation.permanent) {
+      throw new Error(`Unusable notification token (${validation.code ?? 'invalid-token'}).`);
+    }
+
+    throw new Error(`Temporary token validation failure (${validation.code ?? 'validation-failed'}).`);
+  }
+
   const subscriberRows = await sql`
     INSERT INTO subscribers (shop_domain, external_id, browser, platform, locale, country, city, device_context, last_seen_at)
     VALUES (
@@ -1254,7 +1322,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   const subscriberId = Number(subscriberRows[0]?.id);
 
   const tokenRows = await sql`
-    INSERT INTO subscriber_tokens (shop_domain, subscriber_id, fcm_token, user_agent, status, updated_at, last_seen_at)
+    INSERT INTO subscriber_tokens (shop_domain, subscriber_id, fcm_token, user_agent, status, validated_at, updated_at, last_seen_at, failure_count, last_error_code, last_error_at)
     VALUES (
       ${input.shopDomain},
       ${subscriberId},
@@ -1262,13 +1330,21 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
       ${input.userAgent ?? null},
       'active',
       NOW(),
-      NOW()
+      NOW(),
+      NOW(),
+      0,
+      NULL,
+      NULL
     )
     ON CONFLICT (shop_domain, fcm_token)
     DO UPDATE SET
       subscriber_id = EXCLUDED.subscriber_id,
       user_agent = EXCLUDED.user_agent,
       status = 'active',
+      validated_at = NOW(),
+      failure_count = 0,
+      last_error_code = NULL,
+      last_error_at = NULL,
       updated_at = NOW(),
       last_seen_at = NOW()
     RETURNING id
@@ -1747,10 +1823,26 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
         if (code.includes('registration-token-not-registered')) {
           await sql`
             UPDATE subscriber_tokens
-            SET status = 'revoked', updated_at = NOW()
+            SET
+              status = 'revoked',
+              updated_at = NOW(),
+              last_error_code = ${code || null},
+              last_error_at = NOW(),
+              failure_count = COALESCE(failure_count, 0) + 1
             WHERE id = ${Number(recipient.token_id)}
           `;
+          continue;
         }
+
+        await sql`
+          UPDATE subscriber_tokens
+          SET
+            updated_at = NOW(),
+            last_error_code = ${code || null},
+            last_error_at = NOW(),
+            failure_count = COALESCE(failure_count, 0) + 1
+          WHERE id = ${Number(recipient.token_id)}
+        `;
       }
     }
 
