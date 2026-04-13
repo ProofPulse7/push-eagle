@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
-import { listDueScheduledCampaigns, sendCampaign } from '@/lib/server/data/store';
+import { listDueScheduledCampaigns, listQueuedCampaigns, sendCampaign } from '@/lib/server/data/store';
 
 export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 const isAuthorized = (request: Request) => {
   if (!env.CRON_SECRET) {
@@ -21,18 +22,23 @@ export async function GET(request: Request) {
     }
 
     const dueCampaigns = await listDueScheduledCampaigns(25);
+    const queuedCampaigns = await listQueuedCampaigns(25);
+    const candidates = [...dueCampaigns, ...queuedCampaigns];
+    const uniqueCandidates = Array.from(new Map(candidates.map((item) => [item.id, item])).values());
     const processed: Array<{
       campaignId: string;
       shopDomain: string;
       successCount?: number;
       failureCount?: number;
       recipientCount?: number;
+      completed?: boolean;
+      remainingRecipients?: number;
       error?: string;
     }> = [];
 
-    for (const campaign of dueCampaigns) {
+    for (const campaign of uniqueCandidates) {
       try {
-        const result = await sendCampaign(campaign.shop_domain, campaign.id);
+        const result = await sendCampaign(campaign.shop_domain, campaign.id, { maxBatches: 20 });
         processed.push({
           campaignId: campaign.id,
           shopDomain: campaign.shop_domain,
@@ -50,6 +56,8 @@ export async function GET(request: Request) {
     return NextResponse.json({
       ok: true,
       dueCount: dueCampaigns.length,
+      queuedCount: queuedCampaigns.length,
+      candidateCount: uniqueCandidates.length,
       processedCount: processed.filter((item) => !item.error).length,
       failedCount: processed.filter((item) => Boolean(item.error)).length,
       processed,

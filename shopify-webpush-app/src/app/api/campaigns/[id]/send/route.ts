@@ -9,13 +9,16 @@ export const maxDuration = 300;
 
 const bodySchema = z.object({
   shopDomain: z.string().optional(),
+  maxBatches: z.number().int().min(1).max(2000).optional(),
 });
 
 export async function POST(request: Request, context: { params: { id: string } }) {
   try {
     const body = bodySchema.parse(await request.json().catch(() => ({})));
     const shopDomain = extractShopDomain(request, body.shopDomain);
-    const result = await sendCampaign(shopDomain, context.params.id);
+    const result = await sendCampaign(shopDomain, context.params.id, {
+      maxBatches: body.maxBatches ?? 20,
+    });
 
     return NextResponse.json({
       ok: true,

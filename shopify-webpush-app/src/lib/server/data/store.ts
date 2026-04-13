@@ -484,6 +484,7 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_status ON subscriber_tokens(shop_domain, status)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_created ON campaigns(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_token ON campaign_deliveries(campaign_id, token_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_customers_shop_email ON shopify_customers(shop_domain, email)`;
@@ -1134,17 +1135,32 @@ export const getSegmentFilterOptions = async (shopDomain: string) => {
   };
 };
 
-export const resolveCampaignAudience = async (shopDomain: string, segmentId?: string | null) => {
+export const resolveCampaignAudience = async (
+  shopDomain: string,
+  segmentId?: string | null,
+  excludeDeliveredCampaignId?: string | null,
+) => {
   await ensureSchema();
   const sql = getNeonSql();
 
   if (!segmentId || segmentId === 'all') {
     const rows = await sql`
-      SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id, s.platform
-      FROM subscriber_tokens t
-      JOIN subscribers s ON s.id = t.subscriber_id
-      WHERE t.shop_domain = ${shopDomain}
+      SELECT DISTINCT ON (s.id)
+        t.id AS token_id,
+        t.fcm_token,
+        s.id AS subscriber_id,
+        s.external_id,
+        s.platform
+      FROM subscribers s
+      JOIN subscriber_tokens t ON t.subscriber_id = s.id
+      LEFT JOIN campaign_deliveries cd
+        ON cd.campaign_id = ${excludeDeliveredCampaignId ?? null}
+       AND cd.token_id = t.id
+      WHERE s.shop_domain = ${shopDomain}
+        AND t.shop_domain = ${shopDomain}
         AND t.status = 'active'
+        AND (${excludeDeliveredCampaignId ?? null} IS NULL OR cd.id IS NULL)
+      ORDER BY s.id, t.last_seen_at DESC, t.updated_at DESC, t.id DESC
     `;
     return rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null; platform: string | null }>;
   }
@@ -1164,11 +1180,22 @@ export const resolveCampaignAudience = async (shopDomain: string, segmentId?: st
   }
 
   const rows = await sql`
-    SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id, s.platform
-    FROM subscriber_tokens t
-    JOIN subscribers s ON s.id = t.subscriber_id
-    WHERE t.shop_domain = ${shopDomain}
+    SELECT DISTINCT ON (s.id)
+      t.id AS token_id,
+      t.fcm_token,
+      s.id AS subscriber_id,
+      s.external_id,
+      s.platform
+    FROM subscribers s
+    JOIN subscriber_tokens t ON t.subscriber_id = s.id
+    LEFT JOIN campaign_deliveries cd
+      ON cd.campaign_id = ${excludeDeliveredCampaignId ?? null}
+     AND cd.token_id = t.id
+    WHERE s.shop_domain = ${shopDomain}
+      AND t.shop_domain = ${shopDomain}
       AND t.status = 'active'
+      AND (${excludeDeliveredCampaignId ?? null} IS NULL OR cd.id IS NULL)
+    ORDER BY s.id, t.last_seen_at DESC, t.updated_at DESC, t.id DESC
   `;
 
   return (rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null; platform: string | null }>).filter((row) =>
@@ -1179,6 +1206,21 @@ export const resolveCampaignAudience = async (shopDomain: string, segmentId?: st
 export const countCampaignAudienceTokens = async (shopDomain: string, segmentId?: string | null) => {
   const rows = await resolveCampaignAudience(shopDomain, segmentId);
   return rows.length;
+};
+
+export const listQueuedCampaigns = async (limit = 25) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT id, shop_domain
+    FROM campaigns
+    WHERE status = 'queued'
+    ORDER BY scheduled_at ASC NULLS LAST, created_at ASC
+    LIMIT ${limit}
+  `;
+
+  return rows as Array<{ id: string; shop_domain: string }>;
 };
 
 export const getMerchantOverview = async (shopDomain: string) => {
@@ -1789,16 +1831,21 @@ export const listDueScheduledCampaigns = async (limit = 25) => {
   return rows as Array<{ id: string; shop_domain: string; scheduled_at: string | Date | null }>;
 };
 
-export const sendCampaign = async (shopDomain: string, campaignId: string) => {
+export const sendCampaign = async (
+  shopDomain: string,
+  campaignId: string,
+  options?: { maxBatches?: number },
+) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const maxBatches = Math.max(1, Math.min(Number(options?.maxBatches ?? Number.MAX_SAFE_INTEGER), 2000));
 
   const campaignRows = await sql`
     UPDATE campaigns
     SET status = 'sending'
     WHERE id = ${campaignId}
       AND shop_domain = ${shopDomain}
-      AND status IN ('draft', 'scheduled')
+      AND status IN ('draft', 'scheduled', 'queued')
     RETURNING *
   `;
 
@@ -1846,9 +1893,33 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
 
   const previousStatus = campaign.status;
 
-  const recipients = await resolveCampaignAudience(shopDomain, campaign.segment_id);
+  const recipients = await resolveCampaignAudience(shopDomain, campaign.segment_id, campaignId);
 
   if (recipients.length === 0) {
+    const deliveredRows = await sql`
+      SELECT COUNT(*)::INT AS count
+      FROM campaign_deliveries
+      WHERE campaign_id = ${campaignId}
+    `;
+
+    const alreadyDelivered = Number(deliveredRows[0]?.count ?? 0);
+
+    if (alreadyDelivered > 0) {
+      await sql`
+        UPDATE campaigns
+        SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), delivery_count = ${alreadyDelivered}
+        WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+      `;
+
+      return {
+        successCount: 0,
+        failureCount: 0,
+        recipientCount: alreadyDelivered,
+        completed: true,
+        remainingRecipients: 0,
+      };
+    }
+
     await sql`
       UPDATE campaigns
       SET status = ${previousStatus}, sent_at = NULL, delivery_count = 0
@@ -1863,8 +1934,14 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
     const chunkSize = 500;
     let successCount = 0;
     let failureCount = 0;
+    let processedBatches = 0;
+    let processedRecipients = 0;
 
     for (let i = 0; i < recipients.length; i += chunkSize) {
+      if (processedBatches >= maxBatches) {
+        break;
+      }
+
       const chunk = recipients.slice(i, i + chunkSize);
       const messages = chunk.map((item) => {
         const platform = String((item as { platform?: string }).platform ?? '').toLowerCase();
@@ -1927,6 +2004,8 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
 
       successCount += multicast.successCount;
       failureCount += multicast.failureCount;
+  processedRecipients += chunk.length;
+  processedBatches += 1;
 
       for (let index = 0; index < multicast.responses.length; index += 1) {
         const response = multicast.responses[index];
@@ -1942,6 +2021,7 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
               ${Number(recipient.token_id)},
               ${response.messageId ?? null}
             )
+            ON CONFLICT (campaign_id, token_id) DO NOTHING
           `;
           continue;
         }
@@ -1957,12 +2037,40 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
       }
     }
 
+    const remainingRecipients = Math.max(recipients.length - processedRecipients, 0);
+
+    if (remainingRecipients > 0) {
+      await sql`
+        UPDATE campaigns
+        SET
+          status = 'queued',
+          delivery_count = COALESCE(delivery_count, 0) + ${successCount}
+        WHERE id = ${campaignId}
+      `;
+
+      return {
+        successCount,
+        failureCount,
+        recipientCount: recipients.length,
+        completed: false,
+        remainingRecipients,
+      };
+    }
+
+    const deliveredRows = await sql`
+      SELECT COUNT(*)::INT AS count
+      FROM campaign_deliveries
+      WHERE campaign_id = ${campaignId}
+    `;
+
+    const deliveredCount = Number(deliveredRows[0]?.count ?? 0);
+
     await sql`
       UPDATE campaigns
       SET
         status = 'sent',
         sent_at = NOW(),
-        delivery_count = ${successCount}
+        delivery_count = ${deliveredCount}
       WHERE id = ${campaignId}
     `;
 
@@ -1970,6 +2078,8 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
       successCount,
       failureCount,
       recipientCount: recipients.length,
+      completed: true,
+      remainingRecipients: 0,
     };
   } catch (error) {
     await sql`

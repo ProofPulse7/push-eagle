@@ -204,13 +204,20 @@ export default function ScheduleCampaignPage() {
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ shopDomain }),
+                    body: JSON.stringify({ shopDomain, maxBatches: 20 }),
                 });
 
                 const sendPayload = await parseApiResponse(sendResponse);
                 const sendResult = sendPayload.json;
                 if (!sendResponse.ok || !sendResult?.ok) {
                     throw new Error(buildResponseError('Failed to send campaign.', sendPayload));
+                }
+
+                if (sendResult.completed === false) {
+                    toast({
+                        title: 'Campaign Queued',
+                        description: `Initial batch sent. Remaining ${Number(sendResult.remainingRecipients ?? 0).toLocaleString()} recipients will continue via background processing.`,
+                    });
                 }
 
                 if (Number(sendResult.successCount ?? 0) <= 0) {
