@@ -203,6 +203,57 @@
     return random;
   }
 
+  async function syncExternalIdToCart(externalId) {
+    if (!externalId) {
+      return;
+    }
+
+    try {
+      await fetch('/cart/update.js', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          attributes: {
+            _push_eagle_external_id: externalId
+          }
+        })
+      });
+    } catch (_error) {
+      // best effort only
+    }
+  }
+
+  async function sendActivityEvent(boot, eventType, metadata) {
+    if (!boot || !boot.activityEndpoint || !boot.shopDomain || !boot.externalId) {
+      return;
+    }
+
+    try {
+      var url = window.location.href;
+      var productMatch = window.location.pathname.match(/\/products\/([^/?#]+)/i);
+
+      await fetch(boot.activityEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          shopDomain: boot.shopDomain,
+          externalId: boot.externalId,
+          eventType: eventType,
+          pageUrl: url,
+          productId: productMatch ? productMatch[1] : null,
+          metadata: metadata || {}
+        })
+      });
+    } catch (_error) {
+      // best effort only
+    }
+  }
+
   function normalizeVersion(value) {
     return value ? String(value).replace(/_/g, '.') : null;
   }
@@ -1016,6 +1067,7 @@
       shopDomain: config.shopDomain,
       externalId: getOrCreateAnonExternalId(config.shopDomain),
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
+      activityEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity' : '',
       iosHomeScreenEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/ios-home-screen' : '',
       optIn: defaultOptInSettings,
       firebase: fallbackFirebaseConfig
@@ -1334,6 +1386,10 @@
     }
 
     var boot = await bootstrap(config);
+    syncExternalIdToCart(boot && boot.externalId ? boot.externalId : null);
+    sendActivityEvent(boot, window.location.pathname.indexOf('/products/') === 0 ? 'product_view' : 'page_view', {
+      referrer: document.referrer || null
+    });
     var clientProfile = await buildClientProfile(root, boot);
     applyOptInSettings(root, config, boot);
 

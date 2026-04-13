@@ -10,9 +10,15 @@ const schema = z.object({
   shopDomain: z.string(),
   orderId: z.string().min(1),
   externalId: z.string().optional().nullable(),
+  customerId: z.string().optional().nullable(),
+  email: z.string().optional().nullable(),
   campaignId: z.string().optional().nullable(),
   revenue: z.number().nonnegative(),
   occurredAt: z.string().optional().nullable(),
+  userAgent: z.string().optional().nullable(),
+  browser: z.string().optional().nullable(),
+  platform: z.string().optional().nullable(),
+  country: z.string().optional().nullable(),
 });
 
 const corsHeaders = {
@@ -34,9 +40,15 @@ export async function POST(request: Request) {
       shopDomain,
       orderId: body.orderId,
       externalId: body.externalId,
+      customerId: body.customerId,
+      email: body.email,
       campaignId: body.campaignId,
       revenueCents: Math.round(body.revenue * 100),
       occurredAt: body.occurredAt,
+      userAgent: body.userAgent,
+      browser: body.browser,
+      platform: body.platform,
+      country: body.country,
     });
 
     return NextResponse.json({ ok: true, shopDomain, orderId: body.orderId, ...result }, { headers: corsHeaders });

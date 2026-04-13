@@ -26,6 +26,33 @@ type ShopifyOrderPayload = {
     product_type?: string | null;
     vendor?: string | null;
   }>;
+  client_details?: {
+    browser_ip?: string | null;
+    user_agent?: string | null;
+    browser_width?: number | null;
+    browser_height?: number | null;
+  } | null;
+  browser_ip?: string | null;
+  note_attributes?: Array<{ name?: string | null; value?: string | null }>;
+};
+
+const getExternalIdFromNoteAttributes = (noteAttributes?: Array<{ name?: string | null; value?: string | null }>) => {
+  if (!Array.isArray(noteAttributes)) {
+    return null;
+  }
+
+  const keys = new Set(['push_eagle_external_id', 'pe_external_id', '_push_eagle_external_id']);
+  for (const pair of noteAttributes) {
+    const key = String(pair?.name ?? '').trim().toLowerCase();
+    if (keys.has(key)) {
+      const value = String(pair?.value ?? '').trim();
+      if (value) {
+        return value;
+      }
+    }
+  }
+
+  return null;
 };
 
 export async function POST(request: Request) {
@@ -53,7 +80,8 @@ export async function POST(request: Request) {
       }
     }
 
-    const externalId = getCustomerExternalId({
+    const externalIdFromNotes = getExternalIdFromNoteAttributes(payload.note_attributes);
+    const externalId = externalIdFromNotes ?? getCustomerExternalId({
       customerId: payload.customer?.id ? String(payload.customer.id) : null,
       email: payload.customer?.email ?? null,
     });
@@ -100,7 +128,12 @@ export async function POST(request: Request) {
       revenueCents: Math.round(revenue * 100),
       occurredAt: payload.created_at ?? null,
       externalId,
+      customerId: payload.customer?.id ? String(payload.customer.id) : null,
+      email: payload.customer?.email ?? null,
       campaignId,
+      userAgent: payload.client_details?.user_agent ?? request.headers.get('user-agent'),
+      browser: payload.client_details?.user_agent ?? null,
+      country: null,
     });
 
     return NextResponse.json({ ok: true, shopDomain, attributed: result.attributed, campaignId: result.campaignId ?? null });

@@ -15,14 +15,29 @@ const isAuthorized = (request: Request) => {
   return authHeader === `Bearer ${env.CRON_SECRET}`;
 };
 
+const parsePositiveInt = (value: string | null, fallback: number, min: number, max: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+};
+
 export async function GET(request: Request) {
   try {
     if (!isAuthorized(request)) {
       return NextResponse.json({ ok: false, error: 'Unauthorized cron request.' }, { status: 401 });
     }
 
-    const dueCampaigns = await listDueScheduledCampaigns(25);
-    const queuedCampaigns = await listQueuedCampaigns(25);
+    const url = new URL(request.url);
+    const shardCount = parsePositiveInt(url.searchParams.get('shardCount'), 1, 1, 128);
+    const shardIndex = parsePositiveInt(url.searchParams.get('shardIndex'), 0, 0, shardCount - 1);
+    const maxCampaigns = parsePositiveInt(url.searchParams.get('maxCampaigns'), 25, 1, 250);
+    const maxBatches = parsePositiveInt(url.searchParams.get('maxBatches'), 20, 1, 2000);
+    const workerId = request.headers.get('x-worker-id') ?? `worker-${shardIndex}`;
+
+    const dueCampaigns = await listDueScheduledCampaigns(maxCampaigns, shardCount, shardIndex);
+    const queuedCampaigns = await listQueuedCampaigns(maxCampaigns, shardCount, shardIndex);
     const candidates = [...dueCampaigns, ...queuedCampaigns];
     const uniqueCandidates = Array.from(new Map(candidates.map((item) => [item.id, item])).values());
     const processed: Array<{
@@ -38,7 +53,7 @@ export async function GET(request: Request) {
 
     for (const campaign of uniqueCandidates) {
       try {
-        const result = await sendCampaign(campaign.shop_domain, campaign.id, { maxBatches: 20 });
+        const result = await sendCampaign(campaign.shop_domain, campaign.id, { maxBatches });
         processed.push({
           campaignId: campaign.id,
           shopDomain: campaign.shop_domain,
@@ -55,6 +70,11 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       ok: true,
+      workerId,
+      shardCount,
+      shardIndex,
+      maxCampaigns,
+      maxBatches,
       dueCount: dueCampaigns.length,
       queuedCount: queuedCampaigns.length,
       candidateCount: uniqueCandidates.length,

@@ -52,6 +52,49 @@ const sanitizeMediaUrl = (value: string | null | undefined): string | null => {
     return trimmed;
 };
 
+const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('Failed to read image blob.'));
+    reader.readAsDataURL(blob);
+});
+
+const resolveCampaignMediaUrl = async (sourceUrl: string | null | undefined, shopDomain: string): Promise<string | null> => {
+    const direct = sanitizeMediaUrl(sourceUrl);
+    if (direct) {
+        return direct;
+    }
+
+    const value = sourceUrl?.trim();
+    if (!value) {
+        return null;
+    }
+
+    let dataUrl = value;
+    if (value.startsWith('blob:')) {
+        const response = await fetch(value);
+        const blob = await response.blob();
+        dataUrl = await blobToDataUrl(blob);
+    }
+
+    if (!dataUrl.startsWith('data:image/')) {
+        return null;
+    }
+
+    const uploadResponse = await fetch('/api/media/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopDomain, dataUrl }),
+    });
+
+    const uploadPayload = await parseApiResponse(uploadResponse);
+    if (!uploadResponse.ok || !uploadPayload.json?.ok || !uploadPayload.json?.asset?.url) {
+        throw new Error(buildResponseError('Failed to upload campaign image.', uploadPayload));
+    }
+
+    return String(uploadPayload.json.asset.url);
+};
+
 const parseApiResponse = async (response: Response): Promise<{ json: any | null; text: string }> => {
     const text = await response.text();
 
@@ -163,10 +206,12 @@ export default function ScheduleCampaignPage() {
                 throw new Error('No subscribed users found in this segment.');
             }
 
-            const iconUrl = sanitizeMediaUrl(logo.preview);
-            const windowsImageUrl = sanitizeMediaUrl(windowsHero.preview);
-            const macosImageUrl = sanitizeMediaUrl(macHero.preview);
-            const androidImageUrl = sanitizeMediaUrl(androidHero.preview);
+            const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
+                resolveCampaignMediaUrl(logo.preview, shopDomain),
+                resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
+                resolveCampaignMediaUrl(macHero.preview, shopDomain),
+                resolveCampaignMediaUrl(androidHero.preview, shopDomain),
+            ]);
 
             const createResponse = await fetch('/api/campaigns', {
                 method: 'POST',
@@ -229,13 +274,6 @@ export default function ScheduleCampaignPage() {
                 }
             }
 
-            if (!iconUrl && logo.preview?.startsWith('data:')) {
-                toast({
-                    title: 'Note',
-                    description: 'Icon image was omitted because local cropped data URLs are not publicly accessible yet.',
-                });
-            }
-
             const toastTitle = sendingOption === 'schedule' ? "Campaign Scheduled!" : "Campaign Launched!";
             const toastDescription = sendingOption === 'schedule' ? "Your campaign has been scheduled." : "Your campaign has been successfully sent.";
             
@@ -262,10 +300,12 @@ export default function ScheduleCampaignPage() {
                 throw new Error('Set your Shopify subdomain in Settings before saving drafts.');
             }
 
-            const iconUrl = sanitizeMediaUrl(logo.preview);
-            const windowsImageUrl = sanitizeMediaUrl(windowsHero.preview);
-            const macosImageUrl = sanitizeMediaUrl(macHero.preview);
-            const androidImageUrl = sanitizeMediaUrl(androidHero.preview);
+            const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
+                resolveCampaignMediaUrl(logo.preview, shopDomain),
+                resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
+                resolveCampaignMediaUrl(macHero.preview, shopDomain),
+                resolveCampaignMediaUrl(androidHero.preview, shopDomain),
+            ]);
 
             const response = await fetch('/api/campaigns', {
                 method: 'POST',

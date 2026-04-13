@@ -1,0 +1,14 @@
+name = "push-eagle-cron-pinger"
+main = "src/worker.js"
+compatibility_date = "2026-04-14"
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+PROCESS_CAMPAIGNS_URL = "https://your-dashboard-domain/api/cron/process-campaigns"
+PROCESS_AUTOMATIONS_URL = "https://your-dashboard-domain/api/cron/process-automations"
+SHARD_COUNT = "4"
+MAX_CAMPAIGNS = "25"
+MAX_BATCHES = "20"
+MAX_AUTOMATION_JOBS = "200"

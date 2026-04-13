@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 import { env } from '@/lib/config/env';
 import { getNeonSql } from '@/lib/integrations/database/neon';
@@ -112,12 +112,37 @@ type RecordConversionInput = {
   occurredAt?: string | null;
   externalId?: string | null;
   campaignId?: string | null;
+  customerId?: string | null;
+  email?: string | null;
+  userAgent?: string | null;
+  platform?: string | null;
+  browser?: string | null;
+  country?: string | null;
 };
 
 type RegisterWebhookEventInput = {
   shopDomain: string;
   topic: string;
   eventId: string;
+};
+
+type AutomationRuleKey =
+  | 'welcome_subscriber'
+  | 'browse_abandonment_15m'
+  | 'cart_abandonment_30m'
+  | 'checkout_abandonment_30m'
+  | 'back_in_stock'
+  | 'price_drop'
+  | 'win_back_7d'
+  | 'post_purchase_followup';
+
+type AutomationJobPayload = {
+  title: string;
+  body: string;
+  targetUrl?: string | null;
+  iconUrl?: string | null;
+  imageUrl?: string | null;
+  campaignLabel?: string | null;
 };
 
 type UpsertMerchantProfileInput = {
@@ -380,6 +405,14 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS android_image_url TEXT`;
       await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS action_buttons JSONB`;
 
+      await sql`CREATE TABLE IF NOT EXISTS media_assets (
+        id TEXT PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        content_type TEXT NOT NULL,
+        data_base64 TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+
       await sql`CREATE TABLE IF NOT EXISTS merchant_settings (
         shop_domain TEXT PRIMARY KEY REFERENCES merchants(shop_domain) ON DELETE CASCADE,
         attribution_model TEXT NOT NULL DEFAULT 'impression',
@@ -481,6 +514,46 @@ const ensureSchema = async () => {
         UNIQUE (shop_domain, topic, event_id)
       )`;
 
+      await sql`CREATE TABLE IF NOT EXISTS automation_rules (
+        id TEXT PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        rule_key TEXT NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        config JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_domain, rule_key)
+      )`;
+
+      await sql`CREATE TABLE IF NOT EXISTS automation_jobs (
+        id TEXT PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        rule_key TEXT NOT NULL,
+        token_id BIGINT REFERENCES subscriber_tokens(id) ON DELETE SET NULL,
+        subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
+        dedupe_key TEXT,
+        payload JSONB NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        due_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        sent_at TIMESTAMPTZ
+      )`;
+
+      await sql`CREATE TABLE IF NOT EXISTS subscriber_activity_events (
+        id TEXT PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        external_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        page_url TEXT,
+        product_id TEXT,
+        cart_token TEXT,
+        metadata JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_status ON subscriber_tokens(shop_domain, status)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_created ON campaigns(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
@@ -494,6 +567,11 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_order ON shopify_order_items(shop_domain, order_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_product ON shopify_order_items(shop_domain, product_title)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_segments_shop_created ON segments(shop_domain, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_media_assets_shop_created ON media_assets(shop_domain, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_automation_rules_shop_rule ON automation_rules(shop_domain, rule_key)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_due ON automation_jobs(shop_domain, status, due_at)`;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_jobs_dedupe ON automation_jobs(shop_domain, dedupe_key) WHERE dedupe_key IS NOT NULL`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_external_created ON subscriber_activity_events(shop_domain, external_id, created_at DESC)`;
     })();
   }
 
@@ -561,6 +639,307 @@ const ensureMerchant = async (shopDomain: string) => {
 export const ensureMerchantAccount = async (shopDomain: string) => {
   await ensureSchema();
   await ensureMerchant(shopDomain);
+};
+
+const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean; config: Record<string, unknown> }> = [
+  { key: 'welcome_subscriber', enabled: true, config: { delayMinutes: 0 } },
+  { key: 'browse_abandonment_15m', enabled: true, config: { delayMinutes: 15 } },
+  { key: 'cart_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
+  { key: 'checkout_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
+  { key: 'back_in_stock', enabled: false, config: {} },
+  { key: 'price_drop', enabled: false, config: {} },
+  { key: 'win_back_7d', enabled: false, config: { delayDays: 7 } },
+  { key: 'post_purchase_followup', enabled: false, config: { delayDays: 2 } },
+];
+
+const ensureAutomationRules = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  for (const rule of DEFAULT_AUTOMATION_RULES) {
+    await sql`
+      INSERT INTO automation_rules (id, shop_domain, rule_key, enabled, config)
+      VALUES (${randomUUID()}, ${shopDomain}, ${rule.key}, ${rule.enabled}, ${JSON.stringify(rule.config)}::jsonb)
+      ON CONFLICT (shop_domain, rule_key) DO NOTHING
+    `;
+  }
+};
+
+export const listAutomationRules = async (shopDomain: string) => {
+  await ensureAutomationRules(shopDomain);
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT id, rule_key, enabled, config, updated_at
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+    ORDER BY rule_key ASC
+  `;
+
+  return rows.map((row) => ({
+    id: String(row.id),
+    key: String(row.rule_key),
+    enabled: Boolean(row.enabled),
+    config: (row.config ?? {}) as Record<string, unknown>,
+    updatedAt: row.updated_at ? String(row.updated_at) : null,
+  }));
+};
+
+export const upsertAutomationRule = async (
+  shopDomain: string,
+  ruleKey: AutomationRuleKey,
+  enabled: boolean,
+  config?: Record<string, unknown>,
+) => {
+  await ensureAutomationRules(shopDomain);
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    UPDATE automation_rules
+    SET enabled = ${enabled}, config = ${JSON.stringify(config ?? {})}::jsonb, updated_at = NOW()
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = ${ruleKey}
+    RETURNING id, rule_key, enabled, config, updated_at
+  `;
+
+  const row = rows[0];
+  return row
+    ? {
+        id: String(row.id),
+        key: String(row.rule_key),
+        enabled: Boolean(row.enabled),
+        config: (row.config ?? {}) as Record<string, unknown>,
+        updatedAt: row.updated_at ? String(row.updated_at) : null,
+      }
+    : null;
+};
+
+export const enqueueAutomationJob = async (input: {
+  shopDomain: string;
+  ruleKey: AutomationRuleKey;
+  tokenId?: number | null;
+  subscriberId?: number | null;
+  dedupeKey?: string | null;
+  dueAt?: Date;
+  payload: AutomationJobPayload;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const jobId = randomUUID();
+  const dueAt = input.dueAt ?? new Date();
+
+  const rows = await sql`
+    INSERT INTO automation_jobs (id, shop_domain, rule_key, token_id, subscriber_id, dedupe_key, payload, due_at)
+    VALUES (
+      ${jobId},
+      ${input.shopDomain},
+      ${input.ruleKey},
+      ${input.tokenId ?? null},
+      ${input.subscriberId ?? null},
+      ${input.dedupeKey ?? null},
+      ${JSON.stringify(input.payload)}::jsonb,
+      ${dueAt}
+    )
+    ON CONFLICT (shop_domain, dedupe_key) DO NOTHING
+    RETURNING id
+  `;
+
+  return rows[0] ? String(rows[0].id) : null;
+};
+
+export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIndex = 0) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
+  const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
+
+  const rows = await sql`
+    SELECT j.id, j.shop_domain, j.rule_key, j.token_id, j.subscriber_id, j.payload, t.fcm_token
+    FROM automation_jobs j
+    LEFT JOIN subscriber_tokens t ON t.id = j.token_id
+    WHERE j.status = 'pending'
+      AND j.due_at <= NOW()
+      AND (
+        ${safeShardCount} = 1
+        OR MOD(ABS(hashtext(j.id)), ${safeShardCount}) = ${safeShardIndex}
+      )
+    ORDER BY j.due_at ASC
+    LIMIT ${limit}
+  `;
+
+  return rows as Array<{
+    id: string;
+    shop_domain: string;
+    rule_key: string;
+    token_id: number | null;
+    subscriber_id: number | null;
+    payload: AutomationJobPayload;
+    fcm_token: string | null;
+  }>;
+};
+
+export const processAutomationJob = async (jobId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const claimRows = await sql`
+    UPDATE automation_jobs
+    SET status = 'processing', attempts = attempts + 1, updated_at = NOW()
+    WHERE id = ${jobId}
+      AND status = 'pending'
+    RETURNING id, shop_domain, token_id, payload
+  `;
+
+  const claim = claimRows[0] as
+    | { id: string; shop_domain: string; token_id: number | null; payload: AutomationJobPayload }
+    | undefined;
+  if (!claim) {
+    return { processed: false };
+  }
+
+  const tokenRows = await sql`
+    SELECT fcm_token, status
+    FROM subscriber_tokens
+    WHERE id = ${claim.token_id ?? 0}
+    LIMIT 1
+  `;
+  const token = String(tokenRows[0]?.fcm_token ?? '');
+  const tokenStatus = String(tokenRows[0]?.status ?? '');
+
+  if (!token || tokenStatus !== 'active') {
+    await sql`
+      UPDATE automation_jobs
+      SET status = 'failed', error_message = 'Missing active token.', updated_at = NOW()
+      WHERE id = ${jobId}
+    `;
+    return { processed: false, error: 'Missing active token.' };
+  }
+
+  try {
+    const payload = claim.payload ?? { title: 'Notification', body: '' };
+    const messaging = getFirebaseAdminMessaging();
+    const message = {
+      token,
+      notification: {
+        title: payload.title,
+        body: payload.body,
+        imageUrl: payload.imageUrl ?? undefined,
+      },
+      webpush: {
+        fcmOptions: { link: payload.targetUrl ?? undefined },
+        notification: {
+          icon: payload.iconUrl ?? undefined,
+          image: payload.imageUrl ?? undefined,
+        },
+      },
+      data: {
+        source: 'automation',
+        ruleKey: String((payload as { ruleKey?: string }).ruleKey ?? ''),
+      },
+    };
+
+    await messaging.send(message);
+
+    await sql`
+      UPDATE automation_jobs
+      SET status = 'sent', sent_at = NOW(), updated_at = NOW(), error_message = NULL
+      WHERE id = ${jobId}
+    `;
+
+    return { processed: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to send automation message.';
+    await sql`
+      UPDATE automation_jobs
+      SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
+          error_message = ${message},
+          due_at = CASE WHEN attempts >= 5 THEN due_at ELSE NOW() + INTERVAL '5 minutes' END,
+          updated_at = NOW()
+      WHERE id = ${jobId}
+    `;
+
+    return { processed: false, error: message };
+  }
+};
+
+export const recordSubscriberActivity = async (input: {
+  shopDomain: string;
+  externalId: string;
+  eventType: 'page_view' | 'product_view' | 'add_to_cart' | 'checkout_start';
+  pageUrl?: string | null;
+  productId?: string | null;
+  cartToken?: string | null;
+  metadata?: Record<string, unknown> | null;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  await ensureAutomationRules(input.shopDomain);
+
+  const eventId = randomUUID();
+  await sql`
+    INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
+    VALUES (
+      ${eventId},
+      ${input.shopDomain},
+      ${input.externalId},
+      ${input.eventType},
+      ${input.pageUrl ?? null},
+      ${input.productId ?? null},
+      ${input.cartToken ?? null},
+      ${JSON.stringify(input.metadata ?? {})}::jsonb
+    )
+  `;
+
+  if (input.eventType === 'product_view') {
+    const ruleRows = await sql`
+      SELECT enabled, config
+      FROM automation_rules
+      WHERE shop_domain = ${input.shopDomain}
+        AND rule_key = 'browse_abandonment_15m'
+      LIMIT 1
+    `;
+
+    const enabled = Boolean(ruleRows[0]?.enabled);
+    if (enabled) {
+      const delayMinutes = Math.max(1, Number((ruleRows[0]?.config as { delayMinutes?: number } | undefined)?.delayMinutes ?? 15));
+
+      const tokenRows = await sql`
+        SELECT t.id AS token_id, s.id AS subscriber_id
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id
+        WHERE s.shop_domain = ${input.shopDomain}
+          AND s.external_id = ${input.externalId}
+          AND t.status = 'active'
+        ORDER BY t.last_seen_at DESC
+        LIMIT 1
+      `;
+
+      const tokenId = Number(tokenRows[0]?.token_id ?? 0) || null;
+      const subscriberId = Number(tokenRows[0]?.subscriber_id ?? 0) || null;
+      if (tokenId) {
+        const dueAt = new Date(Date.now() + delayMinutes * 60 * 1000);
+        await enqueueAutomationJob({
+          shopDomain: input.shopDomain,
+          ruleKey: 'browse_abandonment_15m',
+          tokenId,
+          subscriberId,
+          dedupeKey: `browse15:${input.shopDomain}:${input.externalId}:${input.productId ?? input.pageUrl ?? 'unknown'}`,
+          dueAt,
+          payload: {
+            title: 'Still thinking about it?',
+            body: 'The item you viewed is still waiting for you.',
+            targetUrl: input.pageUrl ?? null,
+            campaignLabel: 'browse_abandonment_15m',
+          },
+        });
+      }
+    }
+  }
+
+  return { eventId };
 };
 
 export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) => {
@@ -1218,19 +1597,58 @@ export const countCampaignAudienceTokens = async (shopDomain: string, segmentId?
   return rows.length;
 };
 
-export const listQueuedCampaigns = async (limit = 25) => {
+export const listQueuedCampaigns = async (limit = 25, shardCount = 1, shardIndex = 0) => {
   await ensureSchema();
   const sql = getNeonSql();
+
+  const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
+  const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
 
   const rows = await sql`
     SELECT id, shop_domain
     FROM campaigns
     WHERE status = 'queued'
+      AND (
+        ${safeShardCount} = 1
+        OR MOD(ABS(hashtext(id)), ${safeShardCount}) = ${safeShardIndex}
+      )
     ORDER BY scheduled_at ASC NULLS LAST, created_at ASC
     LIMIT ${limit}
   `;
 
   return rows as Array<{ id: string; shop_domain: string }>;
+};
+
+export const getCampaignProgress = async (shopDomain: string, campaignId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const campaign = await getCampaignById(shopDomain, campaignId);
+  if (!campaign) {
+    return null;
+  }
+
+  const deliveredRows = await sql`
+    SELECT COUNT(*)::INT AS count
+    FROM campaign_deliveries
+    WHERE campaign_id = ${campaignId}
+      AND shop_domain = ${shopDomain}
+  `;
+
+  const totalAudience = await countCampaignAudienceTokens(shopDomain, (campaign as { segment_id?: string | null }).segment_id ?? null);
+  const delivered = Number(deliveredRows[0]?.count ?? 0);
+  const total = Math.max(totalAudience, delivered);
+  const remaining = Math.max(total - delivered, 0);
+  const percentComplete = total > 0 ? Math.min(100, (delivered / total) * 100) : 0;
+
+  return {
+    campaignId,
+    status: String((campaign as { status?: string }).status ?? 'draft'),
+    delivered,
+    totalAudience: total,
+    remaining,
+    percentComplete,
+  };
 };
 
 export const getMerchantOverview = async (shopDomain: string) => {
@@ -1357,6 +1775,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   const serializedDeviceContext = input.deviceContext ? JSON.stringify(input.deviceContext) : null;
 
   await ensureMerchant(input.shopDomain);
+  await ensureAutomationRules(input.shopDomain);
 
   const subscriberRows = await sql`
     INSERT INTO subscribers (shop_domain, external_id, browser, platform, locale, country, city, device_context, last_seen_at)
@@ -1406,9 +1825,34 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     RETURNING id
   `;
 
+  const tokenId = Number(tokenRows[0]?.id);
+
+  const welcomeRuleRows = await sql`
+    SELECT enabled
+    FROM automation_rules
+    WHERE shop_domain = ${input.shopDomain}
+      AND rule_key = 'welcome_subscriber'
+    LIMIT 1
+  `;
+
+  if (Boolean(welcomeRuleRows[0]?.enabled)) {
+    await enqueueAutomationJob({
+      shopDomain: input.shopDomain,
+      ruleKey: 'welcome_subscriber',
+      tokenId,
+      subscriberId,
+      dedupeKey: `welcome:${input.shopDomain}:${input.token}`,
+      payload: {
+        title: 'Thanks for subscribing',
+        body: 'You will now receive updates, offers, and reminders from this store.',
+        campaignLabel: 'welcome_subscriber',
+      },
+    });
+  }
+
   return {
     subscriberId,
-    tokenId: Number(tokenRows[0]?.id),
+    tokenId,
   };
 };
 
@@ -1824,9 +2268,12 @@ export const getCampaignResults = async (shopDomain: string, campaignId: string)
   };
 };
 
-export const listDueScheduledCampaigns = async (limit = 25) => {
+export const listDueScheduledCampaigns = async (limit = 25, shardCount = 1, shardIndex = 0) => {
   await ensureSchema();
   const sql = getNeonSql();
+
+  const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
+  const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
 
   const rows = await sql`
     SELECT id, shop_domain, scheduled_at
@@ -1834,6 +2281,10 @@ export const listDueScheduledCampaigns = async (limit = 25) => {
     WHERE status = 'scheduled'
       AND scheduled_at IS NOT NULL
       AND scheduled_at <= NOW()
+      AND (
+        ${safeShardCount} = 1
+        OR MOD(ABS(hashtext(id)), ${safeShardCount}) = ${safeShardIndex}
+      )
     ORDER BY scheduled_at ASC
     LIMIT ${limit}
   `;
@@ -2109,6 +2560,46 @@ export const cleanupMerchantData = async (shopDomain: string) => {
     DELETE FROM merchants
     WHERE shop_domain = ${shopDomain}
   `;
+};
+
+export const createMediaAsset = async (shopDomain: string, contentType: string, dataBase64: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  const assetId = randomUUID();
+
+  await sql`
+    INSERT INTO media_assets (id, shop_domain, content_type, data_base64)
+    VALUES (${assetId}, ${shopDomain}, ${contentType}, ${dataBase64})
+  `;
+
+  return {
+    id: assetId,
+    url: `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/api/media/${assetId}`,
+  };
+};
+
+export const getMediaAsset = async (assetId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT id, shop_domain, content_type, data_base64, created_at
+    FROM media_assets
+    WHERE id = ${assetId}
+    LIMIT 1
+  `;
+
+  return (rows[0] ?? null) as
+    | {
+        id: string;
+        shop_domain: string;
+        content_type: string;
+        data_base64: string;
+        created_at: string | Date;
+      }
+    | null;
 };
 
 export const markMerchantUninstalled = async (shopDomain: string) => {
@@ -2389,15 +2880,44 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
   const settings = await getAttributionSettings(input.shopDomain);
   const occurredAt = input.occurredAt ? new Date(input.occurredAt) : new Date();
 
+  const normalizedEmail = input.email?.trim().toLowerCase() ?? null;
+  const emailExternalId = normalizedEmail
+    ? `email:${createHash('sha256').update(normalizedEmail).digest('hex').slice(0, 24)}`
+    : null;
+  const customerExternalId = input.customerId?.trim() ? `shopify_customer:${input.customerId.trim()}` : null;
+
+  const externalIdCandidates = Array.from(
+    new Set(
+      [input.externalId?.trim() ?? null, customerExternalId, emailExternalId].filter((value): value is string => Boolean(value)),
+    ),
+  );
+
+  const existingAttribution = await sql`
+    SELECT campaign_id
+    FROM campaign_deliveries
+    WHERE shop_domain = ${input.shopDomain}
+      AND order_id = ${input.orderId}
+    UNION ALL
+    SELECT campaign_id
+    FROM campaign_clicks
+    WHERE shop_domain = ${input.shopDomain}
+      AND order_id = ${input.orderId}
+    LIMIT 1
+  `;
+
+  if (existingAttribution[0]?.campaign_id) {
+    return { attributed: true, campaignId: String(existingAttribution[0].campaign_id), model: settings.attributionModel };
+  }
+
   if (settings.attributionModel === 'click') {
     const clickWindowHours = Math.max(1, settings.clickWindowDays) * 24;
-    const clickCandidates = input.externalId
+    const clickCandidates = externalIdCandidates.length > 0
       ? await sql`
         SELECT c.id, c.campaign_id
         FROM campaign_clicks c
         JOIN subscribers s ON s.id = c.subscriber_id
         WHERE c.shop_domain = ${input.shopDomain}
-          AND s.external_id = ${input.externalId}
+          AND s.external_id = ANY(${externalIdCandidates})
           AND c.clicked_at >= ${new Date(occurredAt.getTime() - clickWindowHours * 60 * 60 * 1000)}
         ORDER BY c.clicked_at DESC
         LIMIT 1
@@ -2416,6 +2936,7 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
         UPDATE campaign_clicks
         SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
         WHERE id = ${Number(matchedClick.id)}
+          AND order_id IS NULL
       `;
     }
 
@@ -2429,13 +2950,13 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
   }
 
   const impressionWindowHours = Math.max(1, settings.impressionWindowDays) * 24;
-  const deliveryCandidates = input.externalId
+  const deliveryCandidates = externalIdCandidates.length > 0
     ? await sql`
       SELECT d.id, d.campaign_id
       FROM campaign_deliveries d
       JOIN subscribers s ON s.id = d.subscriber_id
       WHERE d.shop_domain = ${input.shopDomain}
-        AND s.external_id = ${input.externalId}
+        AND s.external_id = ANY(${externalIdCandidates})
         AND d.delivered_at >= ${new Date(occurredAt.getTime() - impressionWindowHours * 60 * 60 * 1000)}
       ORDER BY d.delivered_at DESC
       LIMIT 1
@@ -2443,17 +2964,31 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     : [];
 
   const matchedDelivery = deliveryCandidates[0];
-  const matchedCampaignId = (matchedDelivery?.campaign_id as string | undefined) ?? input.campaignId ?? null;
+  const fallbackCampaignDelivery = !matchedDelivery && input.campaignId
+    ? await sql`
+      SELECT d.id, d.campaign_id
+      FROM campaign_deliveries d
+      WHERE d.shop_domain = ${input.shopDomain}
+        AND d.campaign_id = ${input.campaignId}
+        AND d.delivered_at >= ${new Date(occurredAt.getTime() - impressionWindowHours * 60 * 60 * 1000)}
+      ORDER BY d.delivered_at DESC
+      LIMIT 1
+    `
+    : [];
+
+  const matched = matchedDelivery ?? fallbackCampaignDelivery[0];
+  const matchedCampaignId = (matched?.campaign_id as string | undefined) ?? input.campaignId ?? null;
 
   if (!matchedCampaignId) {
     return { attributed: false };
   }
 
-  if (matchedDelivery?.id) {
+  if (matched?.id) {
     await sql`
       UPDATE campaign_deliveries
       SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
-      WHERE id = ${Number(matchedDelivery.id)}
+      WHERE id = ${Number(matched.id)}
+        AND order_id IS NULL
     `;
   }
 

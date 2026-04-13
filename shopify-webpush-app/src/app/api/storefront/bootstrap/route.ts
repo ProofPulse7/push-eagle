@@ -67,6 +67,7 @@ export async function GET(request: Request) {
       externalId,
       tokenEndpoint: '/apps/push-eagle/token',
       conversionEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/conversion`,
+      activityEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/activity`,
       iosHomeScreenEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/ios-home-screen`,
       optIn,
       shopifyCapabilities,
