@@ -165,6 +165,14 @@ export default function ScheduleCampaignPage() {
                 if (!sendResponse.ok || !sendResult?.ok) {
                     throw new Error(sendResult?.error ?? 'Failed to send campaign.');
                 }
+
+                if (Number(sendResult.successCount ?? 0) <= 0) {
+                    throw new Error(
+                        Number(sendResult.recipientCount ?? 0) <= 0
+                            ? 'No active browser notification tokens found. Grow subscribers first and retry.'
+                            : 'Campaign send was attempted but no notifications were delivered. Please check Firebase setup and token health.',
+                    );
+                }
             }
 
             const toastTitle = sendingOption === 'schedule' ? "Campaign Scheduled!" : "Campaign Launched!";

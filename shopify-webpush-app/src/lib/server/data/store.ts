@@ -1176,6 +1176,11 @@ export const resolveCampaignAudience = async (shopDomain: string, segmentId?: st
   );
 };
 
+export const countCampaignAudienceTokens = async (shopDomain: string, segmentId?: string | null) => {
+  const rows = await resolveCampaignAudience(shopDomain, segmentId);
+  return rows.length;
+};
+
 export const getMerchantOverview = async (shopDomain: string) => {
   await ensureSchema();
   const sql = getNeonSql();
@@ -1846,15 +1851,11 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
   if (recipients.length === 0) {
     await sql`
       UPDATE campaigns
-      SET status = 'sent', sent_at = NOW(), delivery_count = 0
-      WHERE id = ${campaignId}
+      SET status = ${previousStatus}, sent_at = NULL, delivery_count = 0
+      WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
     `;
 
-    return {
-      successCount: 0,
-      failureCount: 0,
-      recipientCount: 0,
-    };
+    throw new Error('No active browser notification tokens found for this audience. Ask visitors to allow notifications first.');
   }
 
   try {

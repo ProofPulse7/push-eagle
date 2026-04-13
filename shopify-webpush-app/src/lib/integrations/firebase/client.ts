@@ -14,6 +14,17 @@ const firebaseConfig = {
   measurementId: env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
+export const isFirebaseClientMessagingConfigured = () => {
+  return Boolean(
+    firebaseConfig.apiKey &&
+      firebaseConfig.authDomain &&
+      firebaseConfig.projectId &&
+      firebaseConfig.messagingSenderId &&
+      firebaseConfig.appId &&
+      env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+  );
+};
+
 export const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
 let analyticsPromise: Promise<Analytics | null> | null = null;

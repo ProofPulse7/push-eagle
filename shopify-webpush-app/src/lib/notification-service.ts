@@ -1,6 +1,7 @@
 'use client';
 
 import { requestBrowserPushToken } from '@/lib/services/web-push/push-service';
+import { isFirebaseClientMessagingConfigured } from '@/lib/integrations/firebase/client';
 
 
 type LivePreviewPayload = {
@@ -11,32 +12,75 @@ type LivePreviewPayload = {
     image?: string | null;
 };
 
+const showLocalPreview = async (payload: LivePreviewPayload) => {
+    const registration = await navigator.serviceWorker.getRegistration();
+
+    if (registration) {
+        await registration.showNotification(payload.title, {
+            body: payload.body,
+            icon: payload.icon ?? undefined,
+            image: payload.image ?? undefined,
+            data: {
+                url: payload.url ?? undefined,
+            },
+        });
+        return;
+    }
+
+    new Notification(payload.title, {
+        body: payload.body,
+        icon: payload.icon ?? undefined,
+        image: payload.image ?? undefined,
+    });
+};
+
 export async function handleSendLivePreview(payload: LivePreviewPayload) {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
         throw new Error("Push notifications are not supported by this browser.");
     }
 
-    const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
+    const permission = Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission();
 
-    if (!VAPID_PUBLIC_KEY) {
-        throw new Error("Firebase VAPID key is not configured. Please add NEXT_PUBLIC_FIREBASE_VAPID_KEY.");
+    if (permission !== 'granted') {
+        throw new Error('Notification permission denied.');
     }
 
-    const token = await requestBrowserPushToken();
-    if (!token) {
-        throw new Error('Notification permission denied or token could not be generated.');
+    if (!isFirebaseClientMessagingConfigured()) {
+        await showLocalPreview(payload);
+        return;
     }
 
-    const response = await fetch('/api/notifications/preview', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ token, payload }),
-    });
+    try {
+        const token = await requestBrowserPushToken();
+        if (!token) {
+            throw new Error('Token unavailable');
+        }
 
-    const result = await response.json();
-    if (!response.ok || !result?.ok) {
-        throw new Error(result?.error ?? 'Failed to send live preview notification.');
+        const response = await fetch('/api/notifications/preview', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ token, payload }),
+        });
+
+        const result = await response.json();
+        if (!response.ok || !result?.ok) {
+            throw new Error(result?.error ?? 'Failed to send live preview notification.');
+        }
+    } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (
+            message.includes('missing-app-config-values') ||
+            message.includes('projectId') ||
+            message.includes('Token unavailable')
+        ) {
+            await showLocalPreview(payload);
+            return;
+        }
+
+        throw error;
     }
 }

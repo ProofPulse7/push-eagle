@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { getMerchantOverview, listSegments } from '@/lib/server/data/store';
+import { countCampaignAudienceTokens, listSegments } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -8,9 +8,12 @@ export const runtime = 'nodejs';
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const overview = await getMerchantOverview(shopDomain);
     const dynamicSegments = await listSegments(shopDomain);
-    const subscriberCount = Number(overview.subscriberCount ?? 0);
+
+    const [allCount, segmentCounts] = await Promise.all([
+      countCampaignAudienceTokens(shopDomain, 'all'),
+      Promise.all(dynamicSegments.map((segment) => countCampaignAudienceTokens(shopDomain, segment.id))),
+    ]);
 
     return NextResponse.json({
       ok: true,
@@ -19,12 +22,12 @@ export async function GET(request: Request) {
         {
           id: 'all',
           name: 'All Subscribers',
-          count: subscriberCount,
+          count: allCount,
         },
-        ...dynamicSegments.map((segment) => ({
+        ...dynamicSegments.map((segment, index) => ({
           id: segment.id,
           name: segment.name,
-          count: segment.subscriberCount,
+          count: Number(segmentCounts[index] ?? 0),
         })),
       ],
     });
