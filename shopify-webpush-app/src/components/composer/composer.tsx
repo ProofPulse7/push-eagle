@@ -102,7 +102,7 @@ export function Composer() {
         if (imageType === 'logo') {
             setLogo({ file, preview: previewUrl });
         } else {
-            const newImageValue = { file, preview: previewUrl };
+            const newImageValue = { file, preview: previewUrl, originalPreview: previewUrl };
             setWindowsHero(newImageValue);
             setMacHero(newImageValue);
             setAndroidHero(newImageValue);
@@ -125,11 +125,11 @@ export function Composer() {
         }
 
         if (type === 'windows') {
-            setWindowsHero({ ...windowsHero, preview: croppedDataUrl, file: null });
+            setWindowsHero({ ...windowsHero, preview: croppedDataUrl });
         } else if (type === 'mac') {
-            setMacHero({ ...macHero, preview: croppedDataUrl, file: null });
+            setMacHero({ ...macHero, preview: croppedDataUrl });
         } else if (type === 'android') {
-            setAndroidHero({ ...androidHero, preview: croppedDataUrl, file: null });
+            setAndroidHero({ ...androidHero, preview: croppedDataUrl });
         }
 
         const warningSetter = warningSetters[type as keyof typeof warningSetters];

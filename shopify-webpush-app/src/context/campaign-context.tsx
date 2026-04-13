@@ -3,7 +3,7 @@ import { createContext, useState, useContext, ReactNode, useEffect } from 'react
 import { useSettings } from '@/context/settings-context';
 
 type ActionButton = { title: string; link: string };
-type ImageValue = { file: File | null; preview: string | null };
+type ImageValue = { file: File | null; preview: string | null; originalPreview: string | null };
 
 export interface CampaignContextType {
     title: string;
@@ -47,9 +47,9 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [message, setMessage] = useState('');
     const [primaryLink, setPrimaryLink] = useState('');
     const [actionButtons, setActionButtons] = useState<ActionButton[]>([]);
-    const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null });
-    const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null });
-    const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null });
+    const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
+    const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
+    const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
     const { logo, setLogo } = useSettings();
     const [sendingOption, setSendingOption] = useState('now');
     const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
