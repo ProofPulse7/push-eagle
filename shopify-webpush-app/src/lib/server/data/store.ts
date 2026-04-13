@@ -1145,7 +1145,7 @@ export const resolveCampaignAudience = async (
 
   if (!segmentId || segmentId === 'all') {
     const rows = await sql`
-      SELECT DISTINCT ON (s.id)
+      SELECT
         t.id AS token_id,
         t.fcm_token,
         s.id AS subscriber_id,
@@ -1153,14 +1153,19 @@ export const resolveCampaignAudience = async (
         s.platform
       FROM subscribers s
       JOIN subscriber_tokens t ON t.subscriber_id = s.id
-      LEFT JOIN campaign_deliveries cd
-        ON cd.campaign_id = ${excludeDeliveredCampaignId ?? null}
-       AND cd.token_id = t.id
       WHERE s.shop_domain = ${shopDomain}
         AND t.shop_domain = ${shopDomain}
         AND t.status = 'active'
-        AND (${excludeDeliveredCampaignId ?? null} IS NULL OR cd.id IS NULL)
-      ORDER BY s.id, t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+        AND (
+          ${excludeDeliveredCampaignId ?? null} IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM campaign_deliveries cd
+            WHERE cd.campaign_id = ${excludeDeliveredCampaignId ?? null}
+              AND cd.token_id = t.id
+          )
+        )
+      ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
     `;
     return rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null; platform: string | null }>;
   }
@@ -1180,7 +1185,7 @@ export const resolveCampaignAudience = async (
   }
 
   const rows = await sql`
-    SELECT DISTINCT ON (s.id)
+    SELECT
       t.id AS token_id,
       t.fcm_token,
       s.id AS subscriber_id,
@@ -1188,14 +1193,19 @@ export const resolveCampaignAudience = async (
       s.platform
     FROM subscribers s
     JOIN subscriber_tokens t ON t.subscriber_id = s.id
-    LEFT JOIN campaign_deliveries cd
-      ON cd.campaign_id = ${excludeDeliveredCampaignId ?? null}
-     AND cd.token_id = t.id
     WHERE s.shop_domain = ${shopDomain}
       AND t.shop_domain = ${shopDomain}
       AND t.status = 'active'
-      AND (${excludeDeliveredCampaignId ?? null} IS NULL OR cd.id IS NULL)
-    ORDER BY s.id, t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+      AND (
+        ${excludeDeliveredCampaignId ?? null} IS NULL
+        OR NOT EXISTS (
+          SELECT 1
+          FROM campaign_deliveries cd
+          WHERE cd.campaign_id = ${excludeDeliveredCampaignId ?? null}
+            AND cd.token_id = t.id
+        )
+      )
+    ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
   `;
 
   return (rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null; platform: string | null }>).filter((row) =>
