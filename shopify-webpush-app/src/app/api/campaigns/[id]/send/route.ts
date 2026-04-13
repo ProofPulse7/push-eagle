@@ -5,6 +5,7 @@ import { sendCampaign } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 const bodySchema = z.object({
   shopDomain: z.string().optional(),

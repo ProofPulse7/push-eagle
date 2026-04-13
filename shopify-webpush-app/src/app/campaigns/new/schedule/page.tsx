@@ -39,6 +39,46 @@ const buildScheduledAt = (scheduledDate?: Date, scheduledTime?: string) => {
     return result;
 };
 
+const sanitizeMediaUrl = (value: string | null | undefined): string | null => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+        return null;
+    }
+
+    return trimmed;
+};
+
+const parseApiResponse = async (response: Response): Promise<{ json: any | null; text: string }> => {
+    const text = await response.text();
+
+    if (!text) {
+        return { json: null, text: '' };
+    }
+
+    try {
+        return { json: JSON.parse(text), text };
+    } catch {
+        return { json: null, text };
+    }
+};
+
+const buildResponseError = (fallback: string, payload: { json: any | null; text: string }) => {
+    const jsonError = payload.json && typeof payload.json === 'object' ? payload.json.error : null;
+    if (typeof jsonError === 'string' && jsonError.trim()) {
+        return jsonError;
+    }
+
+    if (payload.text) {
+        return `${fallback} ${payload.text.slice(0, 180)}`;
+    }
+
+    return fallback;
+};
+
 
 export default function ScheduleCampaignPage() {
     const {
@@ -123,6 +163,11 @@ export default function ScheduleCampaignPage() {
                 throw new Error('No subscribed users found in this segment.');
             }
 
+            const iconUrl = sanitizeMediaUrl(logo.preview);
+            const windowsImageUrl = sanitizeMediaUrl(windowsHero.preview);
+            const macosImageUrl = sanitizeMediaUrl(macHero.preview);
+            const androidImageUrl = sanitizeMediaUrl(androidHero.preview);
+
             const createResponse = await fetch('/api/campaigns', {
                 method: 'POST',
                 headers: {
@@ -133,11 +178,11 @@ export default function ScheduleCampaignPage() {
                     title: title || 'Untitled Campaign',
                     body: message || '',
                     targetUrl: primaryLink || null,
-                    iconUrl: logo.preview,
-                    imageUrl: macHero.preview,
-                    windowsImageUrl: windowsHero.preview,
-                    macosImageUrl: macHero.preview,
-                    androidImageUrl: androidHero.preview,
+                    iconUrl,
+                    imageUrl: macosImageUrl,
+                    windowsImageUrl,
+                    macosImageUrl,
+                    androidImageUrl,
                     actionButtons: actionButtons
                         .filter((button) => button.title?.trim() && button.link?.trim())
                         .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
@@ -147,9 +192,10 @@ export default function ScheduleCampaignPage() {
                 }),
             });
 
-            const createResult = await createResponse.json();
+            const createPayload = await parseApiResponse(createResponse);
+            const createResult = createPayload.json;
             if (!createResponse.ok || !createResult?.ok || !createResult?.campaign?.id) {
-                throw new Error(createResult?.error ?? 'Failed to create campaign.');
+                throw new Error(buildResponseError('Failed to create campaign.', createPayload));
             }
 
             if (sendingOption !== 'schedule') {
@@ -161,9 +207,10 @@ export default function ScheduleCampaignPage() {
                     body: JSON.stringify({ shopDomain }),
                 });
 
-                const sendResult = await sendResponse.json();
+                const sendPayload = await parseApiResponse(sendResponse);
+                const sendResult = sendPayload.json;
                 if (!sendResponse.ok || !sendResult?.ok) {
-                    throw new Error(sendResult?.error ?? 'Failed to send campaign.');
+                    throw new Error(buildResponseError('Failed to send campaign.', sendPayload));
                 }
 
                 if (Number(sendResult.successCount ?? 0) <= 0) {
@@ -173,6 +220,13 @@ export default function ScheduleCampaignPage() {
                             : 'Campaign send was attempted but no notifications were delivered. Please check Firebase setup and token health.',
                     );
                 }
+            }
+
+            if (!iconUrl && logo.preview?.startsWith('data:')) {
+                toast({
+                    title: 'Note',
+                    description: 'Icon image was omitted because local cropped data URLs are not publicly accessible yet.',
+                });
             }
 
             const toastTitle = sendingOption === 'schedule' ? "Campaign Scheduled!" : "Campaign Launched!";
@@ -201,6 +255,11 @@ export default function ScheduleCampaignPage() {
                 throw new Error('Set your Shopify subdomain in Settings before saving drafts.');
             }
 
+            const iconUrl = sanitizeMediaUrl(logo.preview);
+            const windowsImageUrl = sanitizeMediaUrl(windowsHero.preview);
+            const macosImageUrl = sanitizeMediaUrl(macHero.preview);
+            const androidImageUrl = sanitizeMediaUrl(androidHero.preview);
+
             const response = await fetch('/api/campaigns', {
                 method: 'POST',
                 headers: {
@@ -211,11 +270,11 @@ export default function ScheduleCampaignPage() {
                     title: title || 'Untitled Campaign',
                     body: message || '',
                     targetUrl: primaryLink || null,
-                    iconUrl: logo.preview,
-                    imageUrl: macHero.preview,
-                    windowsImageUrl: windowsHero.preview,
-                    macosImageUrl: macHero.preview,
-                    androidImageUrl: androidHero.preview,
+                    iconUrl,
+                    imageUrl: macosImageUrl,
+                    windowsImageUrl,
+                    macosImageUrl,
+                    androidImageUrl,
                     actionButtons: actionButtons
                         .filter((button) => button.title?.trim() && button.link?.trim())
                         .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
@@ -224,9 +283,10 @@ export default function ScheduleCampaignPage() {
                 }),
             });
 
-            const result = await response.json();
+            const payload = await parseApiResponse(response);
+            const result = payload.json;
             if (!response.ok || !result?.ok) {
-                throw new Error(result?.error ?? 'Failed to save draft.');
+                throw new Error(buildResponseError('Failed to save draft.', payload));
             }
 
             toast({
