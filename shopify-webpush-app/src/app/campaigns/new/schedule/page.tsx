@@ -58,11 +58,41 @@ export default function ScheduleCampaignPage() {
     const [isLaunching, setIsLaunching] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [previewDevice, setPreviewDevice] = useState('windows');
+    const [segmentDisplayName, setSegmentDisplayName] = useState('All Subscribers');
+    const [segmentSubscriberCount, setSegmentSubscriberCount] = useState(0);
 
     const router = useRouter();
     const { toast } = useToast();
     const { shopDomain } = useSettings();
     const scheduledAt = buildScheduledAt(scheduledDate, scheduledTime);
+
+    useEffect(() => {
+        if (!shopDomain) {
+            return;
+        }
+
+        let active = true;
+        fetch(`/api/campaigns/audience?shop=${encodeURIComponent(shopDomain)}`)
+            .then((response) => response.json())
+            .then((data) => {
+                if (!active || !data?.ok || !Array.isArray(data.segments)) {
+                    return;
+                }
+
+                const selected = data.segments.find((segment: { id: string }) => segment.id === segmentId) ?? data.segments[0];
+                if (!selected) {
+                    return;
+                }
+
+                setSegmentDisplayName(String(selected.name ?? 'All Subscribers'));
+                setSegmentSubscriberCount(Number(selected.count ?? 0));
+            })
+            .catch(() => undefined);
+
+        return () => {
+            active = false;
+        };
+    }, [shopDomain, segmentId]);
     
     const handleLaunchCampaign = async (status: 'Sent' | 'Scheduled') => {
         setIsLaunching(true);
@@ -79,6 +109,10 @@ export default function ScheduleCampaignPage() {
                 if (scheduledAt.getTime() <= Date.now()) {
                     throw new Error('Scheduled time must be in the future.');
                 }
+            }
+
+            if (segmentSubscriberCount <= 0) {
+                throw new Error('No subscribed users found in this segment.');
             }
 
             const createResponse = await fetch('/api/campaigns', {
@@ -229,7 +263,7 @@ export default function ScheduleCampaignPage() {
                             </div>
                             <div className="space-y-1">
                                 <p className="text-sm text-muted-foreground">Campaign gets delivered to</p>
-                                <p className="font-medium flex items-center gap-2"><Users className="h-4 w-4" /> All Subscribers (6 subscribers)</p>
+                                <p className="font-medium flex items-center gap-2"><Users className="h-4 w-4" /> {segmentDisplayName} ({segmentSubscriberCount.toLocaleString()} subscribers)</p>
                             </div>
                             <div className="space-y-1">
                                 <p className="text-sm text-muted-foreground">Starts (Pakistan Standard Time)</p>
@@ -284,7 +318,7 @@ export default function ScheduleCampaignPage() {
                 <Button 
                     size="lg" 
                     onClick={() => handleLaunchCampaign(sendingOption === 'schedule' ? 'Scheduled' : 'Sent')} 
-                    disabled={isLaunching || isSaving || !title}
+                    disabled={isLaunching || isSaving || !title || segmentSubscriberCount <= 0}
                 >
                     {isLaunching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
                     {isLaunching ? 'Processing...' : (sendingOption === 'schedule' ? 'Schedule Campaign' : 'Launch Campaign')}

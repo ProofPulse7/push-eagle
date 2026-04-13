@@ -1,10 +1,11 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCampaignState } from '@/context/campaign-context';
+import { useSettings } from '@/context/settings-context';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -40,15 +41,15 @@ const timeOptions = Array.from({ length: 48 }, (_, i) => {
     });
 });
 
-const segments = [
-    { id: 'all', name: 'All Subscribers', count: '0' },
-    { id: 'high-value', name: 'High-Value Customers', count: '15,200' },
-    { id: 'new-subs', name: 'New Subscribers (Last 30 Days)', count: '8,430' },
-    { id: 'windows', name: 'Windows Users', count: '565,794' },
-];
+type AudienceSegment = {
+    id: string;
+    name: string;
+    count: number;
+};
 
 export default function CampaignDetailsPage() {
     const router = useRouter();
+    const { shopDomain } = useSettings();
     const {
         sendingOption,
         setSendingOption,
@@ -64,10 +65,48 @@ export default function CampaignDetailsPage() {
     const [expiryTime, setExpiryTime] = useState('10:00 AM');
     const [searchSegment, setSearchSegment] = useState('');
     const [isSegmentPopoverOpen, setIsSegmentPopoverOpen] = useState(false);
+    const [segments, setSegments] = useState<AudienceSegment[]>([{ id: 'all', name: 'All Subscribers', count: 0 }]);
+
+    useEffect(() => {
+        if (!shopDomain) {
+            return;
+        }
+
+        let active = true;
+        fetch(`/api/campaigns/audience?shop=${encodeURIComponent(shopDomain)}`)
+            .then((response) => response.json())
+            .then((data) => {
+                if (!active || !data?.ok || !Array.isArray(data.segments)) {
+                    return;
+                }
+
+                const nextSegments = data.segments.map((segment: { id: string; name: string; count: number }) => ({
+                    id: String(segment.id),
+                    name: String(segment.name),
+                    count: Number(segment.count ?? 0),
+                }));
+
+                if (nextSegments.length > 0) {
+                    setSegments(nextSegments);
+                    if (!nextSegments.some((segment) => segment.id === segmentId)) {
+                        setSegmentId(nextSegments[0].id);
+                    }
+                }
+            })
+            .catch(() => undefined);
+
+        return () => {
+            active = false;
+        };
+    }, [shopDomain, segmentId, setSegmentId]);
 
     const filteredSegments = segments.filter(segment =>
         segment.name.toLowerCase().includes(searchSegment.toLowerCase())
     );
+
+    const selectedSegment = useMemo(() => {
+        return segments.find((segment) => segment.id === segmentId) ?? segments[0];
+    }, [segments, segmentId]);
 
     return (
         <div className="bg-muted/40 min-h-screen">
@@ -217,8 +256,8 @@ export default function CampaignDetailsPage() {
                                 <PopoverTrigger asChild>
                                     <Button variant="outline" className="w-full justify-between">
                                         <span>
-                                            {segments.find(s => s.id === segmentId)?.name}
-                                            ({segments.find(s => s.id === segmentId)?.count} subscribers)
+                                            {selectedSegment?.name}
+                                            ({Number(selectedSegment?.count ?? 0).toLocaleString()} subscribers)
                                         </span>
                                         <ChevronDown className="h-4 w-4 opacity-50" />
                                     </Button>
@@ -254,7 +293,7 @@ export default function CampaignDetailsPage() {
                                                     {segmentId === segment.id && <Check className="h-4 w-4" />}
                                                 </div>
                                                 <Label className="font-normal cursor-pointer w-full">
-                                                    {segment.name} ({segment.count} subscribers)
+                                                    {segment.name} ({segment.count.toLocaleString()} subscribers)
                                                 </Label>
                                             </div>
                                         ))}
