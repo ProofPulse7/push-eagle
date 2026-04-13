@@ -20,6 +20,8 @@ export interface CampaignContextType {
     setMacHero: (image: ImageValue) => void;
     androidHero: ImageValue;
     setAndroidHero: (image: ImageValue) => void;
+    heroImageMode: 'same' | 'different';
+    setHeroImageMode: (mode: 'same' | 'different') => void;
     logo: ImageValue;
     setLogo: (image: ImageValue) => void;
     sendingOption: string;
@@ -50,6 +52,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null });
     const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null });
     const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null });
+    const [heroImageMode, setHeroImageMode] = useState<'same' | 'different'>('same');
     const { logo, setLogo } = useSettings();
     const [sendingOption, setSendingOption] = useState('now');
     const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
@@ -64,6 +67,8 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
         windowsHero, setWindowsHero,
         macHero, setMacHero,
         androidHero, setAndroidHero,
+        heroImageMode,
+        setHeroImageMode,
         logo, setLogo,
         sendingOption, setSendingOption,
         scheduledDate, setScheduledDate,

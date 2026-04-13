@@ -48,6 +48,7 @@ export function Composer() {
         windowsHero, setWindowsHero,
         macHero, setMacHero,
         androidHero, setAndroidHero,
+        heroImageMode, setHeroImageMode,
         logo, setLogo,
     } = useCampaignState();
     
@@ -104,7 +105,7 @@ export function Composer() {
             setLogo({ file, preview: previewUrl });
         } else {
             const newImageValue = { file, preview: previewUrl };
-            if (isFirstHeroUpload) {
+            if (heroImageMode === 'same' || isFirstHeroUpload) {
                 setWindowsHero(newImageValue);
                 setMacHero(newImageValue);
                 setAndroidHero(newImageValue);
@@ -136,14 +137,28 @@ export function Composer() {
             android: setShowAndroidWarning,
         };
 
+        if (type === 'logo') {
+            setLogo({ ...logo, preview: croppedDataUrl, file: null });
+            return;
+        }
+
+        if (heroImageMode === 'same') {
+            const next = { file: null, preview: croppedDataUrl };
+            setWindowsHero(next);
+            setMacHero(next);
+            setAndroidHero(next);
+            setShowWindowsWarning(false);
+            setShowMacWarning(false);
+            setShowAndroidWarning(false);
+            return;
+        }
+
         if (type === 'windows') {
             setWindowsHero({ ...windowsHero, preview: croppedDataUrl, file: null });
         } else if (type === 'mac') {
             setMacHero({ ...macHero, preview: croppedDataUrl, file: null });
         } else if (type === 'android') {
             setAndroidHero({ ...androidHero, preview: croppedDataUrl, file: null });
-        } else if (type === 'logo') {
-            setLogo({ ...logo, preview: croppedDataUrl, file: null });
         }
 
         const warningSetter = warningSetters[type as keyof typeof warningSetters];
@@ -255,6 +270,8 @@ export function Composer() {
                             windowsHero={windowsHero} setWindowsHero={(v) => { setWindowsHero(v); if (!v.file) setShowWindowsWarning(false); }}
                             macHero={macHero} setMacHero={(v) => { setMacHero(v); if (!v.file) setShowMacWarning(false); }}
                             androidHero={androidHero} setAndroidHero={(v) => { setAndroidHero(v); if (!v.file) setShowAndroidWarning(false); }}
+                            heroImageMode={heroImageMode}
+                            setHeroImageMode={setHeroImageMode}
                             showWindowsWarning={showWindowsWarning}
                             showMacWarning={showMacWarning}
                             showAndroidWarning={showAndroidWarning}

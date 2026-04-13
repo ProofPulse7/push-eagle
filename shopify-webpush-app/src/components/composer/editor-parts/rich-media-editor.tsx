@@ -80,6 +80,8 @@ export const RichMediaEditor = ({
     windowsHero, setWindowsHero,
     macHero, setMacHero,
     androidHero, setAndroidHero,
+    heroImageMode,
+    setHeroImageMode,
     showWindowsWarning,
     showMacWarning,
     showAndroidWarning,
@@ -89,6 +91,8 @@ export const RichMediaEditor = ({
     windowsHero: ImageValue; setWindowsHero: (val: ImageValue) => void;
     macHero: ImageValue; setMacHero: (val: ImageValue) => void;
     androidHero: ImageValue; setAndroidHero: (val: ImageValue) => void;
+    heroImageMode: 'same' | 'different';
+    setHeroImageMode: (mode: 'same' | 'different') => void;
     showWindowsWarning: boolean;
     showMacWarning: boolean;
     showAndroidWarning: boolean;
@@ -98,6 +102,28 @@ export const RichMediaEditor = ({
     return (
         <div className="space-y-4 border-t pt-6 mt-4 p-4">
             <h3 className="text-base font-medium">Rich Media</h3>
+            <div className="space-y-2">
+                <Label className="font-medium">Hero image mode</Label>
+                <div className="grid grid-cols-2 gap-2">
+                    <Button
+                        type="button"
+                        variant={heroImageMode === 'same' ? 'default' : 'outline'}
+                        onClick={() => setHeroImageMode('same')}
+                    >
+                        Same image for all OS
+                    </Button>
+                    <Button
+                        type="button"
+                        variant={heroImageMode === 'different' ? 'default' : 'outline'}
+                        onClick={() => setHeroImageMode('different')}
+                    >
+                        Different image per OS
+                    </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                    Cropped image output is saved and sent exactly as shown in preview.
+                </p>
+            </div>
             <div className="space-y-6">
                 <HeroImageUploader title="Windows Hero" dimensions="728x360px" previewUrl={windowsHero.preview} showWarning={showWindowsWarning}
                     onUpload={e => handleImageUpload(e.target.files?.[0], 'windows')}
@@ -114,6 +140,11 @@ export const RichMediaEditor = ({
                     onRemove={() => setAndroidHero({ file: null, preview: null })}
                     onEdit={() => androidHero.preview && setEditingState({ url: androidHero.preview, aspect: 720 / 240, type: 'android' })}
                 />
+                {heroImageMode === 'same' && (
+                    <p className="text-xs text-muted-foreground">
+                        Same-image mode is enabled. Uploading or cropping any hero image will apply to Windows, macOS, and Android.
+                    </p>
+                )}
             </div>
         </div>
     );
