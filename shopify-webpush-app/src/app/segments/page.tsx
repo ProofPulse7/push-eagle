@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,13 +16,25 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useSettings } from '@/context/settings-context';
 
-const initialSegments = [
-  { name: 'High-Value Customers', type: 'Dynamic', subscribers: '15,200', criteria: 'Total spend > $500' },
-  { name: 'New Subscribers (Last 30 Days)', type: 'Dynamic', subscribers: '8,430', criteria: 'Subscribed in last 30 days' },
-  { name: 'Inactive Users', type: 'Dynamic', subscribers: '25,600', criteria: 'Last seen > 90 days ago' },
-  { name: 'iOS Users', type: 'Static', subscribers: '350,120', criteria: 'Platform is iOS' },
-];
+type SegmentRow = {
+  id: string;
+  name: string;
+  type: string;
+  subscribers: string;
+  criteria: string;
+};
+
+type SegmentApiRow = {
+  id: string;
+  name: string;
+  type?: string;
+  subscriberCount?: number;
+  criteria?: string;
+};
+
+const initialSegments: SegmentRow[] = [];
 
 const initialCustomAttributes = [
   { name: 'LASTNAME', type: 'text' },
@@ -255,24 +267,52 @@ const AddAttributeDialog = ({
 
 
 export default function SegmentsPage() {
+  const { shopDomain } = useSettings();
   const [segments, setSegments] = useState(initialSegments);
+  const [resolvedShopDomain, setResolvedShopDomain] = useState('');
   const [customAttributes, setCustomAttributes] = useState(initialCustomAttributes);
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const totalPages = Math.ceil(customAttributes.length / ITEMS_PER_PAGE);
 
   useEffect(() => {
-    const newSegmentJson = sessionStorage.getItem('newSegment');
-    if (newSegmentJson) {
-      try {
-        const newSegment = JSON.parse(newSegmentJson);
-        setSegments(prev => [newSegment, ...prev]);
-        sessionStorage.removeItem('newSegment'); 
-      } catch (e) {
-        console.error("Failed to parse new segment from sessionStorage", e);
-      }
+    const fromContext = (shopDomain || '').trim().toLowerCase();
+    const fromQuery = new URLSearchParams(window.location.search).get('shop')?.trim().toLowerCase() || '';
+    const fromStorage = (localStorage.getItem('shopDomain') || '').trim().toLowerCase();
+    const candidate = [fromContext, fromQuery, fromStorage].find((value) => value.endsWith('.myshopify.com')) || '';
+    setResolvedShopDomain(candidate);
+  }, [shopDomain]);
+
+  useEffect(() => {
+    if (!resolvedShopDomain) {
+      return;
     }
-  }, []);
+
+    const loadSegments = async () => {
+      try {
+        const response = await fetch(`/api/segments?shop=${encodeURIComponent(resolvedShopDomain)}`, { cache: 'no-store' });
+        const json = await response.json();
+
+        if (!response.ok || !json?.ok) {
+          throw new Error(json?.error ?? 'Failed to load segments.');
+        }
+
+        setSegments(
+          ((json.segments || []) as SegmentApiRow[]).map((segment) => ({
+            id: String(segment.id),
+            name: String(segment.name),
+            type: String(segment.type ?? 'Dynamic'),
+            subscribers: Number(segment.subscriberCount ?? 0).toLocaleString(),
+            criteria: String(segment.criteria ?? 'Custom audience criteria'),
+          })),
+        );
+      } catch (error) {
+        console.error('Failed to load segments', error);
+      }
+    };
+
+    void loadSegments();
+  }, [resolvedShopDomain]);
 
   const paginatedAttributes = customAttributes.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
@@ -365,18 +405,26 @@ export default function SegmentsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {segments.map((segment) => (
-                <TableRow key={segment.name}>
-                  <TableCell className="font-medium">{segment.name}</TableCell>
-                  <TableCell>
-                    <Badge variant={segment.type === 'Dynamic' ? 'default' : 'secondary'}>
-                      {segment.type}
-                    </Badge>
+              {segments.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+                    No saved segments yet. Create a segment to see it here.
                   </TableCell>
-                  <TableCell>{segment.subscribers}</TableCell>
-                  <TableCell className="text-muted-foreground">{segment.criteria}</TableCell>
                 </TableRow>
-              ))}
+              ) : (
+                segments.map((segment) => (
+                  <TableRow key={segment.id}>
+                    <TableCell className="font-medium">{segment.name}</TableCell>
+                    <TableCell>
+                      <Badge variant={segment.type === 'Dynamic' ? 'default' : 'secondary'}>
+                        {segment.type}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{segment.subscribers}</TableCell>
+                    <TableCell className="text-muted-foreground">{segment.criteria}</TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </CardContent>

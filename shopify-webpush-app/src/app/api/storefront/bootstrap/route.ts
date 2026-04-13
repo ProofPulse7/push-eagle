@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
-import { getOptInSettings } from '@/lib/server/data/store';
+import { getMerchantCapabilitySnapshot, getOptInSettings } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getAnonymousExternalId, getCustomerExternalId } from '@/lib/server/storefront-identity';
 
@@ -56,6 +56,7 @@ export async function GET(request: Request) {
     });
 
     const optIn = await getOptInSettings(shopDomain);
+  const shopifyCapabilities = await getMerchantCapabilitySnapshot(shopDomain);
 
     const existingCookieId = cookieStore.get(cookieName)?.value ?? null;
     const externalId = customerExternalId ?? existingCookieId ?? getAnonymousExternalId();
@@ -66,7 +67,9 @@ export async function GET(request: Request) {
       externalId,
       tokenEndpoint: '/apps/push-eagle/token',
       conversionEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/conversion`,
+      iosHomeScreenEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/ios-home-screen`,
       optIn,
+      shopifyCapabilities,
       firebase: {
         apiKey: env.NEXT_PUBLIC_FIREBASE_API_KEY,
         authDomain: env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,

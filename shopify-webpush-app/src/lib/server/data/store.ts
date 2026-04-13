@@ -133,9 +133,65 @@ type UpsertMerchantProfileInput = {
 type UpsertShopifyCustomerInput = {
   shopDomain: string;
   customerId?: string | null;
+  externalId?: string | null;
   email?: string | null;
   firstName?: string | null;
   lastName?: string | null;
+  tags?: string[] | null;
+};
+
+type UpsertShopifyOrderEventInput = {
+  shopDomain: string;
+  orderId: string;
+  externalId?: string | null;
+  customerId?: string | null;
+  email?: string | null;
+  totalPriceCents: number;
+  createdAt?: string | null;
+  lineItems?: Array<{
+    productId?: string | null;
+    productTitle?: string | null;
+    collectionHint?: string | null;
+  }>;
+};
+
+type SegmentConditionSelectedValue = {
+  type: 'country' | 'region' | 'city';
+  value: string;
+  label?: string;
+};
+
+type SegmentCondition = {
+  id?: string;
+  type: 'Clicked' | 'Purchased' | 'Purchased a product' | 'Purchased from collection' | 'Subscribed' | 'Location' | 'Customer tag';
+  operator?: 'is' | 'is not' | 'has' | 'has not';
+  countOperator?: 'at least once' | 'more than' | 'less than' | 'exactly';
+  countValue?: number;
+  dateOperator?: 'at any time' | 'before' | 'after' | 'less than' | 'more than' | 'between' | 'in the last';
+  dateValue?: { from?: string | Date; to?: string | Date };
+  textValue?: string;
+  daysValue?: number;
+  selectedValues?: SegmentConditionSelectedValue[];
+};
+
+type SegmentConditionGroup = {
+  id?: string;
+  conditions: SegmentCondition[];
+};
+
+type CreateSegmentInput = {
+  shopDomain: string;
+  name: string;
+  conditionGroups: SegmentConditionGroup[];
+};
+
+type SegmentSummary = {
+  id: string;
+  name: string;
+  type: 'Dynamic';
+  subscriberCount: number;
+  criteria: string;
+  createdAt: string;
 };
 
 let schemaReadyPromise: Promise<void> | null = null;
@@ -252,13 +308,17 @@ const ensureSchema = async () => {
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
         customer_id TEXT,
+        external_id TEXT,
         email TEXT,
         first_name TEXT,
         last_name TEXT,
+        tags TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (shop_domain, customer_id)
       )`;
+      await sql`ALTER TABLE shopify_customers ADD COLUMN IF NOT EXISTS external_id TEXT`;
+      await sql`ALTER TABLE shopify_customers ADD COLUMN IF NOT EXISTS tags TEXT`;
 
       await sql`CREATE TABLE IF NOT EXISTS subscribers (
         id BIGSERIAL PRIMARY KEY,
@@ -366,6 +426,40 @@ const ensureSchema = async () => {
         revenue_cents INTEGER NOT NULL DEFAULT 0
       )`;
 
+      await sql`CREATE TABLE IF NOT EXISTS shopify_orders (
+        id BIGSERIAL PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        order_id TEXT NOT NULL,
+        external_id TEXT,
+        customer_id TEXT,
+        email TEXT,
+        subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
+        total_price_cents INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_domain, order_id)
+      )`;
+
+      await sql`CREATE TABLE IF NOT EXISTS shopify_order_items (
+        id BIGSERIAL PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        order_id TEXT NOT NULL,
+        order_event_id BIGINT REFERENCES shopify_orders(id) ON DELETE CASCADE,
+        product_id TEXT,
+        product_title TEXT,
+        collection_hint TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+
+      await sql`CREATE TABLE IF NOT EXISTS segments (
+        id TEXT PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        condition_groups JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_domain, name)
+      )`;
+
       await sql`CREATE TABLE IF NOT EXISTS webhook_events (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -381,6 +475,12 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_customers_shop_email ON shopify_customers(shop_domain, email)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_customers_shop_external ON shopify_customers(shop_domain, external_id)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_orders_shop_subscriber ON shopify_orders(shop_domain, subscriber_id, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_orders_shop_external ON shopify_orders(shop_domain, external_id, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_order ON shopify_order_items(shop_domain, order_id)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_product ON shopify_order_items(shop_domain, product_title)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_segments_shop_created ON segments(shop_domain, created_at DESC)`;
     })();
   }
 
@@ -478,24 +578,30 @@ export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) =
       INSERT INTO shopify_customers (
         shop_domain,
         customer_id,
+        external_id,
         email,
         first_name,
         last_name,
+        tags,
         updated_at
       )
       VALUES (
         ${input.shopDomain},
         ${input.customerId},
+        ${input.externalId ?? null},
         ${input.email ?? null},
         ${input.firstName ?? null},
         ${input.lastName ?? null},
+        ${input.tags && input.tags.length > 0 ? input.tags.join(',') : null},
         NOW()
       )
       ON CONFLICT (shop_domain, customer_id)
       DO UPDATE SET
+        external_id = COALESCE(EXCLUDED.external_id, shopify_customers.external_id),
         email = COALESCE(EXCLUDED.email, shopify_customers.email),
         first_name = COALESCE(EXCLUDED.first_name, shopify_customers.first_name),
         last_name = COALESCE(EXCLUDED.last_name, shopify_customers.last_name),
+        tags = COALESCE(EXCLUDED.tags, shopify_customers.tags),
         updated_at = NOW()
     `;
     return;
@@ -505,20 +611,494 @@ export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) =
     INSERT INTO shopify_customers (
       shop_domain,
       customer_id,
+      external_id,
       email,
       first_name,
       last_name,
+      tags,
       updated_at
     )
     VALUES (
       ${input.shopDomain},
       NULL,
+      ${input.externalId ?? null},
       ${input.email ?? null},
       ${input.firstName ?? null},
       ${input.lastName ?? null},
+      ${input.tags && input.tags.length > 0 ? input.tags.join(',') : null},
       NOW()
     )
   `;
+};
+
+const toDate = (value?: string | Date | null) => {
+  if (!value) {
+    return null;
+  }
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const applyDateOperator = (date: Date | null, condition?: SegmentCondition) => {
+  if (!date) {
+    return false;
+  }
+
+  const operator = condition?.dateOperator ?? 'at any time';
+  if (operator === 'at any time') {
+    return true;
+  }
+
+  const now = new Date();
+  const from = toDate(condition?.dateValue?.from);
+  const to = toDate(condition?.dateValue?.to);
+  const days = Math.max(0, Number(condition?.daysValue ?? 0));
+  const ageMs = now.getTime() - date.getTime();
+  const thresholdMs = days * 24 * 60 * 60 * 1000;
+
+  switch (operator) {
+    case 'before':
+      return from ? date.getTime() < from.getTime() : true;
+    case 'after':
+      return from ? date.getTime() > from.getTime() : true;
+    case 'between':
+      return from && to ? date.getTime() >= from.getTime() && date.getTime() <= to.getTime() : true;
+    case 'less than':
+    case 'in the last':
+      return thresholdMs > 0 ? ageMs <= thresholdMs : true;
+    case 'more than':
+      return thresholdMs > 0 ? ageMs >= thresholdMs : true;
+    default:
+      return true;
+  }
+};
+
+const applyCountOperator = (count: number, condition?: SegmentCondition) => {
+  const operator = condition?.countOperator ?? 'at least once';
+  const countValue = Math.max(1, Number(condition?.countValue ?? 1));
+
+  switch (operator) {
+    case 'at least once':
+      return count >= 1;
+    case 'more than':
+      return count > countValue;
+    case 'less than':
+      return count < countValue;
+    case 'exactly':
+      return count === countValue;
+    default:
+      return count >= 1;
+  }
+};
+
+const buildCriteriaSummary = (conditionGroups: SegmentConditionGroup[]) => {
+  const first = conditionGroups[0]?.conditions[0];
+  if (!first) {
+    return 'Custom audience criteria';
+  }
+
+  const parts = [first.type];
+  if (first.textValue) {
+    parts.push(String(first.textValue));
+  }
+
+  const extraConditions = conditionGroups.reduce((total, group) => total + Math.max(0, group.conditions.length - 1), 0) + Math.max(0, conditionGroups.length - 1);
+  return `${parts.join(' ')}${extraConditions > 0 ? ' and more...' : ''}`;
+};
+
+const parseConditionGroups = (value: unknown): SegmentConditionGroup[] => {
+  if (Array.isArray(value)) {
+    return value as SegmentConditionGroup[];
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? (parsed as SegmentConditionGroup[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+};
+
+const listAllSubscriberIds = async (shopDomain: string) => {
+  const sql = getNeonSql();
+  const rows = await sql`
+    SELECT id
+    FROM subscribers
+    WHERE shop_domain = ${shopDomain}
+  `;
+  return new Set(rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id)));
+};
+
+const queryConditionSubscriberIds = async (shopDomain: string, condition: SegmentCondition, allIds: Set<number>) => {
+  const sql = getNeonSql();
+  const textFilter = String(condition.textValue || '').trim();
+
+  let matched = new Set<number>();
+
+  if (condition.type === 'Clicked') {
+    const rows = await sql`
+      SELECT subscriber_id, COUNT(*)::INT AS total, MAX(clicked_at) AS last_at
+      FROM campaign_clicks
+      WHERE shop_domain = ${shopDomain}
+        AND subscriber_id IS NOT NULL
+      GROUP BY subscriber_id
+    `;
+
+    for (const row of rows) {
+      const subscriberId = Number(row.subscriber_id);
+      const total = Number(row.total ?? 0);
+      const lastAt = toDate(row.last_at ? String(row.last_at) : null);
+      if (applyCountOperator(total, condition) && applyDateOperator(lastAt, condition)) {
+        matched.add(subscriberId);
+      }
+    }
+  } else if (condition.type === 'Purchased') {
+    const rows = await sql`
+      SELECT subscriber_id, COUNT(*)::INT AS total, MAX(created_at) AS last_at
+      FROM shopify_orders
+      WHERE shop_domain = ${shopDomain}
+        AND subscriber_id IS NOT NULL
+      GROUP BY subscriber_id
+    `;
+
+    for (const row of rows) {
+      const subscriberId = Number(row.subscriber_id);
+      const total = Number(row.total ?? 0);
+      const lastAt = toDate(row.last_at ? String(row.last_at) : null);
+      if (applyCountOperator(total, condition) && applyDateOperator(lastAt, condition)) {
+        matched.add(subscriberId);
+      }
+    }
+  } else if (condition.type === 'Purchased a product' || condition.type === 'Purchased from collection') {
+    const rows = await sql`
+      SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
+      FROM shopify_order_items i
+      JOIN shopify_orders o ON o.id = i.order_event_id
+      WHERE o.shop_domain = ${shopDomain}
+        AND o.subscriber_id IS NOT NULL
+        AND (
+          ${textFilter ? true : false} = false
+          OR ${condition.type === 'Purchased from collection'} = true AND i.collection_hint ILIKE ${`%${textFilter}%`}
+          OR ${condition.type === 'Purchased a product'} = true AND i.product_title ILIKE ${`%${textFilter}%`}
+        )
+      GROUP BY o.subscriber_id
+    `;
+
+    for (const row of rows) {
+      const subscriberId = Number(row.subscriber_id);
+      const total = Number(row.total ?? 0);
+      const lastAt = toDate(row.last_at ? String(row.last_at) : null);
+      if (applyCountOperator(total, condition) && applyDateOperator(lastAt, condition)) {
+        matched.add(subscriberId);
+      }
+    }
+  } else if (condition.type === 'Subscribed') {
+    const rows = await sql`
+      SELECT id, created_at
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+    `;
+
+    for (const row of rows) {
+      const subscriberId = Number(row.id);
+      const createdAt = toDate(row.created_at ? String(row.created_at) : null);
+      if (applyDateOperator(createdAt, condition)) {
+        matched.add(subscriberId);
+      }
+    }
+  } else if (condition.type === 'Location') {
+    const selected = Array.isArray(condition.selectedValues) ? condition.selectedValues : [];
+    const countries = selected.filter((value) => value.type === 'country').map((value) => String(value.value).toLowerCase());
+    const cities = selected.filter((value) => value.type === 'city').map((value) => String(value.value).toLowerCase());
+    const regions = selected.filter((value) => value.type === 'region').map((value) => String(value.value).toLowerCase());
+
+    const rows = await sql`
+      SELECT id, country, city, device_context
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+    `;
+
+    for (const row of rows) {
+      const subscriberId = Number(row.id);
+      const country = String(row.country || '').toLowerCase();
+      const city = String(row.city || '').toLowerCase();
+      const region = String((row.device_context && (row.device_context as Record<string, unknown>).region) || '').toLowerCase();
+
+      const countryMatch = countries.length === 0 || countries.includes(country);
+      const cityMatch = cities.length === 0 || cities.includes(city);
+      const regionMatch = regions.length === 0 || regions.includes(region);
+
+      if (countryMatch && cityMatch && regionMatch) {
+        matched.add(subscriberId);
+      }
+    }
+  } else if (condition.type === 'Customer tag') {
+    const rows = await sql`
+      SELECT s.id
+      FROM subscribers s
+      JOIN shopify_customers c
+        ON c.shop_domain = s.shop_domain
+       AND c.external_id = s.external_id
+      WHERE s.shop_domain = ${shopDomain}
+        AND c.tags IS NOT NULL
+        AND c.tags <> ''
+        AND c.tags ILIKE ${`%${textFilter}%`}
+    `;
+
+    matched = new Set(rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id)));
+  }
+
+  const operator = condition.operator ?? (condition.type === 'Location' || condition.type === 'Customer tag' ? 'is' : 'has');
+  if (operator === 'has not' || operator === 'is not') {
+    const complement = new Set<number>();
+    for (const id of allIds) {
+      if (!matched.has(id)) {
+        complement.add(id);
+      }
+    }
+    return complement;
+  }
+
+  return matched;
+};
+
+const resolveSubscriberIdsFromConditionGroups = async (shopDomain: string, conditionGroups: SegmentConditionGroup[]) => {
+  const allIds = await listAllSubscriberIds(shopDomain);
+  if (conditionGroups.length === 0 || allIds.size === 0) {
+    return allIds;
+  }
+
+  let intersection: Set<number> | null = null;
+
+  for (const group of conditionGroups) {
+    const groupUnion = new Set<number>();
+    for (const condition of group.conditions || []) {
+      const ids = await queryConditionSubscriberIds(shopDomain, condition, allIds);
+      ids.forEach((id) => groupUnion.add(id));
+    }
+
+    if (intersection === null) {
+      intersection = groupUnion;
+      continue;
+    }
+
+    const nextIntersection = new Set<number>();
+    intersection.forEach((id) => {
+      if (groupUnion.has(id)) {
+        nextIntersection.add(id);
+      }
+    });
+    intersection = nextIntersection;
+  }
+
+  return intersection ?? new Set<number>();
+};
+
+export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  const subscriberRows = input.externalId
+    ? await sql`
+      SELECT id
+      FROM subscribers
+      WHERE shop_domain = ${input.shopDomain}
+        AND external_id = ${input.externalId}
+      LIMIT 1
+    `
+    : [];
+
+  const subscriberId = subscriberRows[0]?.id ? Number(subscriberRows[0].id) : null;
+  const createdAt = input.createdAt ? new Date(input.createdAt) : new Date();
+
+  const orderRows = await sql`
+    INSERT INTO shopify_orders (
+      shop_domain,
+      order_id,
+      external_id,
+      customer_id,
+      email,
+      subscriber_id,
+      total_price_cents,
+      created_at
+    )
+    VALUES (
+      ${input.shopDomain},
+      ${input.orderId},
+      ${input.externalId ?? null},
+      ${input.customerId ?? null},
+      ${input.email ?? null},
+      ${subscriberId},
+      ${input.totalPriceCents},
+      ${createdAt}
+    )
+    ON CONFLICT (shop_domain, order_id)
+    DO UPDATE SET
+      external_id = COALESCE(EXCLUDED.external_id, shopify_orders.external_id),
+      customer_id = COALESCE(EXCLUDED.customer_id, shopify_orders.customer_id),
+      email = COALESCE(EXCLUDED.email, shopify_orders.email),
+      subscriber_id = COALESCE(EXCLUDED.subscriber_id, shopify_orders.subscriber_id),
+      total_price_cents = EXCLUDED.total_price_cents,
+      created_at = COALESCE(EXCLUDED.created_at, shopify_orders.created_at)
+    RETURNING id
+  `;
+
+  const orderEventId = Number(orderRows[0]?.id ?? 0);
+
+  await sql`
+    DELETE FROM shopify_order_items
+    WHERE shop_domain = ${input.shopDomain}
+      AND order_id = ${input.orderId}
+  `;
+
+  for (const item of input.lineItems ?? []) {
+    await sql`
+      INSERT INTO shopify_order_items (
+        shop_domain,
+        order_id,
+        order_event_id,
+        product_id,
+        product_title,
+        collection_hint,
+        created_at
+      )
+      VALUES (
+        ${input.shopDomain},
+        ${input.orderId},
+        ${orderEventId},
+        ${item.productId ?? null},
+        ${item.productTitle ?? null},
+        ${item.collectionHint ?? null},
+        ${createdAt}
+      )
+    `;
+  }
+};
+
+export const createSegment = async (input: CreateSegmentInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  const segmentId = randomUUID();
+  const serializedGroups = JSON.stringify(input.conditionGroups || []);
+
+  const rows = await sql`
+    INSERT INTO segments (
+      id,
+      shop_domain,
+      name,
+      condition_groups,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${segmentId},
+      ${input.shopDomain},
+      ${input.name},
+      ${serializedGroups}::jsonb,
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (shop_domain, name)
+    DO UPDATE SET
+      condition_groups = EXCLUDED.condition_groups,
+      updated_at = NOW()
+    RETURNING id
+  `;
+
+  const resolvedSegmentId = String(rows[0]?.id ?? segmentId);
+
+  const subscriberIds = await resolveSubscriberIdsFromConditionGroups(input.shopDomain, input.conditionGroups || []);
+  return {
+    id: resolvedSegmentId,
+    name: input.name,
+    type: 'Dynamic' as const,
+    subscriberCount: subscriberIds.size,
+    criteria: buildCriteriaSummary(input.conditionGroups || []),
+  };
+};
+
+export const estimateSegmentAudience = async (shopDomain: string, conditionGroups: SegmentConditionGroup[]) => {
+  await ensureSchema();
+  const subscriberIds = await resolveSubscriberIdsFromConditionGroups(shopDomain, conditionGroups || []);
+  return subscriberIds.size;
+};
+
+export const listSegments = async (shopDomain: string): Promise<SegmentSummary[]> => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  const rows = await sql`
+    SELECT id, name, condition_groups, created_at
+    FROM segments
+    WHERE shop_domain = ${shopDomain}
+    ORDER BY created_at DESC
+  `;
+
+  const result: SegmentSummary[] = [];
+  for (const row of rows) {
+    const groups = parseConditionGroups(row.condition_groups);
+    const ids = await resolveSubscriberIdsFromConditionGroups(shopDomain, groups);
+    result.push({
+      id: String(row.id),
+      name: String(row.name),
+      type: 'Dynamic',
+      subscriberCount: ids.size,
+      criteria: buildCriteriaSummary(groups),
+      createdAt: row.created_at ? String(row.created_at) : new Date().toISOString(),
+    });
+  }
+
+  return result;
+};
+
+export const resolveCampaignAudience = async (shopDomain: string, segmentId?: string | null) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  if (!segmentId || segmentId === 'all') {
+    const rows = await sql`
+      SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id
+      FROM subscriber_tokens t
+      JOIN subscribers s ON s.id = t.subscriber_id
+      WHERE t.shop_domain = ${shopDomain}
+        AND t.status = 'active'
+    `;
+    return rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null }>;
+  }
+
+  const segmentRows = await sql`
+    SELECT condition_groups
+    FROM segments
+    WHERE shop_domain = ${shopDomain}
+      AND id = ${segmentId}
+    LIMIT 1
+  `;
+
+  const groups = parseConditionGroups(segmentRows[0]?.condition_groups);
+  const allowedIds = await resolveSubscriberIdsFromConditionGroups(shopDomain, groups);
+  if (allowedIds.size === 0) {
+    return [];
+  }
+
+  const rows = await sql`
+    SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id
+    FROM subscriber_tokens t
+    JOIN subscribers s ON s.id = t.subscriber_id
+    WHERE t.shop_domain = ${shopDomain}
+      AND t.status = 'active'
+  `;
+
+  return (rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null }>).filter((row) =>
+    allowedIds.has(Number(row.subscriber_id)),
+  );
 };
 
 export const getMerchantOverview = async (shopDomain: string) => {
@@ -1055,6 +1635,7 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
         target_url: string | null;
         icon_url: string | null;
         image_url: string | null;
+        segment_id: string | null;
         status: string;
       }
     | undefined;
@@ -1086,12 +1667,7 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
 
   const previousStatus = campaign.status;
 
-  const recipients = (await sql`
-    SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id
-    FROM subscriber_tokens t
-    JOIN subscribers s ON s.id = t.subscriber_id
-    WHERE t.shop_domain = ${shopDomain} AND t.status = 'active'
-  `) as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null }>;
+  const recipients = await resolveCampaignAudience(shopDomain, campaign.segment_id);
 
   if (recipients.length === 0) {
     await sql`

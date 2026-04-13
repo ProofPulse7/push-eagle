@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { getMerchantOverview } from '@/lib/server/data/store';
+import { getMerchantOverview, listSegments } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -9,6 +9,7 @@ export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
     const overview = await getMerchantOverview(shopDomain);
+    const dynamicSegments = await listSegments(shopDomain);
     const subscriberCount = Number(overview.subscriberCount ?? 0);
 
     return NextResponse.json({
@@ -20,6 +21,11 @@ export async function GET(request: Request) {
           name: 'All Subscribers',
           count: subscriberCount,
         },
+        ...dynamicSegments.map((segment) => ({
+          id: segment.id,
+          name: segment.name,
+          count: segment.subscriberCount,
+        })),
       ],
     });
   } catch (error) {

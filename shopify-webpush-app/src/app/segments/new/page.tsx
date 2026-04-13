@@ -1,10 +1,10 @@
 
 'use client';
 
-import { useState, Fragment, useMemo, useEffect } from 'react';
+import { useState, Fragment, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, Trash2, Calendar as CalendarIcon, X, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Calendar as CalendarIcon, X, ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,6 +18,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { useToast } from '@/hooks/use-toast';
+import { useSettings } from '@/context/settings-context';
 
 const segmentCriteria = {
   actions: [
@@ -233,17 +235,57 @@ const MultiSelectPillFilter = ({
 
 export default function NewSegmentPage() {
   const router = useRouter();
+  const { toast } = useToast();
+  const { shopDomain } = useSettings();
   const [segmentName, setSegmentName] = useState('');
   const [estimatedCount, setEstimatedCount] = useState(0);
+  const [isEstimating, setIsEstimating] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [conditionGroups, setConditionGroups] = useState<ConditionGroup[]>([
     { id: crypto.randomUUID(), conditions: [createNewCondition()] },
   ]);
 
   useEffect(() => {
-    // Simulate calculating estimated count based on conditions
-    const count = Math.floor(Math.random() * 20000) * conditionGroups.length * conditionGroups.reduce((sum, g) => sum + g.conditions.length, 0);
-    setEstimatedCount(count);
-  }, [conditionGroups]);
+    if (!shopDomain) {
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        setIsEstimating(true);
+        const response = await fetch(`/api/segments/estimate?shop=${encodeURIComponent(shopDomain)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shopDomain,
+            conditionGroups: conditionGroups.map((group) => ({
+              id: group.id,
+              conditions: group.conditions.map((condition) => ({
+                ...condition,
+                dateValue: {
+                  from: condition.dateValue?.from ? new Date(condition.dateValue.from).toISOString() : undefined,
+                  to: condition.dateValue?.to ? new Date(condition.dateValue.to).toISOString() : undefined,
+                },
+              })),
+            })),
+          }),
+        });
+
+        const json = await response.json();
+        if (!response.ok || !json?.ok) {
+          throw new Error(json?.error ?? 'Failed to estimate audience.');
+        }
+
+        setEstimatedCount(Number(json.estimatedCount ?? 0));
+      } catch {
+        setEstimatedCount(0);
+      } finally {
+        setIsEstimating(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [conditionGroups, shopDomain]);
 
   const addOrCondition = (groupId: string) => {
     setConditionGroups(
@@ -297,24 +339,51 @@ export default function NewSegmentPage() {
     );
   };
 
-  const handleCreateSegment = () => {
-    if (!segmentName.trim() || estimatedCount <= 0) {
-        // In a real app, you'd show a toast or error message.
-        return;
+  const handleCreateSegment = async () => {
+    if (!shopDomain || !segmentName.trim() || estimatedCount <= 0 || isCreating) {
+      return;
     }
 
-    const firstCondition = conditionGroups[0]?.conditions[0];
-    const criteria = firstCondition ? `${firstCondition.type} ${firstCondition.operator} ${firstCondition.textValue || '...'} ` : 'Custom criteria';
+    try {
+      setIsCreating(true);
+      const response = await fetch(`/api/segments?shop=${encodeURIComponent(shopDomain)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shopDomain,
+          name: segmentName.trim(),
+          conditionGroups: conditionGroups.map((group) => ({
+            id: group.id,
+            conditions: group.conditions.map((condition) => ({
+              ...condition,
+              dateValue: {
+                from: condition.dateValue?.from ? new Date(condition.dateValue.from).toISOString() : undefined,
+                to: condition.dateValue?.to ? new Date(condition.dateValue.to).toISOString() : undefined,
+              },
+            })),
+          })),
+        }),
+      });
 
-    const newSegment = {
-        name: segmentName,
-        type: 'Dynamic',
-        subscribers: estimatedCount.toLocaleString(),
-        criteria: criteria + (conditionGroups.length > 1 || conditionGroups[0].conditions.length > 1 ? ' and more...' : ''),
-    };
+      const json = await response.json();
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error ?? 'Failed to create segment.');
+      }
 
-    sessionStorage.setItem('newSegment', JSON.stringify(newSegment));
-    router.push('/segments');
+      toast({
+        title: 'Segment created',
+        description: 'Your segment is now available for campaign targeting.',
+      });
+      router.push('/segments');
+    } catch (error) {
+      toast({
+        title: 'Unable to create segment',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const renderConditionContent = (condition: Condition, groupId: string) => {
@@ -567,16 +636,22 @@ export default function NewSegmentPage() {
             <div className="bg-card p-6 rounded-lg border">
                 <div className="space-y-2">
                     <Label>Estimated subscriber count</Label>
-                    <Input
-                    value={estimatedCount.toLocaleString()}
-                    disabled
-                    />
+                    <div className="flex items-center gap-2">
+                      {isEstimating && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                      <Input
+                        value={estimatedCount.toLocaleString()}
+                        disabled
+                      />
+                    </div>
                 </div>
             </div>
 
 
             <div className="pt-8 flex justify-end">
-                <Button size="lg" disabled={!segmentName || estimatedCount <= 0} onClick={handleCreateSegment}>Create Segment</Button>
+                <Button size="lg" disabled={!segmentName || estimatedCount <= 0 || isCreating || !shopDomain} onClick={handleCreateSegment}>
+                  {isCreating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Create Segment
+                </Button>
             </div>
         </div>
       </div>

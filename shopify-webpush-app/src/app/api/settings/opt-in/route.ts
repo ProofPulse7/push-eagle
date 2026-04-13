@@ -25,6 +25,9 @@ const updateSchema = z.object({
   placementPreset: z.enum(['balanced', 'safe-left', 'safe-right', 'safe-top', 'safe-bottom']).optional(),
   offsetX: z.coerce.number().int().min(-240).max(240).optional(),
   offsetY: z.coerce.number().int().min(-240).max(240).optional(),
+  iosWidgetEnabled: z.boolean().optional(),
+  iosWidgetTitle: z.string().min(1).max(120).optional(),
+  iosWidgetMessage: z.string().min(1).max(300).optional(),
 });
 
 export async function GET(request: Request) {
@@ -59,7 +62,10 @@ export async function PUT(request: Request) {
       body.mobilePosition !== undefined &&
       body.placementPreset !== undefined &&
       body.offsetX !== undefined &&
-      body.offsetY !== undefined;
+      body.offsetY !== undefined &&
+      body.iosWidgetEnabled !== undefined &&
+      body.iosWidgetTitle !== undefined &&
+      body.iosWidgetMessage !== undefined;
 
     const settings = hasFullPayload
       ? await updateOptInSettings({
@@ -81,6 +87,9 @@ export async function PUT(request: Request) {
           placementPreset: body.placementPreset,
           offsetX: body.offsetX,
           offsetY: body.offsetY,
+          iosWidgetEnabled: body.iosWidgetEnabled,
+          iosWidgetTitle: body.iosWidgetTitle,
+          iosWidgetMessage: body.iosWidgetMessage,
         })
       : await (async () => {
           const current = await getOptInSettings(shopDomain);
@@ -103,6 +112,9 @@ export async function PUT(request: Request) {
             placementPreset: body.placementPreset ?? current.placementPreset,
             offsetX: body.offsetX ?? current.offsetX,
             offsetY: body.offsetY ?? current.offsetY,
+            iosWidgetEnabled: body.iosWidgetEnabled ?? current.iosWidgetEnabled,
+            iosWidgetTitle: body.iosWidgetTitle ?? current.iosWidgetTitle,
+            iosWidgetMessage: body.iosWidgetMessage ?? current.iosWidgetMessage,
           });
         })();
 

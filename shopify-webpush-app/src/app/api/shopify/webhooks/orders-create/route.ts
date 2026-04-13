@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
-import { recordAttributedConversion, registerWebhookEvent, upsertShopifyCustomer } from '@/lib/server/data/store';
+import { recordAttributedConversion, registerWebhookEvent, upsertShopifyCustomer, upsertShopifyOrderEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getCustomerExternalId } from '@/lib/server/storefront-identity';
 
@@ -18,7 +18,14 @@ type ShopifyOrderPayload = {
     email?: string | null;
     first_name?: string | null;
     last_name?: string | null;
+    tags?: string | null;
   } | null;
+  line_items?: Array<{
+    product_id?: number | string | null;
+    title?: string | null;
+    product_type?: string | null;
+    vendor?: string | null;
+  }>;
 };
 
 export async function POST(request: Request) {
@@ -57,6 +64,23 @@ export async function POST(request: Request) {
       email: payload.customer?.email ?? null,
       firstName: payload.customer?.first_name ?? null,
       lastName: payload.customer?.last_name ?? null,
+      externalId,
+      tags: payload.customer?.tags ?? null,
+    });
+
+    await upsertShopifyOrderEvent({
+      shopDomain,
+      orderId: String(payload.id ?? payload.order_number ?? `shopify-${Date.now()}`),
+      externalId,
+      customerId: payload.customer?.id ? String(payload.customer.id) : null,
+      email: payload.customer?.email ?? null,
+      totalPriceCents: Math.round(Number(payload.total_price ?? 0) * 100),
+      createdAt: payload.created_at ?? null,
+      lineItems: (payload.line_items ?? []).map((item) => ({
+        productId: item.product_id ? String(item.product_id) : null,
+        productTitle: item.title ?? null,
+        collectionHint: item.product_type ?? item.vendor ?? null,
+      })),
     });
 
     let campaignId: string | null = null;

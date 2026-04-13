@@ -37,7 +37,7 @@ export default function SubscribersPage() {
             <GeolocationChart />
           </div>
         </TabsContent>
-        <TabsContent value="list" forceMount>
+        <TabsContent value="list">
             <Card className="mt-4">
               <CardHeader>
                   <CardTitle>List of subscribers</CardTitle>
