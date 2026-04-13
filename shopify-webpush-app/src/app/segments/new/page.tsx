@@ -60,37 +60,7 @@ const subscribeDateOptions = [
     { value: 'between', label: 'between' },
 ];
 
-const countryOptions = [
-  { value: 'USA', label: 'USA' },
-  { value: 'Canada', label: 'Canada' },
-  { value: 'UK', label: 'UK' },
-  { value: 'Germany', label: 'Germany' },
-  { value: 'India', label: 'India' },
-  { value: 'Pakistan', label: 'Pakistan' },
-];
-
-const regionOptions = [
-  { value: 'California', label: 'California' },
-  { value: 'Ontario', label: 'Ontario' },
-  { value: 'London', label: 'London' },
-  { value: 'Bavaria', label: 'Bavaria' },
-  { value: 'Maharashtra', label: 'Maharashtra' },
-  { value: 'Sindh', label: 'Sindh' },
-];
-
-const cityOptions = [
-    { value: 'Abbottabad', label: 'Abbottabad' },
-    { value: 'Abdullah Khaskheli', label: 'Abdullah Khaskheli' },
-    { value: 'Abu Dhabi', label: 'Abu Dhabi' },
-    { value: 'Adilpur', label: 'Adilpur' },
-    { value: 'Alboraya', label: 'Alboraya' },
-    { value: 'New York', label: 'New York' },
-    { value: 'Toronto', label: 'Toronto' },
-    { value: 'London', label: 'London' },
-    { value: 'Munich', label: 'Munich' },
-    { value: 'Mumbai', label: 'Mumbai' },
-    { value: 'Karachi', label: 'Karachi' },
-];
+type SelectOption = { value: string; label: string };
 
 type LocationValue = { type: 'country' | 'region' | 'city'; value: string; label: string };
 
@@ -240,6 +210,10 @@ export default function NewSegmentPage() {
   const [resolvedShopDomain, setResolvedShopDomain] = useState('');
   const [segmentName, setSegmentName] = useState('');
   const [estimatedCount, setEstimatedCount] = useState(0);
+  const [countryOptions, setCountryOptions] = useState<SelectOption[]>([]);
+  const [regionOptions, setRegionOptions] = useState<SelectOption[]>([]);
+  const [cityOptions, setCityOptions] = useState<SelectOption[]>([]);
+  const [customerTagOptions, setCustomerTagOptions] = useState<SelectOption[]>([]);
   const [isEstimating, setIsEstimating] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [conditionGroups, setConditionGroups] = useState<ConditionGroup[]>([
@@ -253,6 +227,39 @@ export default function NewSegmentPage() {
     const candidate = [fromContext, fromQuery, fromStorage].find((value) => value.endsWith('.myshopify.com')) || '';
     setResolvedShopDomain(candidate);
   }, [shopDomain]);
+
+  useEffect(() => {
+    if (!resolvedShopDomain) {
+      return;
+    }
+
+    const loadFilterOptions = async () => {
+      try {
+        const response = await fetch(`/api/segments/options?shop=${encodeURIComponent(resolvedShopDomain)}`, { cache: 'no-store' });
+        const json = await response.json();
+        if (!response.ok || !json?.ok) {
+          return;
+        }
+
+        const toOptions = (values: unknown) =>
+          Array.isArray(values)
+            ? values
+                .map((value) => String(value).trim())
+                .filter((value) => value.length > 0)
+                .map((value) => ({ value, label: value }))
+            : [];
+
+        setCountryOptions(toOptions(json.countries));
+        setRegionOptions(toOptions(json.regions));
+        setCityOptions(toOptions(json.cities));
+        setCustomerTagOptions(toOptions(json.customerTags));
+      } catch {
+        // keep form usable even if options endpoint fails
+      }
+    };
+
+    void loadFilterOptions();
+  }, [resolvedShopDomain]);
 
   useEffect(() => {
     if (!resolvedShopDomain) {
@@ -538,7 +545,18 @@ export default function NewSegmentPage() {
                     <SelectTrigger className="w-auto bg-card"><SelectValue /></SelectTrigger>
                     <SelectContent><SelectItem value="is">is</SelectItem><SelectItem value="is not">is not</SelectItem></SelectContent>
                 </Select>
-                <Input className="w-48 bg-card" placeholder="Select customer tag" value={condition.textValue} onChange={e => change('textValue', e.target.value)} />
+                <Input
+                  className="w-48 bg-card"
+                  placeholder="Select customer tag"
+                  value={condition.textValue}
+                  list={`customer-tags-${condition.id}`}
+                  onChange={e => change('textValue', e.target.value)}
+                />
+                <datalist id={`customer-tags-${condition.id}`}>
+                  {customerTagOptions.map((option) => (
+                    <option key={option.value} value={option.value} />
+                  ))}
+                </datalist>
             </div>;
         default: return null;
     }

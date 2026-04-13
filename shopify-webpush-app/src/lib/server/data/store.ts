@@ -1059,6 +1059,60 @@ export const listSegments = async (shopDomain: string): Promise<SegmentSummary[]
   return result;
 };
 
+export const getSegmentFilterOptions = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  const [countries, cities, regions, tags] = await Promise.all([
+    sql`
+      SELECT DISTINCT TRIM(country) AS value
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+        AND country IS NOT NULL
+        AND TRIM(country) <> ''
+      ORDER BY value ASC
+      LIMIT 300
+    `,
+    sql`
+      SELECT DISTINCT TRIM(city) AS value
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+        AND city IS NOT NULL
+        AND TRIM(city) <> ''
+      ORDER BY value ASC
+      LIMIT 500
+    `,
+    sql`
+      SELECT DISTINCT TRIM(device_context ->> 'region') AS value
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+        AND device_context IS NOT NULL
+        AND TRIM(device_context ->> 'region') <> ''
+      ORDER BY value ASC
+      LIMIT 500
+    `,
+    sql`
+      SELECT DISTINCT TRIM(tag) AS value
+      FROM (
+        SELECT regexp_split_to_table(COALESCE(tags, ''), ',') AS tag
+        FROM shopify_customers
+        WHERE shop_domain = ${shopDomain}
+      ) split_tags
+      WHERE TRIM(tag) <> ''
+      ORDER BY value ASC
+      LIMIT 500
+    `,
+  ]);
+
+  return {
+    countries: countries.map((row) => String(row.value)),
+    cities: cities.map((row) => String(row.value)),
+    regions: regions.map((row) => String(row.value)),
+    customerTags: tags.map((row) => String(row.value)),
+  };
+};
+
 export const resolveCampaignAudience = async (shopDomain: string, segmentId?: string | null) => {
   await ensureSchema();
   const sql = getNeonSql();
