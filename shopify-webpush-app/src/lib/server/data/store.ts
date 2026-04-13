@@ -1741,7 +1741,10 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
         }
 
         const code = response.error?.code ?? '';
-        if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
+        // Only revoke on definitive token unregistration.
+        // `invalid-registration-token` can be caused by temporary env/project mismatches
+        // and is too aggressive for cross-browser reliability.
+        if (code.includes('registration-token-not-registered')) {
           await sql`
             UPDATE subscriber_tokens
             SET status = 'revoked', updated_at = NOW()
