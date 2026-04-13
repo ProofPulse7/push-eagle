@@ -48,7 +48,6 @@ export function Composer() {
         windowsHero, setWindowsHero,
         macHero, setMacHero,
         androidHero, setAndroidHero,
-        heroImageMode, setHeroImageMode,
         logo, setLogo,
     } = useCampaignState();
     
@@ -98,39 +97,22 @@ export function Composer() {
     const handleImageUpload = (file: File | undefined, imageType: 'windows' | 'mac' | 'android' | 'logo') => {
         if (!file) return;
 
-        const isFirstHeroUpload = !windowsHero.file && !macHero.file && !androidHero.file && imageType !== 'logo';
         const previewUrl = URL.createObjectURL(file);
 
         if (imageType === 'logo') {
             setLogo({ file, preview: previewUrl });
         } else {
             const newImageValue = { file, preview: previewUrl };
-            if (heroImageMode === 'same' || isFirstHeroUpload) {
-                setWindowsHero(newImageValue);
-                setMacHero(newImageValue);
-                setAndroidHero(newImageValue);
-                checkImageDimensions(file, 'windows');
-                checkImageDimensions(file, 'mac');
-                checkImageDimensions(file, 'android');
-            } else {
-                const setterMap = {
-                    windows: setWindowsHero,
-                    mac: setMacHero,
-                    android: setAndroidHero,
-                };
-                setterMap[imageType](newImageValue);
-                checkImageDimensions(file, imageType);
-            }
+            setWindowsHero(newImageValue);
+            setMacHero(newImageValue);
+            setAndroidHero(newImageValue);
+            checkImageDimensions(file, 'windows');
+            checkImageDimensions(file, 'mac');
+            checkImageDimensions(file, 'android');
         }
     };
     
     const handleSaveCrop = (croppedDataUrl: string, type: string) => {
-        const setters = {
-            windows: setWindowsHero,
-            mac: setMacHero,
-            android: setAndroidHero,
-            logo: setLogo
-        };
         const warningSetters = {
             windows: setShowWindowsWarning,
             mac: setShowMacWarning,
@@ -139,17 +121,6 @@ export function Composer() {
 
         if (type === 'logo') {
             setLogo({ ...logo, preview: croppedDataUrl, file: null });
-            return;
-        }
-
-        if (heroImageMode === 'same') {
-            const next = { file: null, preview: croppedDataUrl };
-            setWindowsHero(next);
-            setMacHero(next);
-            setAndroidHero(next);
-            setShowWindowsWarning(false);
-            setShowMacWarning(false);
-            setShowAndroidWarning(false);
             return;
         }
 
@@ -270,8 +241,6 @@ export function Composer() {
                             windowsHero={windowsHero} setWindowsHero={(v) => { setWindowsHero(v); if (!v.file) setShowWindowsWarning(false); }}
                             macHero={macHero} setMacHero={(v) => { setMacHero(v); if (!v.file) setShowMacWarning(false); }}
                             androidHero={androidHero} setAndroidHero={(v) => { setAndroidHero(v); if (!v.file) setShowAndroidWarning(false); }}
-                            heroImageMode={heroImageMode}
-                            setHeroImageMode={setHeroImageMode}
                             showWindowsWarning={showWindowsWarning}
                             showMacWarning={showMacWarning}
                             showAndroidWarning={showAndroidWarning}
