@@ -88,7 +88,7 @@ export default function CampaignDetailsPage() {
 
                 if (nextSegments.length > 0) {
                     setSegments(nextSegments);
-                    if (!nextSegments.some((segment) => segment.id === segmentId)) {
+                    if (!nextSegments.some((segment: AudienceSegment) => segment.id === segmentId)) {
                         setSegmentId(nextSegments[0].id);
                     }
                 }

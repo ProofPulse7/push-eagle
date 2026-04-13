@@ -11,6 +11,10 @@ type CreateCampaignInput = {
   targetUrl?: string | null;
   iconUrl?: string | null;
   imageUrl?: string | null;
+  windowsImageUrl?: string | null;
+  macosImageUrl?: string | null;
+  androidImageUrl?: string | null;
+  actionButtons?: Array<{ title: string; link: string }>;
   segmentId?: string | null;
   status?: 'draft' | 'scheduled' | 'sent';
   scheduledAt?: string | null;
@@ -358,6 +362,10 @@ const ensureSchema = async () => {
         target_url TEXT,
         icon_url TEXT,
         image_url TEXT,
+        windows_image_url TEXT,
+        macos_image_url TEXT,
+        android_image_url TEXT,
+        action_buttons JSONB,
         segment_id TEXT,
         status TEXT NOT NULL DEFAULT 'draft',
         delivery_count INTEGER NOT NULL DEFAULT 0,
@@ -367,6 +375,10 @@ const ensureSchema = async () => {
         scheduled_at TIMESTAMPTZ,
         sent_at TIMESTAMPTZ
       )`;
+      await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS windows_image_url TEXT`;
+      await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS macos_image_url TEXT`;
+      await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS android_image_url TEXT`;
+      await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS action_buttons JSONB`;
 
       await sql`CREATE TABLE IF NOT EXISTS merchant_settings (
         shop_domain TEXT PRIMARY KEY REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -487,7 +499,13 @@ const ensureSchema = async () => {
   await schemaReadyPromise;
 };
 
-const buildTrackedUrl = (targetUrl: string | null | undefined, campaignId: string, shopDomain: string, externalId?: string | null) => {
+const buildTrackedUrl = (
+  targetUrl: string | null | undefined,
+  campaignId: string,
+  shopDomain: string,
+  externalId?: string | null,
+  contentLabel?: string | null,
+) => {
   if (!targetUrl) {
     return null;
   }
@@ -497,6 +515,9 @@ const buildTrackedUrl = (targetUrl: string | null | undefined, campaignId: strin
     target.searchParams.set('utm_source', 'push_eagle');
     target.searchParams.set('utm_medium', 'web_push');
     target.searchParams.set('utm_campaign', campaignId);
+    if (contentLabel) {
+      target.searchParams.set('utm_content', contentLabel);
+    }
 
     const trackerBase = new URL('/api/track/click', env.NEXT_PUBLIC_APP_URL);
     trackerBase.searchParams.set('c', campaignId);
@@ -1119,13 +1140,13 @@ export const resolveCampaignAudience = async (shopDomain: string, segmentId?: st
 
   if (!segmentId || segmentId === 'all') {
     const rows = await sql`
-      SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id
+      SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id, s.platform
       FROM subscriber_tokens t
       JOIN subscribers s ON s.id = t.subscriber_id
       WHERE t.shop_domain = ${shopDomain}
         AND t.status = 'active'
     `;
-    return rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null }>;
+    return rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null; platform: string | null }>;
   }
 
   const segmentRows = await sql`
@@ -1143,14 +1164,14 @@ export const resolveCampaignAudience = async (shopDomain: string, segmentId?: st
   }
 
   const rows = await sql`
-    SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id
+    SELECT t.id AS token_id, t.fcm_token, s.id AS subscriber_id, s.external_id, s.platform
     FROM subscriber_tokens t
     JOIN subscribers s ON s.id = t.subscriber_id
     WHERE t.shop_domain = ${shopDomain}
       AND t.status = 'active'
   `;
 
-  return (rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null }>).filter((row) =>
+  return (rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null; platform: string | null }>).filter((row) =>
     allowedIds.has(Number(row.subscriber_id)),
   );
 };
@@ -1618,6 +1639,10 @@ export const createCampaign = async (input: CreateCampaignInput) => {
       target_url,
       icon_url,
       image_url,
+      windows_image_url,
+      macos_image_url,
+      android_image_url,
+      action_buttons,
       segment_id,
       status,
       scheduled_at
@@ -1630,6 +1655,10 @@ export const createCampaign = async (input: CreateCampaignInput) => {
       ${input.targetUrl ?? null},
       ${input.iconUrl ?? null},
       ${input.imageUrl ?? null},
+      ${input.windowsImageUrl ?? null},
+      ${input.macosImageUrl ?? null},
+      ${input.androidImageUrl ?? null},
+      ${JSON.stringify(input.actionButtons ?? [])}::jsonb,
       ${input.segmentId ?? null},
       ${input.status ?? 'draft'},
       ${input.scheduledAt ? new Date(input.scheduledAt) : null}
@@ -1651,6 +1680,91 @@ export const listCampaigns = async (shopDomain: string, limit = 50) => {
     ORDER BY created_at DESC
     LIMIT ${limit}
   `;
+};
+
+export const getCampaignById = async (shopDomain: string, campaignId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT *
+    FROM campaigns
+    WHERE shop_domain = ${shopDomain}
+      AND id = ${campaignId}
+    LIMIT 1
+  `;
+
+  return rows[0] ?? null;
+};
+
+export const getCampaignStats = async (shopDomain: string, from?: Date | null, to?: Date | null) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const start = from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const end = to ?? new Date();
+
+  const rows = await sql`
+    SELECT
+      COALESCE(SUM(delivery_count), 0)::BIGINT AS impressions,
+      COALESCE(SUM(click_count), 0)::BIGINT AS clicks,
+      COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
+    FROM campaigns
+    WHERE shop_domain = ${shopDomain}
+      AND created_at >= ${start}
+      AND created_at <= ${end}
+  `;
+
+  const impressions = Number(rows[0]?.impressions ?? 0);
+  const clicks = Number(rows[0]?.clicks ?? 0);
+  const revenueCents = Number(rows[0]?.revenue_cents ?? 0);
+
+  return {
+    impressions,
+    clicks,
+    avgCtrPercent: impressions > 0 ? (clicks / impressions) * 100 : 0,
+    revenueCents,
+  };
+};
+
+export const getCampaignResults = async (shopDomain: string, campaignId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const campaign = await getCampaignById(shopDomain, campaignId);
+  if (!campaign) {
+    return null;
+  }
+
+  const clickRows = await sql`
+    SELECT
+      LPAD(EXTRACT(HOUR FROM clicked_at)::TEXT, 2, '0') || 'h' AS hour,
+      COUNT(*)::BIGINT AS clicks
+    FROM campaign_clicks
+    WHERE shop_domain = ${shopDomain}
+      AND campaign_id = ${campaignId}
+    GROUP BY 1
+    ORDER BY 1 ASC
+  `;
+
+  const platformRows = await sql`
+    SELECT
+      LOWER(COALESCE(NULLIF(s.platform, ''), NULLIF(s.device_context ->> 'osName', ''), 'unknown')) AS platform,
+      COUNT(*)::BIGINT AS clicks
+    FROM campaign_clicks c
+    LEFT JOIN subscribers s ON s.id = c.subscriber_id
+    WHERE c.shop_domain = ${shopDomain}
+      AND c.campaign_id = ${campaignId}
+    GROUP BY 1
+    ORDER BY 2 DESC
+    LIMIT 8
+  `;
+
+  return {
+    campaign,
+    performanceOverTime: clickRows.map((row) => ({ hour: String(row.hour), clicks: Number(row.clicks ?? 0) })),
+    platformPerformance: platformRows.map((row) => ({ platform: String(row.platform), clicks: Number(row.clicks ?? 0) })),
+  };
 };
 
 export const listDueScheduledCampaigns = async (limit = 25) => {
@@ -1691,6 +1805,10 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
         target_url: string | null;
         icon_url: string | null;
         image_url: string | null;
+        windows_image_url: string | null;
+        macos_image_url: string | null;
+        android_image_url: string | null;
+        action_buttons: unknown;
         segment_id: string | null;
         status: string;
       }
@@ -1748,14 +1866,41 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
     for (let i = 0; i < recipients.length; i += chunkSize) {
       const chunk = recipients.slice(i, i + chunkSize);
       const messages = chunk.map((item) => {
-        const trackedUrl = buildTrackedUrl(campaign.target_url, campaignId, shopDomain, item.external_id);
+        const platform = String((item as { platform?: string }).platform ?? '').toLowerCase();
+        const platformImage =
+          platform === 'windows'
+            ? campaign.windows_image_url
+            : platform === 'android'
+              ? campaign.android_image_url
+              : campaign.macos_image_url ?? campaign.image_url;
+
+        const trackedUrl = buildTrackedUrl(campaign.target_url, campaignId, shopDomain, item.external_id, 'primary');
+        const actionButtons = Array.isArray(campaign.action_buttons)
+          ? (campaign.action_buttons as Array<{ title?: string; link?: string }>)
+          : [];
+
+        const actions = actionButtons
+          .slice(0, 2)
+          .filter((button) => button?.title && button?.link)
+          .map((button, buttonIndex) => ({
+            action: `btn_${buttonIndex + 1}`,
+            title: String(button.title),
+            icon: undefined,
+          }));
+
+        const firstButtonUrl = actionButtons[0]?.link
+          ? buildTrackedUrl(String(actionButtons[0].link), campaignId, shopDomain, item.external_id, 'button_1')
+          : null;
+        const secondButtonUrl = actionButtons[1]?.link
+          ? buildTrackedUrl(String(actionButtons[1].link), campaignId, shopDomain, item.external_id, 'button_2')
+          : null;
 
         return {
           token: item.fcm_token,
           notification: {
             title: campaign.title,
             body: campaign.body,
-            imageUrl: campaign.image_url ?? undefined,
+            imageUrl: platformImage ?? undefined,
           },
           webpush: {
             fcmOptions: {
@@ -1763,12 +1908,16 @@ export const sendCampaign = async (shopDomain: string, campaignId: string) => {
             },
             notification: {
               icon: campaign.icon_url ?? undefined,
-              image: campaign.image_url ?? undefined,
+              image: platformImage ?? undefined,
+              actions: actions.length > 0 ? actions : undefined,
             },
           },
           data: {
             campaignId,
             shopDomain,
+            primaryUrl: trackedUrl ?? '',
+            button1Url: firstButtonUrl ?? '',
+            button2Url: secondButtonUrl ?? '',
           },
         };
       });

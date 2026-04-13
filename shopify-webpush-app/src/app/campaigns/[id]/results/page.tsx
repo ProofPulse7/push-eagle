@@ -13,6 +13,7 @@ import { OverviewStats } from '@/components/campaigns/results/overview-stats';
 import { PerformanceOverTimeChart } from '@/components/campaigns/results/performance-over-time-chart';
 import { PlatformPerformance } from '@/components/campaigns/results/platform-performance';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useSettings } from '@/context/settings-context';
 
 type Campaign = {
     id: string;
@@ -25,53 +26,87 @@ type Campaign = {
     status: 'Sent' | 'Scheduled' | 'Draft' | 'Archived';
 };
 
-// Mock campaigns data since Firebase is removed
-const mockCampaigns: Campaign[] = [
-    { id: 'summer-sale-2024', name: 'Summer Sale 2024', sendTime: new Date().toISOString(), segment: 'All Subscribers', reached: 250000, clickRate: '15.6%', sales: 5302.50, status: 'Sent' },
-    { id: 'new-arrivals-june', name: 'New Arrivals - June', sendTime: new Date().toISOString(), segment: 'High-Value Customers', reached: 180500, clickRate: '10.2%', sales: 3120.00, status: 'Sent' },
-];
+type ResultsPayload = {
+    performanceOverTime: Array<{ hour: string; clicks: number }>;
+    platformPerformance: Array<{ platform: string; clicks: number }>;
+};
 
 export default function CampaignResultsPage() {
     const params = useParams();
-    const id = params.id as string;
+    const id = Array.isArray(params.id) ? params.id[0] : params.id;
+    const { shopDomain } = useSettings();
     const [campaign, setCampaign] = useState<Campaign | null>(null);
+    const [results, setResults] = useState<ResultsPayload>({ performanceOverTime: [], platformPerformance: [] });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         if (!id) return;
+
         const fetchCampaign = async () => {
             setLoading(true);
-            try {
-                // Find campaign in mock data
-                const foundCampaign = mockCampaigns.find(c => c.id === id);
+            setError(null);
 
-                if (foundCampaign) {
-                    setCampaign(foundCampaign);
-                } else {
-                    // Try to find in sessionStorage for newly created campaigns
-                    const newCampaignJson = sessionStorage.getItem('newCampaign');
-                    if (newCampaignJson) {
-                        const newCampaign = JSON.parse(newCampaignJson);
-                        if (newCampaign.id === id) {
-                            setCampaign(newCampaign);
-                        } else {
-                            setError("Campaign not found.");
-                        }
-                    } else {
-                         setError("Campaign not found.");
-                    }
+            try {
+                const params = new URLSearchParams();
+                if (shopDomain) {
+                    params.set('shop', shopDomain);
                 }
+
+                const campaignUrl = `/api/campaigns/${id}${params.size ? `?${params.toString()}` : ''}`;
+                const resultsUrl = `/api/campaigns/${id}/results${params.size ? `?${params.toString()}` : ''}`;
+
+                const [campaignResponse, resultsResponse] = await Promise.all([
+                    fetch(campaignUrl),
+                    fetch(resultsUrl),
+                ]);
+
+                const campaignData = await campaignResponse.json();
+                const resultsData = await resultsResponse.json();
+
+                if (!campaignResponse.ok || !campaignData?.ok) {
+                    throw new Error(campaignData?.error ?? 'Campaign not found.');
+                }
+
+                if (!resultsResponse.ok || !resultsData?.ok) {
+                    throw new Error(resultsData?.error ?? 'Failed to load campaign results.');
+                }
+
+                const row = campaignData.campaign;
+                const deliveryCount = Number(row.delivery_count ?? 0);
+                const clickCount = Number(row.click_count ?? 0);
+
+                setCampaign({
+                    id: String(row.id),
+                    name: row.title ?? 'Untitled Campaign',
+                    sendTime: row.sent_at ?? row.created_at ?? new Date().toISOString(),
+                    segment: row.segment_id ? `Segment ${row.segment_id}` : 'All Subscribers',
+                    reached: deliveryCount,
+                    clickRate: deliveryCount > 0 ? `${((clickCount / deliveryCount) * 100).toFixed(1)}%` : '0.0%',
+                    sales: Number(row.revenue_cents ?? 0) / 100,
+                    status:
+                        String(row.status).toLowerCase() === 'sent'
+                            ? 'Sent'
+                            : String(row.status).toLowerCase() === 'scheduled'
+                            ? 'Scheduled'
+                            : String(row.status).toLowerCase() === 'archived'
+                            ? 'Archived'
+                            : 'Draft',
+                });
+
+                setResults({
+                    performanceOverTime: Array.isArray(resultsData.performanceOverTime) ? resultsData.performanceOverTime : [],
+                    platformPerformance: Array.isArray(resultsData.platformPerformance) ? resultsData.platformPerformance : [],
+                });
             } catch (err) {
-                console.error(err);
-                setError("Failed to fetch campaign data.");
+                setError(err instanceof Error ? err.message : 'Failed to fetch campaign data.');
             } finally {
                 setLoading(false);
             }
         };
 
         fetchCampaign();
-    }, [id]);
+    }, [id, shopDomain]);
 
     if (loading) {
         return <PageSkeleton />;
@@ -90,6 +125,14 @@ export default function CampaignResultsPage() {
         clickRate: campaign.clickRate,
         sales: campaign.sales,
     };
+
+    const chartData = results.performanceOverTime.length
+        ? results.performanceOverTime
+        : Array.from({ length: 12 }).map((_, index) => ({ hour: `${index * 2}h`, clicks: 0 }));
+
+    const platformData = results.platformPerformance.length
+        ? results.platformPerformance.map((item) => ({ ...item, platform: item.platform.toUpperCase() }))
+        : [{ platform: 'UNKNOWN', clicks: 0 }];
 
     return (
         <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
@@ -119,15 +162,15 @@ export default function CampaignResultsPage() {
                     Get AI Recommendations
                 </Button>
             </div>
-            
+
             <OverviewStats stats={stats} />
-            
+
             <div className="grid grid-cols-1 gap-8 lg:grid-cols-5">
                 <div className="lg:col-span-3">
-                    <PerformanceOverTimeChart />
+                    <PerformanceOverTimeChart data={chartData} />
                 </div>
                  <div className="lg:col-span-2">
-                    <PlatformPerformance />
+                    <PlatformPerformance data={platformData} />
                 </div>
             </div>
 

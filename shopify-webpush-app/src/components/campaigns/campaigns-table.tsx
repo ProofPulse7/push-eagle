@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect, useMemo, startTransition, useRef } from "react";
+import { useState, useEffect, useMemo, startTransition } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { formatDistanceToNow, isWithinInterval } from 'date-fns';
@@ -13,7 +13,6 @@ import { PlusCircle, Rocket, Users, Calendar, Hash, Copy } from "lucide-react"
 import { Card, CardContent } from "../ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Skeleton } from "../ui/skeleton";
-import { useToast } from "@/hooks/use-toast";
 import { formatCurrency } from "@/lib/utils";
 import { useSettings } from "@/context/settings-context";
 
@@ -31,15 +30,6 @@ type Campaign = {
     createdAt?: string;
 };
 
-const mockCampaignsData: Campaign[] = [
-    { id: 'summer-sale-2024', name: 'Summer Sale 2024', message: 'Get up to 50% off on our summer collection! Limited time offer.', imagePreviewUrl: 'https://placehold.co/160x90.png', sendTime: new Date(2024, 5, 15).toISOString(), segment: 'All Subscribers', reached: 250000, clickRate: '15.6%', sales: 5302.50, status: 'Sent', createdAt: new Date(2024, 5, 15).toISOString() },
-    { id: 'new-arrivals-june', name: 'New Arrivals - June', message: 'Check out the latest trends for this month. Fresh styles are in!', imagePreviewUrl: 'https://placehold.co/160x90.png', sendTime: new Date(2024, 5, 1).toISOString(), segment: 'High-Value Customers', reached: 180500, clickRate: '10.2%', sales: 3120.00, status: 'Sent', createdAt: new Date(2024, 5, 1).toISOString() },
-    { id: 'fathers-day-special', name: 'Father\'s Day Special', message: 'Find the perfect gift for dad. Special discounts inside!', imagePreviewUrl: 'https://placehold.co/160x90.png', sendTime: new Date(2024, 6, 10).toISOString(), segment: 'All Subscribers', reached: 0, clickRate: 'N/A', sales: 0, status: 'Scheduled', createdAt: new Date(2024, 6, 1).toISOString() },
-    { id: 'winter-collection-draft', name: 'Winter Collection Draft', message: 'Get ready for the cold season with our new winter wear.', imagePreviewUrl: null, sendTime: '', segment: 'Female Subscribers', reached: 0, clickRate: 'N/A', sales: 0, status: 'Draft', createdAt: new Date(2024, 5, 20).toISOString() },
-    { id: 'old-promo-2023', name: 'Old Promo 2023', message: 'An archived campaign from last year.', imagePreviewUrl: 'https://placehold.co/160x90.png', sendTime: new Date(2023, 10, 10).toISOString(), segment: 'All Subscribers', reached: 150000, clickRate: '8.1%', sales: 1200, status: 'Archived', createdAt: new Date(2023, 10, 10).toISOString() },
-];
-
-
 const TableSkeleton = () => (
     <div className="space-y-4">
         <Skeleton className="h-48 w-full" />
@@ -53,7 +43,6 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState('sent');
-    const { toast } = useToast();
     const { shopDomain } = useSettings();
 
     const mapApiCampaign = (campaign: any): Campaign => {
@@ -76,7 +65,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             message: campaign.body ?? '',
             imagePreviewUrl: campaign.image_url ?? null,
             sendTime: campaign.sent_at ?? campaign.created_at ?? new Date().toISOString(),
-            segment: campaign.segment_id ?? 'All Subscribers',
+            segment: campaign.segment_id ? `Segment ${campaign.segment_id}` : 'All Subscribers',
             reached: deliveryCount,
             clickRate: ctr,
             sales: Number(campaign.revenue_cents ?? 0) / 100,
@@ -91,7 +80,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             setError(null);
             try {
                 if (!shopDomain) {
-                    setCampaigns([...mockCampaignsData]);
+                    setCampaigns([]);
                     return;
                 }
 
@@ -104,7 +93,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
 
                 setCampaigns((data.campaigns ?? []).map(mapApiCampaign));
             } catch (error) {
-                setCampaigns([...mockCampaignsData]);
+                setCampaigns([]);
                 setError(error instanceof Error ? error.message : 'Failed to load campaigns.');
             } finally {
                 setLoading(false);
@@ -187,7 +176,9 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
     const renderCampaignsList = () => (
         <div className="space-y-4">
             {filteredCampaigns.map(campaign => {
-                const clicks = campaign.reached && campaign.clickRate ? Math.round(campaign.reached * (parseFloat(campaign.clickRate) / 100)) : 'N/A';
+                const ctr = Number.parseFloat(campaign.clickRate);
+                const clicks = Number.isFinite(ctr) ? Math.round(campaign.reached * (ctr / 100)) : null;
+
                 return (
                     <Card key={campaign.id} className="transition-shadow duration-300 hover:shadow-lg">
                         <div className="p-4 space-y-4">
@@ -217,7 +208,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                         </div>
                                         <div>
                                             <p className="text-muted-foreground">Clicks</p>
-                                            <p className="font-medium">{clicks.toLocaleString()}</p>
+                                            <p className="font-medium">{clicks === null ? 'N/A' : clicks.toLocaleString()}</p>
                                         </div>
                                         <div>
                                             <p className="text-muted-foreground">CTR</p>

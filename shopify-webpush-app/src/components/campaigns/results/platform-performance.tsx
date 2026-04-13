@@ -4,11 +4,11 @@ import { Bar, BarChart, CartesianGrid, XAxis, YAxis, ResponsiveContainer } from 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 
-const chartData = [
-  { platform: 'Android', clicks: 1860, fill: 'var(--color-android)' },
-  { platform: 'Windows', clicks: 1250, fill: 'var(--color-windows)' },
-  { platform: 'macOS', clicks: 980, fill: 'var(--color-macos)' },
-];
+type PlatformPoint = {
+  platform: string;
+  clicks: number;
+  fill?: string;
+};
 
 const chartConfig = {
   clicks: {
@@ -28,7 +28,7 @@ const chartConfig = {
   }
 } satisfies ChartConfig;
 
-export function PlatformPerformance() {
+export function PlatformPerformance({ data }: { data: PlatformPoint[] }) {
   return (
     <Card>
       <CardHeader>
@@ -38,7 +38,7 @@ export function PlatformPerformance() {
       <CardContent>
         <ChartContainer config={chartConfig} className="h-64 w-full">
             <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={chartData} layout="vertical" margin={{ left: 10, right: 20 }}>
+                <BarChart data={data} layout="vertical" margin={{ left: 10, right: 20 }}>
                     <CartesianGrid horizontal={false} />
                     <YAxis
                         dataKey="platform"

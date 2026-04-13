@@ -6,14 +6,14 @@ import type { DateRange } from 'react-day-picker';
 import { Card, CardContent } from '@/components/ui/card';
 import { formatCurrency } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useSettings } from '@/context/settings-context';
 
-
-const generateStatsData = () => [
-    { label: "Impressions", value: (Math.floor(Math.random() * 200000) + 50000).toLocaleString() },
-    { label: "Clicks", value: (Math.floor(Math.random() * 10000) + 2000).toLocaleString() },
-    { label: "Avg. CTR", value: `${(Math.random() * 5 + 2).toFixed(1)}%` },
-    { label: "Revenue generated", value: formatCurrency(Math.floor(Math.random() * 100000) + 10000) }
-];
+type CampaignStatsResponse = {
+    impressions: number;
+    clicks: number;
+    avgCtrPercent: number;
+    revenueCents: number;
+};
 
 const StatSkeleton = () => (
     <div className="p-6">
@@ -22,17 +22,57 @@ const StatSkeleton = () => (
     </div>
 );
 
-
 export function CampaignStats({ date }: { date: DateRange | undefined }) {
-    const [statsData, setStatsData] = useState<any[] | null>(null);
-    
+    const { shopDomain } = useSettings();
+    const [stats, setStats] = useState<CampaignStatsResponse | null>(null);
+
     useEffect(() => {
-        setStatsData(null); 
-        const timer = setTimeout(() => {
-            setStatsData(generateStatsData());
-        }, 300);
-        return () => clearTimeout(timer);
-    }, [date]);
+        const fetchStats = async () => {
+            setStats(null);
+
+            if (!shopDomain) {
+                setStats({ impressions: 0, clicks: 0, avgCtrPercent: 0, revenueCents: 0 });
+                return;
+            }
+
+            try {
+                const params = new URLSearchParams({ shop: shopDomain });
+                if (date?.from) {
+                    params.set('from', date.from.toISOString());
+                }
+                if (date?.to) {
+                    params.set('to', date.to.toISOString());
+                }
+
+                const response = await fetch(`/api/campaigns/stats?${params.toString()}`);
+                const data = await response.json();
+
+                if (!response.ok || !data?.ok) {
+                    throw new Error(data?.error ?? 'Failed to load campaign stats.');
+                }
+
+                setStats({
+                    impressions: Number(data.stats?.impressions ?? 0),
+                    clicks: Number(data.stats?.clicks ?? 0),
+                    avgCtrPercent: Number(data.stats?.avgCtrPercent ?? 0),
+                    revenueCents: Number(data.stats?.revenueCents ?? 0),
+                });
+            } catch {
+                setStats({ impressions: 0, clicks: 0, avgCtrPercent: 0, revenueCents: 0 });
+            }
+        };
+
+        fetchStats();
+    }, [date, shopDomain]);
+
+    const statsData = stats
+        ? [
+              { label: 'Impressions', value: stats.impressions.toLocaleString() },
+              { label: 'Clicks', value: stats.clicks.toLocaleString() },
+              { label: 'Avg. CTR', value: `${stats.avgCtrPercent.toFixed(1)}%` },
+              { label: 'Revenue generated', value: formatCurrency(stats.revenueCents / 100) },
+          ]
+        : null;
 
     return (
         <Card>

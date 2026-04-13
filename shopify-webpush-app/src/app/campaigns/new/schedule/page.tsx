@@ -94,11 +94,19 @@ export default function ScheduleCampaignPage() {
         };
     }, [shopDomain, segmentId]);
     
-    const handleLaunchCampaign = async (status: 'Sent' | 'Scheduled') => {
+    const handleLaunchCampaign = async () => {
         setIsLaunching(true);
         try {
             if (!shopDomain) {
                 throw new Error('Set your Shopify subdomain in Settings before launching campaigns.');
+            }
+
+            if (!title?.trim()) {
+                throw new Error('Campaign title is required.');
+            }
+
+            if (!primaryLink?.trim()) {
+                throw new Error('Destination URL is required.');
             }
 
             if (sendingOption === 'schedule') {
@@ -127,6 +135,12 @@ export default function ScheduleCampaignPage() {
                     targetUrl: primaryLink || null,
                     iconUrl: logo.preview,
                     imageUrl: macHero.preview,
+                    windowsImageUrl: windowsHero.preview,
+                    macosImageUrl: macHero.preview,
+                    androidImageUrl: androidHero.preview,
+                    actionButtons: actionButtons
+                        .filter((button) => button.title?.trim() && button.link?.trim())
+                        .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
                     segmentId,
                     status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
                     scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
@@ -153,8 +167,8 @@ export default function ScheduleCampaignPage() {
                 }
             }
 
-            const toastTitle = status === 'Sent' ? "Campaign Launched!" : "Campaign Scheduled!";
-            const toastDescription = status === 'Sent' ? "Your campaign has been successfully sent." : "Your campaign has been scheduled.";
+            const toastTitle = sendingOption === 'schedule' ? "Campaign Scheduled!" : "Campaign Launched!";
+            const toastDescription = sendingOption === 'schedule' ? "Your campaign has been scheduled." : "Your campaign has been successfully sent.";
             
             toast({
                 title: toastTitle,
@@ -191,6 +205,12 @@ export default function ScheduleCampaignPage() {
                     targetUrl: primaryLink || null,
                     iconUrl: logo.preview,
                     imageUrl: macHero.preview,
+                    windowsImageUrl: windowsHero.preview,
+                    macosImageUrl: macHero.preview,
+                    androidImageUrl: androidHero.preview,
+                    actionButtons: actionButtons
+                        .filter((button) => button.title?.trim() && button.link?.trim())
+                        .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
                     segmentId,
                     status: 'draft',
                 }),
@@ -266,7 +286,7 @@ export default function ScheduleCampaignPage() {
                                 <p className="font-medium flex items-center gap-2"><Users className="h-4 w-4" /> {segmentDisplayName} ({segmentSubscriberCount.toLocaleString()} subscribers)</p>
                             </div>
                             <div className="space-y-1">
-                                <p className="text-sm text-muted-foreground">Starts (Pakistan Standard Time)</p>
+                                <p className="text-sm text-muted-foreground">Starts</p>
                                 <p className="font-medium flex items-center gap-2">
                                     <Clock className="h-4 w-4" /> 
                                     {sendingOption === 'schedule' && scheduledAt
@@ -317,8 +337,8 @@ export default function ScheduleCampaignPage() {
                 </Button>
                 <Button 
                     size="lg" 
-                    onClick={() => handleLaunchCampaign(sendingOption === 'schedule' ? 'Scheduled' : 'Sent')} 
-                    disabled={isLaunching || isSaving || !title || segmentSubscriberCount <= 0}
+                    onClick={handleLaunchCampaign} 
+                    disabled={isLaunching || isSaving || !title || !primaryLink || segmentSubscriberCount <= 0}
                 >
                     {isLaunching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
                     {isLaunching ? 'Processing...' : (sendingOption === 'schedule' ? 'Schedule Campaign' : 'Launch Campaign')}
