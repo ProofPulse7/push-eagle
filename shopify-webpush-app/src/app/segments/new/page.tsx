@@ -237,6 +237,7 @@ export default function NewSegmentPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { shopDomain } = useSettings();
+  const [resolvedShopDomain, setResolvedShopDomain] = useState('');
   const [segmentName, setSegmentName] = useState('');
   const [estimatedCount, setEstimatedCount] = useState(0);
   const [isEstimating, setIsEstimating] = useState(false);
@@ -246,18 +247,26 @@ export default function NewSegmentPage() {
   ]);
 
   useEffect(() => {
-    if (!shopDomain) {
+    const fromContext = (shopDomain || '').trim().toLowerCase();
+    const fromQuery = new URLSearchParams(window.location.search).get('shop')?.trim().toLowerCase() || '';
+    const fromStorage = (localStorage.getItem('shopDomain') || '').trim().toLowerCase();
+    const candidate = [fromContext, fromQuery, fromStorage].find((value) => value.endsWith('.myshopify.com')) || '';
+    setResolvedShopDomain(candidate);
+  }, [shopDomain]);
+
+  useEffect(() => {
+    if (!resolvedShopDomain) {
       return;
     }
 
     const timer = setTimeout(async () => {
       try {
         setIsEstimating(true);
-        const response = await fetch(`/api/segments/estimate?shop=${encodeURIComponent(shopDomain)}`, {
+        const response = await fetch(`/api/segments/estimate?shop=${encodeURIComponent(resolvedShopDomain)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            shopDomain,
+            shopDomain: resolvedShopDomain,
             conditionGroups: conditionGroups.map((group) => ({
               id: group.id,
               conditions: group.conditions.map((condition) => ({
@@ -285,7 +294,7 @@ export default function NewSegmentPage() {
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [conditionGroups, shopDomain]);
+  }, [conditionGroups, resolvedShopDomain]);
 
   const addOrCondition = (groupId: string) => {
     setConditionGroups(
@@ -340,17 +349,17 @@ export default function NewSegmentPage() {
   };
 
   const handleCreateSegment = async () => {
-    if (!shopDomain || !segmentName.trim() || estimatedCount <= 0 || isCreating) {
+    if (!resolvedShopDomain || !segmentName.trim() || estimatedCount <= 0 || isCreating) {
       return;
     }
 
     try {
       setIsCreating(true);
-      const response = await fetch(`/api/segments?shop=${encodeURIComponent(shopDomain)}`, {
+      const response = await fetch(`/api/segments?shop=${encodeURIComponent(resolvedShopDomain)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          shopDomain,
+          shopDomain: resolvedShopDomain,
           name: segmentName.trim(),
           conditionGroups: conditionGroups.map((group) => ({
             id: group.id,
@@ -648,7 +657,7 @@ export default function NewSegmentPage() {
 
 
             <div className="pt-8 flex justify-end">
-                <Button size="lg" disabled={!segmentName || estimatedCount <= 0 || isCreating || !shopDomain} onClick={handleCreateSegment}>
+                <Button size="lg" disabled={!segmentName || estimatedCount <= 0 || isCreating || !resolvedShopDomain} onClick={handleCreateSegment}>
                   {isCreating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Create Segment
                 </Button>
