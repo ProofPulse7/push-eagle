@@ -314,6 +314,77 @@
     return { name: 'unknown', version: null, source: 'userAgentData' };
   }
 
+  function extractCountryFromLocale(locale) {
+    var value = String(locale || '');
+    if (!value) {
+      return null;
+    }
+
+    var normalized = value.replace('_', '-');
+    var parts = normalized.split('-');
+    for (var i = 1; i < parts.length; i += 1) {
+      var part = parts[i];
+      if (/^[A-Za-z]{2}$/.test(part)) {
+        return part.toUpperCase();
+      }
+    }
+
+    return null;
+  }
+
+  function deriveCityFromTimezone(timezone) {
+    var zone = String(timezone || '');
+    if (!zone || zone.indexOf('/') === -1) {
+      return null;
+    }
+
+    var parts = zone.split('/');
+    var cityPart = parts[parts.length - 1] || '';
+    if (!cityPart) {
+      return null;
+    }
+
+    return cityPart.replace(/_/g, ' ');
+  }
+
+  async function getBrowserGeoHints() {
+    var timezone = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || null;
+    var localeCandidates = [];
+    if (Array.isArray(navigator.languages)) {
+      localeCandidates = navigator.languages.slice(0, 5);
+    }
+    if (navigator.language) {
+      localeCandidates.push(navigator.language);
+    }
+
+    var country = null;
+    for (var localeIndex = 0; localeIndex < localeCandidates.length; localeIndex += 1) {
+      country = extractCountryFromLocale(localeCandidates[localeIndex]);
+      if (country) {
+        break;
+      }
+    }
+
+    var city = deriveCityFromTimezone(timezone);
+    var geolocationPermission = null;
+
+    try {
+      if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+        var status = await navigator.permissions.query({ name: 'geolocation' });
+        geolocationPermission = status && status.state ? String(status.state) : null;
+      }
+    } catch (_error) {
+      geolocationPermission = null;
+    }
+
+    return {
+      country: country,
+      city: city,
+      geolocationPermission: geolocationPermission,
+      timezone: timezone
+    };
+  }
+
   function getCurrentStandaloneState() {
     return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
   }
@@ -422,6 +493,7 @@
     var osName = hintOsName || uaOs.name;
     var shopifyContext = getShopifyContext(root, boot);
     var deviceType = detectDeviceType(ua, osName, uaData && uaData.mobile);
+    var geoHints = await getBrowserGeoHints();
 
     if ((navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) && osName === 'macos') {
       osName = 'ios';
@@ -453,7 +525,10 @@
       permissionState: 'Notification' in window ? Notification.permission : 'unsupported',
       language: navigator.language || shopifyContext.locale || null,
       languages: Array.isArray(navigator.languages) ? navigator.languages.slice(0, 5) : [],
-      timezone: (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || null,
+      timezone: geoHints.timezone,
+      country: geoHints.country || shopifyContext.country || null,
+      city: geoHints.city || null,
+      geolocationPermission: geoHints.geolocationPermission,
       maxTouchPoints: Number(navigator.maxTouchPoints || 0),
       hardwareConcurrency: Number(navigator.hardwareConcurrency || 0) || null,
       deviceMemory: typeof navigator.deviceMemory === 'number' ? navigator.deviceMemory : null,
@@ -524,6 +599,9 @@
       language: profile.language,
       languages: profile.languages,
       timezone: profile.timezone,
+      country: profile.country,
+      city: profile.city,
+      geolocationPermission: profile.geolocationPermission,
       maxTouchPoints: profile.maxTouchPoints,
       hardwareConcurrency: profile.hardwareConcurrency,
       deviceMemory: profile.deviceMemory,
@@ -881,7 +959,8 @@
           browser: profile && profile.browserName ? profile.browserName : detectBrowser(),
           platform: profile && profile.osName ? profile.osName : detectPlatform(),
           locale: profile && profile.language ? profile.language : navigator.language,
-          country: profile && profile.shopifyCountry ? profile.shopifyCountry : null,
+          country: profile && profile.country ? profile.country : (profile && profile.shopifyCountry ? profile.shopifyCountry : null),
+          city: profile && profile.city ? profile.city : null,
           deviceContext: serializeClientProfile(profile)
         })
       });
@@ -1069,7 +1148,8 @@
         browser: clientProfile && clientProfile.browserName ? clientProfile.browserName : detectBrowser(),
         platform: clientProfile && clientProfile.osName ? clientProfile.osName : detectPlatform(),
         locale: clientProfile && clientProfile.language ? clientProfile.language : navigator.language,
-        country: clientProfile && clientProfile.shopifyCountry ? clientProfile.shopifyCountry : null,
+        country: clientProfile && clientProfile.country ? clientProfile.country : (clientProfile && clientProfile.shopifyCountry ? clientProfile.shopifyCountry : null),
+        city: clientProfile && clientProfile.city ? clientProfile.city : null,
         deviceContext: serializeClientProfile(clientProfile)
       };
 

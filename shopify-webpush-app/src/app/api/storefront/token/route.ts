@@ -121,9 +121,11 @@ export async function POST(request: Request) {
       ?? (typeof body.deviceContext?.language === 'string' ? body.deviceContext.language : undefined)
       ?? (typeof body.deviceContext?.shopifyLocale === 'string' ? body.deviceContext.shopifyLocale : undefined);
     const country = body.country
+      ?? (typeof body.deviceContext?.country === 'string' ? body.deviceContext.country : undefined)
       ?? requestGeo.country
       ?? (typeof body.deviceContext?.shopifyCountry === 'string' ? body.deviceContext.shopifyCountry : undefined);
     const city = body.city
+      ?? (typeof body.deviceContext?.city === 'string' ? body.deviceContext.city : undefined)
       ?? requestGeo.city;
 
     const saved = await upsertSubscriberToken({
