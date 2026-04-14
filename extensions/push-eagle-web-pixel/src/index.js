@@ -8,7 +8,11 @@ const pick = (obj, path) => {
   let current = obj;
   for (const part of parts) {
     if (current == null || typeof current !== 'object') return null;
-    current = current[part];
+    try {
+      current = current[part];
+    } catch (_error) {
+      return null;
+    }
   }
   return current == null ? null : current;
 };
@@ -20,15 +24,34 @@ const toStringSafe = (value) => {
 };
 
 const normalizePath = (value) => {
-  const path = toStringSafe(value);
-  if (!path) return DEFAULT_ENDPOINT_PATH;
-  return path.startsWith('/') ? path : `/${path}`;
+  const raw = toStringSafe(value);
+  if (!raw) return DEFAULT_ENDPOINT_PATH;
+
+  let path = raw;
+  if (/^https?:\/\//i.test(path)) {
+    try {
+      path = new URL(path).pathname || DEFAULT_ENDPOINT_PATH;
+    } catch (_error) {
+      return DEFAULT_ENDPOINT_PATH;
+    }
+  }
+
+  if (!path.startsWith('/')) {
+    path = `/${path}`;
+  }
+
+  // Keep requests constrained to app proxy paths so sandbox frames never self-navigate.
+  if (!path.toLowerCase().startsWith('/apps/')) {
+    return DEFAULT_ENDPOINT_PATH;
+  }
+
+  return path;
 };
 
 const getShopDomain = (init) => {
   const direct = toStringSafe(init?.data?.shop?.myshopifyDomain)
     || toStringSafe(init?.context?.shop?.myshopifyDomain)
-    || toStringSafe(init?.context?.document?.location?.hostname);
+    || toStringSafe(pick(init, 'context.window.location.hostname'));
 
   if (!direct) return null;
   return direct.toLowerCase();
@@ -36,7 +59,7 @@ const getShopDomain = (init) => {
 
 const getPageUrl = (event) => {
   return (
-    toStringSafe(pick(event, 'context.document.location.href'))
+    toStringSafe(pick(event, 'context.window.location.href'))
     || toStringSafe(pick(event, 'data.checkout.url'))
     || toStringSafe(pick(event, 'data.cart.url'))
     || toStringSafe(pick(event, 'data.productVariant.product.url'))
