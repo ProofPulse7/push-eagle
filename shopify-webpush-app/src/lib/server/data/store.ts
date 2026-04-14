@@ -598,6 +598,47 @@ const ensureSchema = async () => {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
 
+      await sql`CREATE TABLE IF NOT EXISTS pixel_events (
+        id TEXT PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        external_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        page_url TEXT,
+        product_id TEXT,
+        cart_token TEXT,
+        client_id TEXT,
+        metadata JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+
+      await sql`CREATE TABLE IF NOT EXISTS campaign_schedules (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        schedule_type TEXT NOT NULL,
+        send_at TIMESTAMPTZ,
+        recurring_pattern TEXT,
+        smart_send_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        smart_send_config JSONB,
+        flash_sale_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        flash_sale_config JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+
+      await sql`CREATE TABLE IF NOT EXISTS smart_delivery_metrics (
+        id TEXT PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        external_id TEXT NOT NULL,
+        optimal_send_hour INTEGER,
+        engagement_score REAL NOT NULL DEFAULT 0,
+        click_through_rate REAL NOT NULL DEFAULT 0,
+        conversion_rate REAL NOT NULL DEFAULT 0,
+        last_interaction_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_domain, external_id)
+      )`;
+
       await sql`CREATE TABLE IF NOT EXISTS shopify_product_variants (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -633,6 +674,11 @@ const ensureSchema = async () => {
 
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_status ON subscriber_tokens(shop_domain, status)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_created ON campaigns(shop_domain, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_scheduled ON campaigns(shop_domain, status, scheduled_at)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_created ON pixel_events(shop_domain, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_external ON pixel_events(shop_domain, external_id, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_schedules_send_at ON campaign_schedules(send_at) WHERE send_at IS NOT NULL`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_smart_delivery_metrics_shop ON smart_delivery_metrics(shop_domain)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_token ON campaign_deliveries(campaign_id, token_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;

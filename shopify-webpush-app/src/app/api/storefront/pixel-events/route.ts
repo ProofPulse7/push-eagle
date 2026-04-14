@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
 import { recordSubscriberActivity } from '@/lib/server/data/store';
 import { extractShopDomain, parseShopDomain } from '@/lib/server/shop-context';
 
@@ -54,9 +55,28 @@ export async function POST(request: Request) {
 
     const externalId = deriveExternalId(shopDomain, body);
     if (!externalId) {
-      return NextResponse.json({ ok: false, error: 'Unable to derive externalId from pixel payload.' }, { status: 400, headers: corsHeaders });
+      return NextResponse.json(
+        { ok: false, error: 'Unable to derive externalId from pixel payload.' },
+        { status: 400, headers: corsHeaders },
+      );
     }
 
+    // 1. Record raw pixel event to database (write-optimized logging)
+    const pixelEventId = await recordPixelEvent({
+      shopDomain,
+      externalId,
+      eventType: body.eventType,
+      pageUrl: body.pageUrl,
+      productId: body.productId,
+      cartToken: body.cartToken,
+      clientId: body.clientId,
+      metadata: {
+        ...(body.metadata ?? {}),
+        pixelEventName: body.eventName ?? null,
+      },
+    });
+
+    // 2. Record subscriber activity and queue automations
     const result = await recordSubscriberActivity({
       shopDomain,
       externalId,
@@ -68,12 +88,16 @@ export async function POST(request: Request) {
         ...(body.metadata ?? {}),
         pixelEventName: body.eventName ?? null,
         pixelClientId: body.clientId ?? null,
+        pixelEventId,
       },
     });
 
     return NextResponse.json({ ok: true, ...result }, { headers: corsHeaders });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to ingest web pixel event.';
-    return NextResponse.json({ ok: false, error: message }, { status: 400, headers: corsHeaders });
+    return NextResponse.json(
+      { ok: false, error: message },
+      { status: 400, headers: corsHeaders },
+    );
   }
 }
