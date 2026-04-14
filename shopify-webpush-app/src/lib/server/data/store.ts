@@ -131,6 +131,7 @@ type AutomationRuleKey =
   | 'browse_abandonment_15m'
   | 'cart_abandonment_30m'
   | 'checkout_abandonment_30m'
+  | 'shipping_notifications'
   | 'back_in_stock'
   | 'price_drop'
   | 'win_back_7d'
@@ -143,6 +144,14 @@ type AutomationJobPayload = {
   iconUrl?: string | null;
   imageUrl?: string | null;
   campaignLabel?: string | null;
+  ruleKey?: AutomationRuleKey | null;
+  externalId?: string | null;
+  customerId?: string | null;
+  productId?: string | null;
+  cartToken?: string | null;
+  orderId?: string | null;
+  triggeredAt?: string | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type UpsertMerchantProfileInput = {
@@ -182,6 +191,41 @@ type UpsertShopifyOrderEventInput = {
     productTitle?: string | null;
     collectionHint?: string | null;
   }>;
+};
+
+type UpsertShopifyProductVariantsInput = {
+  shopDomain: string;
+  productId: string;
+  productTitle?: string | null;
+  handle?: string | null;
+  imageUrl?: string | null;
+  updatedAt?: string | null;
+  variants: Array<{
+    variantId: string;
+    variantTitle?: string | null;
+    priceCents?: number | null;
+    compareAtPriceCents?: number | null;
+    inventoryItemId?: string | null;
+  }>;
+};
+
+type ProcessInventoryLevelUpdateInput = {
+  shopDomain: string;
+  inventoryItemId: string;
+  available: number | null;
+  updatedAt?: string | null;
+};
+
+type ProcessFulfillmentUpdateInput = {
+  shopDomain: string;
+  fulfillmentId: string;
+  orderId: string;
+  status?: string | null;
+  shipmentStatus?: string | null;
+  trackingCompany?: string | null;
+  trackingNumbers?: string[] | null;
+  trackingUrls?: string[] | null;
+  updatedAt?: string | null;
 };
 
 type SegmentConditionSelectedValue = {
@@ -554,6 +598,39 @@ const ensureSchema = async () => {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
 
+      await sql`CREATE TABLE IF NOT EXISTS shopify_product_variants (
+        id BIGSERIAL PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        product_id TEXT NOT NULL,
+        variant_id TEXT NOT NULL,
+        inventory_item_id TEXT,
+        product_title TEXT,
+        variant_title TEXT,
+        handle TEXT,
+        image_url TEXT,
+        price_cents INTEGER,
+        compare_at_price_cents INTEGER,
+        available INTEGER,
+        updated_at TIMESTAMPTZ,
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_domain, variant_id)
+      )`;
+
+      await sql`CREATE TABLE IF NOT EXISTS shopify_fulfillments (
+        id BIGSERIAL PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        fulfillment_id TEXT NOT NULL,
+        order_id TEXT NOT NULL,
+        status TEXT,
+        shipment_status TEXT,
+        tracking_company TEXT,
+        tracking_numbers JSONB,
+        tracking_urls JSONB,
+        updated_at TIMESTAMPTZ,
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_domain, fulfillment_id)
+      )`;
+
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_status ON subscriber_tokens(shop_domain, status)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_created ON campaigns(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
@@ -572,6 +649,12 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_due ON automation_jobs(shop_domain, status, due_at)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_jobs_dedupe ON automation_jobs(shop_domain, dedupe_key) WHERE dedupe_key IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_external_created ON subscriber_activity_events(shop_domain, external_id, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_product_created ON subscriber_activity_events(shop_domain, product_id, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_cart_created ON subscriber_activity_events(shop_domain, cart_token, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_variant ON shopify_product_variants(shop_domain, variant_id)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_inventory ON shopify_product_variants(shop_domain, inventory_item_id)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_product ON shopify_product_variants(shop_domain, product_id)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_fulfillments_shop_order ON shopify_fulfillments(shop_domain, order_id, updated_at DESC)`;
     })();
   }
 
@@ -646,6 +729,7 @@ const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean
   { key: 'browse_abandonment_15m', enabled: true, config: { delayMinutes: 15 } },
   { key: 'cart_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
   { key: 'checkout_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
+  { key: 'shipping_notifications', enabled: false, config: { sendWhen: ['in_transit', 'out_for_delivery', 'delivered'] } },
   { key: 'back_in_stock', enabled: false, config: {} },
   { key: 'price_drop', enabled: false, config: {} },
   { key: 'win_back_7d', enabled: false, config: { delayDays: 7 } },
@@ -713,6 +797,258 @@ export const upsertAutomationRule = async (
         updatedAt: row.updated_at ? String(row.updated_at) : null,
       }
     : null;
+};
+
+const buildProductUrl = (handle?: string | null) => {
+  const normalized = String(handle ?? '').trim();
+  return normalized ? `/products/${normalized}` : null;
+};
+
+const getRuleConfig = async (shopDomain: string, ruleKey: AutomationRuleKey) => {
+  const sql = getNeonSql();
+  const rows = await sql`
+    SELECT enabled, config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = ${ruleKey}
+    LIMIT 1
+  `;
+
+  return {
+    enabled: Boolean(rows[0]?.enabled),
+    config: (rows[0]?.config ?? {}) as Record<string, unknown>,
+  };
+};
+
+const listAutomationTargets = async (input: { shopDomain: string; externalId?: string | null; subscriberId?: number | null }) => {
+  const sql = getNeonSql();
+
+  if (!input.externalId && !input.subscriberId) {
+    return [] as Array<{ tokenId: number; subscriberId: number | null; externalId: string | null }>;
+  }
+
+  const rows = input.subscriberId
+    ? await sql`
+      SELECT t.id AS token_id, s.id AS subscriber_id, s.external_id
+      FROM subscriber_tokens t
+      JOIN subscribers s ON s.id = t.subscriber_id
+      WHERE t.shop_domain = ${input.shopDomain}
+        AND s.id = ${input.subscriberId}
+        AND t.status = 'active'
+    `
+    : await sql`
+      SELECT t.id AS token_id, s.id AS subscriber_id, s.external_id
+      FROM subscriber_tokens t
+      JOIN subscribers s ON s.id = t.subscriber_id
+      WHERE t.shop_domain = ${input.shopDomain}
+        AND s.external_id = ${input.externalId ?? ''}
+        AND t.status = 'active'
+    `;
+
+  return rows.map((row) => ({
+    tokenId: Number(row.token_id),
+    subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
+    externalId: row.external_id ? String(row.external_id) : null,
+  }));
+};
+
+const enqueueAutomationForTargets = async (input: {
+  shopDomain: string;
+  ruleKey: AutomationRuleKey;
+  targets: Array<{ tokenId: number; subscriberId: number | null }>;
+  dedupeKeyBase: string;
+  dueAt?: Date;
+  payload: AutomationJobPayload;
+}) => {
+  for (const target of input.targets) {
+    await enqueueAutomationJob({
+      shopDomain: input.shopDomain,
+      ruleKey: input.ruleKey,
+      tokenId: target.tokenId,
+      subscriberId: target.subscriberId,
+      dedupeKey: `${input.dedupeKeyBase}:${target.tokenId}`,
+      dueAt: input.dueAt,
+      payload: {
+        ...input.payload,
+        ruleKey: input.ruleKey,
+      },
+    });
+  }
+};
+
+const hasRecentActivity = async (input: {
+  shopDomain: string;
+  externalId?: string | null;
+  since?: string | null;
+  eventTypes: string[];
+  productId?: string | null;
+  cartToken?: string | null;
+}) => {
+  if (!input.externalId || !input.since || input.eventTypes.length === 0) {
+    return false;
+  }
+
+  const sql = getNeonSql();
+  const rows = await sql`
+    SELECT id
+    FROM subscriber_activity_events
+    WHERE shop_domain = ${input.shopDomain}
+      AND external_id = ${input.externalId}
+      AND event_type = ANY(${input.eventTypes})
+      AND created_at > ${new Date(input.since)}
+      AND (
+        (${input.productId ?? null} IS NULL AND ${input.cartToken ?? null} IS NULL)
+        OR (${input.productId ?? null} IS NOT NULL AND product_id = ${input.productId ?? null})
+        OR (${input.cartToken ?? null} IS NOT NULL AND cart_token = ${input.cartToken ?? null})
+      )
+    LIMIT 1
+  `;
+
+  return rows.length > 0;
+};
+
+const hasRecentOrder = async (input: {
+  shopDomain: string;
+  externalId?: string | null;
+  customerId?: string | null;
+  since?: string | null;
+}) => {
+  if (!input.since || (!input.externalId && !input.customerId)) {
+    return false;
+  }
+
+  const sql = getNeonSql();
+  const rows = await sql`
+    SELECT id
+    FROM shopify_orders
+    WHERE shop_domain = ${input.shopDomain}
+      AND created_at > ${new Date(input.since)}
+      AND (
+        (${input.externalId ?? null} IS NOT NULL AND external_id = ${input.externalId ?? null})
+        OR (${input.customerId ?? null} IS NOT NULL AND customer_id = ${input.customerId ?? null})
+      )
+    LIMIT 1
+  `;
+
+  return rows.length > 0;
+};
+
+const getAutomationSkipReason = async (shopDomain: string, payload: AutomationJobPayload) => {
+  const ruleKey = payload.ruleKey ?? null;
+  const triggeredAt = payload.triggeredAt ?? null;
+
+  if (!ruleKey || !triggeredAt) {
+    return null;
+  }
+
+  if (ruleKey === 'browse_abandonment_15m') {
+    const resumedJourney = await hasRecentActivity({
+      shopDomain,
+      externalId: payload.externalId,
+      since: triggeredAt,
+      eventTypes: ['add_to_cart', 'checkout_start'],
+      productId: payload.productId ?? null,
+    });
+    if (resumedJourney || (await hasRecentOrder({ shopDomain, externalId: payload.externalId, customerId: payload.customerId, since: triggeredAt }))) {
+      return 'Subscriber already resumed purchase journey.';
+    }
+  }
+
+  if (ruleKey === 'cart_abandonment_30m') {
+    const advancedCheckout = await hasRecentActivity({
+      shopDomain,
+      externalId: payload.externalId,
+      since: triggeredAt,
+      eventTypes: ['checkout_start'],
+      productId: payload.productId ?? null,
+      cartToken: payload.cartToken ?? null,
+    });
+    if (advancedCheckout || (await hasRecentOrder({ shopDomain, externalId: payload.externalId, customerId: payload.customerId, since: triggeredAt }))) {
+      return 'Subscriber already moved past cart stage.';
+    }
+  }
+
+  if (ruleKey === 'checkout_abandonment_30m' || ruleKey === 'win_back_7d') {
+    if (await hasRecentOrder({ shopDomain, externalId: payload.externalId, customerId: payload.customerId, since: triggeredAt })) {
+      return 'Subscriber already placed a newer order.';
+    }
+  }
+
+  return null;
+};
+
+const listInterestedExternalIdsForProduct = async (shopDomain: string, productIdentifiers: string[]) => {
+  if (productIdentifiers.length === 0) {
+    return [] as string[];
+  }
+
+  const sql = getNeonSql();
+  const rows = await sql`
+    SELECT DISTINCT external_id
+    FROM subscriber_activity_events
+    WHERE shop_domain = ${shopDomain}
+      AND event_type = ANY(${['product_view', 'add_to_cart']})
+      AND product_id = ANY(${productIdentifiers})
+      AND created_at >= NOW() - INTERVAL '30 days'
+    ORDER BY external_id ASC
+    LIMIT 500
+  `;
+
+  return rows.map((row) => String(row.external_id)).filter(Boolean);
+};
+
+const enqueueProductInterestAutomation = async (input: {
+  shopDomain: string;
+  ruleKey: AutomationRuleKey;
+  productIdentifiers: string[];
+  dedupeKeySeed: string;
+  payload: AutomationJobPayload;
+}) => {
+  const externalIds = await listInterestedExternalIdsForProduct(input.shopDomain, input.productIdentifiers);
+
+  for (const externalId of externalIds) {
+    const targets = await listAutomationTargets({
+      shopDomain: input.shopDomain,
+      externalId,
+    });
+
+    if (targets.length === 0) {
+      continue;
+    }
+
+    await enqueueAutomationForTargets({
+      shopDomain: input.shopDomain,
+      ruleKey: input.ruleKey,
+      targets,
+      dedupeKeyBase: `${input.dedupeKeySeed}:${externalId}`,
+      payload: {
+        ...input.payload,
+        externalId,
+        triggeredAt: input.payload.triggeredAt ?? new Date().toISOString(),
+      },
+    });
+  }
+};
+
+export const pruneAutomationData = async () => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  await sql`
+    DELETE FROM webhook_events
+    WHERE received_at < NOW() - INTERVAL '30 days'
+  `;
+
+  await sql`
+    DELETE FROM subscriber_activity_events
+    WHERE created_at < NOW() - INTERVAL '45 days'
+  `;
+
+  await sql`
+    DELETE FROM automation_jobs
+    WHERE status IN ('sent', 'failed', 'skipped')
+      AND updated_at < NOW() - INTERVAL '60 days'
+  `;
 };
 
 export const enqueueAutomationJob = async (input: {
@@ -819,6 +1155,16 @@ export const processAutomationJob = async (jobId: string) => {
 
   try {
     const payload = claim.payload ?? { title: 'Notification', body: '' };
+    const skipReason = await getAutomationSkipReason(claim.shop_domain, payload);
+    if (skipReason) {
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'skipped', error_message = ${skipReason}, updated_at = NOW()
+        WHERE id = ${jobId}
+      `;
+      return { processed: false, error: skipReason };
+    }
+
     const messaging = getFirebaseAdminMessaging();
     const message = {
       token,
@@ -836,7 +1182,7 @@ export const processAutomationJob = async (jobId: string) => {
       },
       data: {
         source: 'automation',
-        ruleKey: String((payload as { ruleKey?: string }).ruleKey ?? ''),
+        ruleKey: String(payload.ruleKey ?? ''),
       },
     };
 
@@ -875,6 +1221,7 @@ export const recordSubscriberActivity = async (input: {
 }) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const triggeredAt = new Date().toISOString();
 
   await ensureAutomationRules(input.shopDomain);
 
@@ -893,50 +1240,76 @@ export const recordSubscriberActivity = async (input: {
     )
   `;
 
-  if (input.eventType === 'product_view') {
-    const ruleRows = await sql`
-      SELECT enabled, config
-      FROM automation_rules
-      WHERE shop_domain = ${input.shopDomain}
-        AND rule_key = 'browse_abandonment_15m'
-      LIMIT 1
-    `;
-
-    const enabled = Boolean(ruleRows[0]?.enabled);
-    if (enabled) {
-      const delayMinutes = Math.max(1, Number((ruleRows[0]?.config as { delayMinutes?: number } | undefined)?.delayMinutes ?? 15));
-
-      const tokenRows = await sql`
-        SELECT t.id AS token_id, s.id AS subscriber_id
-        FROM subscribers s
-        JOIN subscriber_tokens t ON t.subscriber_id = s.id
-        WHERE s.shop_domain = ${input.shopDomain}
-          AND s.external_id = ${input.externalId}
-          AND t.status = 'active'
-        ORDER BY t.last_seen_at DESC
-        LIMIT 1
-      `;
-
-      const tokenId = Number(tokenRows[0]?.token_id ?? 0) || null;
-      const subscriberId = Number(tokenRows[0]?.subscriber_id ?? 0) || null;
-      if (tokenId) {
-        const dueAt = new Date(Date.now() + delayMinutes * 60 * 1000);
-        await enqueueAutomationJob({
-          shopDomain: input.shopDomain,
-          ruleKey: 'browse_abandonment_15m',
-          tokenId,
-          subscriberId,
-          dedupeKey: `browse15:${input.shopDomain}:${input.externalId}:${input.productId ?? input.pageUrl ?? 'unknown'}`,
-          dueAt,
-          payload: {
-            title: 'Still thinking about it?',
-            body: 'The item you viewed is still waiting for you.',
-            targetUrl: input.pageUrl ?? null,
-            campaignLabel: 'browse_abandonment_15m',
-          },
-        });
-      }
+  const queueRule = async (ruleKey: AutomationRuleKey, fallbackDelayMinutes: number, dedupeKeyBase: string, payload: AutomationJobPayload) => {
+    const rule = await getRuleConfig(input.shopDomain, ruleKey);
+    if (!rule.enabled) {
+      return;
     }
+
+    const delayMinutes = Math.max(0, Number(rule.config.delayMinutes ?? fallbackDelayMinutes));
+    const dueAt = new Date(Date.now() + delayMinutes * 60 * 1000);
+    const targets = await listAutomationTargets({ shopDomain: input.shopDomain, externalId: input.externalId });
+
+    if (targets.length === 0) {
+      return;
+    }
+
+    await enqueueAutomationForTargets({
+      shopDomain: input.shopDomain,
+      ruleKey,
+      targets,
+      dedupeKeyBase,
+      dueAt,
+      payload: {
+        ...payload,
+        externalId: input.externalId,
+        productId: input.productId ?? null,
+        cartToken: input.cartToken ?? null,
+        triggeredAt,
+      },
+    });
+  };
+
+  if (input.eventType === 'product_view') {
+    await queueRule(
+      'browse_abandonment_15m',
+      15,
+      `browse15:${input.shopDomain}:${input.externalId}:${input.productId ?? input.pageUrl ?? 'unknown'}`,
+      {
+        title: 'Still thinking about it?',
+        body: 'The item you viewed is still available. Come back before it sells out.',
+        targetUrl: input.pageUrl ?? null,
+        campaignLabel: 'browse_abandonment_15m',
+      },
+    );
+  }
+
+  if (input.eventType === 'add_to_cart') {
+    await queueRule(
+      'cart_abandonment_30m',
+      30,
+      `cart30:${input.shopDomain}:${input.externalId}:${input.cartToken ?? input.productId ?? input.pageUrl ?? 'unknown'}`,
+      {
+        title: 'Your cart is waiting',
+        body: 'You left something behind. Complete your purchase before stock runs out.',
+        targetUrl: input.pageUrl ?? '/cart',
+        campaignLabel: 'cart_abandonment_30m',
+      },
+    );
+  }
+
+  if (input.eventType === 'checkout_start') {
+    await queueRule(
+      'checkout_abandonment_30m',
+      30,
+      `checkout30:${input.shopDomain}:${input.externalId}:${input.cartToken ?? input.pageUrl ?? 'unknown'}`,
+      {
+        title: 'Complete your checkout',
+        body: 'Your order is almost complete. Finish checking out while your cart is still fresh.',
+        targetUrl: input.pageUrl ?? '/checkout',
+        campaignLabel: 'checkout_abandonment_30m',
+      },
+    );
   }
 
   return { eventId };
@@ -1379,6 +1752,348 @@ export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInpu
       )
     `;
   }
+
+  const targets = await listAutomationTargets({
+    shopDomain: input.shopDomain,
+    externalId: input.externalId ?? null,
+    subscriberId,
+  });
+
+  if (targets.length === 0) {
+    return;
+  }
+
+  const postPurchaseRule = await getRuleConfig(input.shopDomain, 'post_purchase_followup');
+  if (postPurchaseRule.enabled) {
+    const delayDays = Math.max(0, Number(postPurchaseRule.config.delayDays ?? 2));
+    const dueAt = new Date(createdAt.getTime() + delayDays * 24 * 60 * 60 * 1000);
+
+    await enqueueAutomationForTargets({
+      shopDomain: input.shopDomain,
+      ruleKey: 'post_purchase_followup',
+      targets,
+      dedupeKeyBase: `postpurchase:${input.shopDomain}:${input.orderId}`,
+      dueAt,
+      payload: {
+        title: 'How is your order going?',
+        body: 'Thanks for your purchase. Come back for more products you might love.',
+        targetUrl: '/',
+        campaignLabel: 'post_purchase_followup',
+        externalId: input.externalId ?? null,
+        customerId: input.customerId ?? null,
+        orderId: input.orderId,
+        triggeredAt: createdAt.toISOString(),
+      },
+    });
+  }
+
+  const winBackRule = await getRuleConfig(input.shopDomain, 'win_back_7d');
+  if (winBackRule.enabled) {
+    const delayDays = Math.max(1, Number(winBackRule.config.delayDays ?? 7));
+    const dueAt = new Date(createdAt.getTime() + delayDays * 24 * 60 * 60 * 1000);
+
+    await enqueueAutomationForTargets({
+      shopDomain: input.shopDomain,
+      ruleKey: 'win_back_7d',
+      targets,
+      dedupeKeyBase: `winback:${input.shopDomain}:${input.orderId}`,
+      dueAt,
+      payload: {
+        title: 'We saved something for you',
+        body: 'It has been a while since your last order. Come back and see what is new.',
+        targetUrl: '/',
+        campaignLabel: 'win_back_7d',
+        externalId: input.externalId ?? null,
+        customerId: input.customerId ?? null,
+        orderId: input.orderId,
+        triggeredAt: createdAt.toISOString(),
+      },
+    });
+  }
+};
+
+export const upsertShopifyProductVariants = async (input: UpsertShopifyProductVariantsInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  const variantIds = input.variants.map((variant) => variant.variantId);
+  const existingRows = variantIds.length
+    ? await sql`
+      SELECT variant_id, price_cents, compare_at_price_cents, available
+      FROM shopify_product_variants
+      WHERE shop_domain = ${input.shopDomain}
+        AND variant_id = ANY(${variantIds})
+    `
+    : [];
+
+  const existingByVariantId = new Map(
+    existingRows.map((row) => [String(row.variant_id), {
+      priceCents: row.price_cents == null ? null : Number(row.price_cents),
+      compareAtPriceCents: row.compare_at_price_cents == null ? null : Number(row.compare_at_price_cents),
+      available: row.available == null ? null : Number(row.available),
+    }]),
+  );
+
+  const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
+  const priceDropCandidates = [] as string[];
+
+  for (const variant of input.variants) {
+    const existing = existingByVariantId.get(variant.variantId);
+
+    if (
+      existing?.priceCents != null
+      && variant.priceCents != null
+      && variant.priceCents < existing.priceCents
+    ) {
+      priceDropCandidates.push(variant.variantId);
+    }
+
+    await sql`
+      INSERT INTO shopify_product_variants (
+        shop_domain,
+        product_id,
+        variant_id,
+        inventory_item_id,
+        product_title,
+        variant_title,
+        handle,
+        image_url,
+        price_cents,
+        compare_at_price_cents,
+        available,
+        updated_at,
+        last_seen_at
+      )
+      VALUES (
+        ${input.shopDomain},
+        ${input.productId},
+        ${variant.variantId},
+        ${variant.inventoryItemId ?? null},
+        ${input.productTitle ?? null},
+        ${variant.variantTitle ?? null},
+        ${input.handle ?? null},
+        ${input.imageUrl ?? null},
+        ${variant.priceCents ?? null},
+        ${variant.compareAtPriceCents ?? null},
+        ${existing?.available ?? null},
+        ${updatedAt},
+        NOW()
+      )
+      ON CONFLICT (shop_domain, variant_id)
+      DO UPDATE SET
+        product_id = EXCLUDED.product_id,
+        inventory_item_id = COALESCE(EXCLUDED.inventory_item_id, shopify_product_variants.inventory_item_id),
+        product_title = COALESCE(EXCLUDED.product_title, shopify_product_variants.product_title),
+        variant_title = COALESCE(EXCLUDED.variant_title, shopify_product_variants.variant_title),
+        handle = COALESCE(EXCLUDED.handle, shopify_product_variants.handle),
+        image_url = COALESCE(EXCLUDED.image_url, shopify_product_variants.image_url),
+        price_cents = COALESCE(EXCLUDED.price_cents, shopify_product_variants.price_cents),
+        compare_at_price_cents = COALESCE(EXCLUDED.compare_at_price_cents, shopify_product_variants.compare_at_price_cents),
+        updated_at = COALESCE(EXCLUDED.updated_at, shopify_product_variants.updated_at),
+        last_seen_at = NOW()
+    `;
+  }
+
+  const priceDropRule = await getRuleConfig(input.shopDomain, 'price_drop');
+  if (!priceDropRule.enabled || priceDropCandidates.length === 0) {
+    return;
+  }
+
+  await enqueueProductInterestAutomation({
+    shopDomain: input.shopDomain,
+    ruleKey: 'price_drop',
+    productIdentifiers: [input.productId, ...priceDropCandidates],
+    dedupeKeySeed: `pricedrop:${input.shopDomain}:${input.productId}:${updatedAt.toISOString()}`,
+    payload: {
+      title: `${input.productTitle ?? 'An item you viewed'} is now cheaper`,
+      body: 'The price dropped since the last time this shopper viewed it.',
+      targetUrl: buildProductUrl(input.handle) ?? '/',
+      campaignLabel: 'price_drop',
+      productId: input.productId,
+      triggeredAt: updatedAt.toISOString(),
+      metadata: {
+        variantIds: priceDropCandidates,
+      },
+    },
+  });
+};
+
+export const processInventoryLevelUpdate = async (input: ProcessInventoryLevelUpdateInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  const rows = await sql`
+    SELECT variant_id, product_id, product_title, handle, available
+    FROM shopify_product_variants
+    WHERE shop_domain = ${input.shopDomain}
+      AND inventory_item_id = ${input.inventoryItemId}
+  `;
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
+  const backInStockCandidates = [] as Array<{ productId: string; variantId: string; productTitle: string | null; handle: string | null }>;
+
+  for (const row of rows) {
+    const previousAvailable = row.available == null ? null : Number(row.available);
+    if ((previousAvailable == null || previousAvailable <= 0) && (input.available ?? 0) > 0) {
+      backInStockCandidates.push({
+        productId: String(row.product_id),
+        variantId: String(row.variant_id),
+        productTitle: row.product_title ? String(row.product_title) : null,
+        handle: row.handle ? String(row.handle) : null,
+      });
+    }
+  }
+
+  await sql`
+    UPDATE shopify_product_variants
+    SET available = ${input.available}, updated_at = ${updatedAt}, last_seen_at = NOW()
+    WHERE shop_domain = ${input.shopDomain}
+      AND inventory_item_id = ${input.inventoryItemId}
+  `;
+
+  const backInStockRule = await getRuleConfig(input.shopDomain, 'back_in_stock');
+  if (!backInStockRule.enabled || backInStockCandidates.length === 0) {
+    return;
+  }
+
+  for (const candidate of backInStockCandidates) {
+    await enqueueProductInterestAutomation({
+      shopDomain: input.shopDomain,
+      ruleKey: 'back_in_stock',
+      productIdentifiers: [candidate.productId, candidate.variantId],
+      dedupeKeySeed: `backinstock:${input.shopDomain}:${candidate.variantId}:${updatedAt.toISOString()}`,
+      payload: {
+        title: `${candidate.productTitle ?? 'An item you viewed'} is back in stock`,
+        body: 'Inventory is available again. Shoppers can come back before it sells out.',
+        targetUrl: buildProductUrl(candidate.handle) ?? '/',
+        campaignLabel: 'back_in_stock',
+        productId: candidate.productId,
+        triggeredAt: updatedAt.toISOString(),
+        metadata: {
+          variantId: candidate.variantId,
+          inventoryItemId: input.inventoryItemId,
+          available: input.available,
+        },
+      },
+    });
+  }
+};
+
+export const processFulfillmentUpdate = async (input: ProcessFulfillmentUpdateInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
+  await sql`
+    INSERT INTO shopify_fulfillments (
+      shop_domain,
+      fulfillment_id,
+      order_id,
+      status,
+      shipment_status,
+      tracking_company,
+      tracking_numbers,
+      tracking_urls,
+      updated_at,
+      last_seen_at
+    )
+    VALUES (
+      ${input.shopDomain},
+      ${input.fulfillmentId},
+      ${input.orderId},
+      ${input.status ?? null},
+      ${input.shipmentStatus ?? null},
+      ${input.trackingCompany ?? null},
+      ${JSON.stringify(input.trackingNumbers ?? [])}::jsonb,
+      ${JSON.stringify(input.trackingUrls ?? [])}::jsonb,
+      ${updatedAt},
+      NOW()
+    )
+    ON CONFLICT (shop_domain, fulfillment_id)
+    DO UPDATE SET
+      order_id = EXCLUDED.order_id,
+      status = COALESCE(EXCLUDED.status, shopify_fulfillments.status),
+      shipment_status = COALESCE(EXCLUDED.shipment_status, shopify_fulfillments.shipment_status),
+      tracking_company = COALESCE(EXCLUDED.tracking_company, shopify_fulfillments.tracking_company),
+      tracking_numbers = EXCLUDED.tracking_numbers,
+      tracking_urls = EXCLUDED.tracking_urls,
+      updated_at = COALESCE(EXCLUDED.updated_at, shopify_fulfillments.updated_at),
+      last_seen_at = NOW()
+  `;
+
+  const shippingRule = await getRuleConfig(input.shopDomain, 'shipping_notifications');
+  if (!shippingRule.enabled) {
+    return;
+  }
+
+  const allowedStatuses = Array.isArray(shippingRule.config.sendWhen)
+    ? shippingRule.config.sendWhen.map((value) => String(value).toLowerCase())
+    : ['in_transit', 'out_for_delivery', 'delivered'];
+  const effectiveStatus = String(input.shipmentStatus ?? input.status ?? '').toLowerCase();
+
+  if (!effectiveStatus || !allowedStatuses.includes(effectiveStatus)) {
+    return;
+  }
+
+  const orderRows = await sql`
+    SELECT subscriber_id, external_id, customer_id
+    FROM shopify_orders
+    WHERE shop_domain = ${input.shopDomain}
+      AND order_id = ${input.orderId}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+
+  const orderRow = orderRows[0];
+  const targets = await listAutomationTargets({
+    shopDomain: input.shopDomain,
+    externalId: orderRow?.external_id ? String(orderRow.external_id) : null,
+    subscriberId: orderRow?.subscriber_id ? Number(orderRow.subscriber_id) : null,
+  });
+
+  if (targets.length === 0) {
+    return;
+  }
+
+  const titleByStatus: Record<string, string> = {
+    in_transit: 'Your order is on the way',
+    out_for_delivery: 'Your order is out for delivery',
+    delivered: 'Your order was delivered',
+  };
+
+  await enqueueAutomationForTargets({
+    shopDomain: input.shopDomain,
+    ruleKey: 'shipping_notifications',
+    targets,
+    dedupeKeyBase: `shipping:${input.shopDomain}:${input.fulfillmentId}:${effectiveStatus}`,
+    payload: {
+      title: titleByStatus[effectiveStatus] ?? 'Your order status changed',
+      body: input.trackingCompany
+        ? `Carrier update from ${input.trackingCompany}.`
+        : 'There is a new fulfillment update for your order.',
+      targetUrl: '/',
+      campaignLabel: 'shipping_notifications',
+      externalId: orderRow?.external_id ? String(orderRow.external_id) : null,
+      customerId: orderRow?.customer_id ? String(orderRow.customer_id) : null,
+      orderId: input.orderId,
+      triggeredAt: updatedAt.toISOString(),
+      metadata: {
+        fulfillmentId: input.fulfillmentId,
+        shipmentStatus: input.shipmentStatus ?? null,
+        status: input.status ?? null,
+        trackingCompany: input.trackingCompany ?? null,
+        trackingNumbers: input.trackingNumbers ?? [],
+        trackingUrls: input.trackingUrls ?? [],
+      },
+    },
+  });
 };
 
 export const createSegment = async (input: CreateSegmentInput) => {
@@ -1846,6 +2561,9 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
         title: 'Thanks for subscribing',
         body: 'You will now receive updates, offers, and reminders from this store.',
         campaignLabel: 'welcome_subscriber',
+        ruleKey: 'welcome_subscriber',
+        externalId: input.externalId,
+        triggeredAt: new Date().toISOString(),
       },
     });
   }

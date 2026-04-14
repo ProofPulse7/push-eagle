@@ -13,6 +13,7 @@ const updateSchema = z.object({
     'browse_abandonment_15m',
     'cart_abandonment_30m',
     'checkout_abandonment_30m',
+    'shipping_notifications',
     'back_in_stock',
     'price_drop',
     'win_back_7d',

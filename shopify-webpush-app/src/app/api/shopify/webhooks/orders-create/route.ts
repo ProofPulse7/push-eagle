@@ -55,6 +55,19 @@ const getExternalIdFromNoteAttributes = (noteAttributes?: Array<{ name?: string 
   return null;
 };
 
+const normalizeCustomerTags = (tags?: string | null) => {
+  if (!tags) {
+    return null;
+  }
+
+  const normalized = tags
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return normalized.length ? normalized : null;
+};
+
 export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
@@ -93,7 +106,7 @@ export async function POST(request: Request) {
       firstName: payload.customer?.first_name ?? null,
       lastName: payload.customer?.last_name ?? null,
       externalId,
-      tags: payload.customer?.tags ?? null,
+      tags: normalizeCustomerTags(payload.customer?.tags),
     });
 
     await upsertShopifyOrderEvent({

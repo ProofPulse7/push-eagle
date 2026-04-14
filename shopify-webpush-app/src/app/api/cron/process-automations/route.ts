@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
-import { listDueAutomationJobs, processAutomationJob } from '@/lib/server/data/store';
+import { listDueAutomationJobs, processAutomationJob, pruneAutomationData } from '@/lib/server/data/store';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -33,6 +33,8 @@ export async function GET(request: Request) {
     const shardCount = parsePositiveInt(url.searchParams.get('shardCount'), 1, 1, 128);
     const shardIndex = parsePositiveInt(url.searchParams.get('shardIndex'), 0, 0, shardCount - 1);
     const maxJobs = parsePositiveInt(url.searchParams.get('maxJobs'), 200, 1, 2000);
+
+    await pruneAutomationData();
 
     const jobs = await listDueAutomationJobs(maxJobs, shardCount, shardIndex);
     const processed = [] as Array<{ jobId: string; processed: boolean; error?: string }>;
