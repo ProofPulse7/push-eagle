@@ -170,6 +170,118 @@ type AdminCustomersResponse = {
   };
 };
 
+type AdminWebPixelResponse = {
+  data?: {
+    webPixel?: {
+      id?: string;
+      settings?: string;
+    } | null;
+  };
+};
+
+type AdminWebPixelCreateResponse = {
+  data?: {
+    webPixelCreate?: {
+      userErrors?: Array<{
+        message?: string;
+      }>;
+      webPixel?: {
+        id?: string;
+      } | null;
+    } | null;
+  };
+};
+
+type AdminWebPixelUpdateResponse = {
+  data?: {
+    webPixelUpdate?: {
+      userErrors?: Array<{
+        message?: string;
+      }>;
+      webPixel?: {
+        id?: string;
+      } | null;
+    } | null;
+  };
+};
+
+const resolvePixelEndpointPath = () => readEnv("SHOPIFY_PIXEL_ENDPOINT_PATH") || "/apps/push-eagle/pixel-events";
+
+const buildPixelSettings = () => JSON.stringify({ endpointPath: resolvePixelEndpointPath() });
+
+export const ensureShopifyWebPixel = async (input: {
+  admin: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> };
+}) => {
+  const settings = buildPixelSettings();
+
+  const currentResponse = await input.admin.graphql(`#graphql
+    query PushEagleCurrentWebPixel {
+      webPixel {
+        id
+        settings
+      }
+    }
+  `);
+
+  const currentJson = (await currentResponse.json()) as AdminWebPixelResponse;
+  const currentPixel = currentJson.data?.webPixel;
+
+  if (!currentPixel?.id) {
+    const createResponse = await input.admin.graphql(`#graphql
+      mutation PushEagleWebPixelCreate($settings: JSON!) {
+        webPixelCreate(webPixel: { settings: $settings }) {
+          userErrors {
+            message
+          }
+          webPixel {
+            id
+          }
+        }
+      }
+    `, {
+      variables: {
+        settings,
+      },
+    });
+
+    const createJson = (await createResponse.json()) as AdminWebPixelCreateResponse;
+    const userError = createJson.data?.webPixelCreate?.userErrors?.[0]?.message;
+    if (userError) {
+      throw new Error(`webPixelCreate failed: ${userError}`);
+    }
+
+    return;
+  }
+
+  if (currentPixel.settings === settings) {
+    return;
+  }
+
+  const updateResponse = await input.admin.graphql(`#graphql
+    mutation PushEagleWebPixelUpdate($id: ID!, $settings: JSON!) {
+      webPixelUpdate(id: $id, webPixel: { settings: $settings }) {
+        userErrors {
+          message
+        }
+        webPixel {
+          id
+        }
+      }
+    }
+  `, {
+    variables: {
+      id: currentPixel.id,
+      settings,
+    },
+  });
+
+  const updateJson = (await updateResponse.json()) as AdminWebPixelUpdateResponse;
+  const updateError = updateJson.data?.webPixelUpdate?.userErrors?.[0]?.message;
+  if (updateError) {
+    throw new Error(`webPixelUpdate failed: ${updateError}`);
+  }
+};
+
 export const syncRecentCustomersToDashboard = async (input: {
   shopDomain: string;
   admin: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> };
@@ -271,6 +383,9 @@ const getShopify = () => {
       hooks: {
         afterAuth: async ({ session, admin }) => {
           try {
+            await ensureShopifyWebPixel({
+              admin,
+            });
             await syncMerchantProfileToDashboard({
               shopDomain: session.shop,
               scope: session.scope,
@@ -281,7 +396,7 @@ const getShopify = () => {
               admin,
             });
           } catch (error) {
-            console.warn("[push-eagle] Merchant profile sync skipped after auth", {
+            console.warn("[push-eagle] Post-auth Shopify setup skipped", {
               shop: session.shop,
               error: error instanceof Error ? error.message : String(error),
             });

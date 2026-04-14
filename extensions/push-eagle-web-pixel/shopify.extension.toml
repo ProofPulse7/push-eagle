@@ -1,0 +1,19 @@
+type = "web_pixel_extension"
+name = "push-eagle-web-pixel"
+uid = "f8e9a15e-3b8a-4ce4-b485-8a8d06dc8df4"
+runtime_context = "strict"
+
+[customer_privacy]
+analytics = true
+marketing = true
+preferences = false
+sale_of_data = "enabled"
+
+[settings]
+type = "object"
+
+[settings.fields.endpointPath]
+name = "Endpoint path"
+description = "Relative endpoint for Push Eagle pixel ingestion"
+type = "single_line_text_field"
+validations = [{ name = "regex", value = "^/.*" }]

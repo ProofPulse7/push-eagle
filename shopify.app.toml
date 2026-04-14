@@ -23,9 +23,34 @@ api_version = "2026-07"
   topics = [ "orders/create" ]
   uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/orders-create"
 
+  [[webhooks.subscriptions]]
+  topics = [ "carts/update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/carts-update"
+  include_fields = [ "id", "token", "updated_at", "line_items.product_id", "line_items.variant_id", "line_items.quantity", "line_items.url" ]
+
+  [[webhooks.subscriptions]]
+  topics = [ "checkouts/create", "checkouts/update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/checkouts-update"
+  include_fields = [ "id", "token", "abandoned_checkout_url", "updated_at", "email", "customer.id", "line_items.product_id", "line_items.variant_id", "line_items.quantity", "line_items.url", "note_attributes" ]
+
+  [[webhooks.subscriptions]]
+  topics = [ "products/update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/products-update"
+  include_fields = [ "id", "title", "handle", "updated_at", "image.src", "variants.id", "variants.title", "variants.price", "variants.compare_at_price", "variants.inventory_item_id" ]
+
+  [[webhooks.subscriptions]]
+  topics = [ "inventory_levels/update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/inventory-levels-update"
+  include_fields = [ "inventory_item_id", "available", "updated_at", "location_id" ]
+
+  [[webhooks.subscriptions]]
+  topics = [ "fulfillments/update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/fulfillments-update"
+  include_fields = [ "id", "order_id", "status", "shipment_status", "tracking_company", "tracking_numbers", "tracking_urls", "updated_at" ]
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,write_customers,read_orders,read_products,write_products,read_discounts,write_discounts,read_marketing_events,write_marketing_events,read_customer_events,write_pixels,read_themes,write_themes,write_files,read_metaobjects,write_metaobjects,read_metaobject_definitions,write_metaobject_definitions,read_locales,write_locales"
+scopes = "read_customers,write_customers,read_orders,read_products,read_inventory,read_fulfillments,write_products,read_discounts,write_discounts,read_marketing_events,write_marketing_events,read_customer_events,write_pixels,read_themes,write_themes,write_files,read_metaobjects,write_metaobjects,read_metaobject_definitions,write_metaobject_definitions,read_locales,write_locales"
 
 [auth]
 redirect_urls = [

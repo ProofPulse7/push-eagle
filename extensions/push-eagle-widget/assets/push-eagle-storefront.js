@@ -234,6 +234,19 @@
     try {
       var url = window.location.href;
       var productMatch = window.location.pathname.match(/\/products\/([^/?#]+)/i);
+      var detectedProductId = null;
+      var productIdNode = document.querySelector('[data-product-id], [data-productid], [data-product_id], [data-product]');
+
+      if (productIdNode) {
+        detectedProductId = productIdNode.getAttribute('data-product-id')
+          || productIdNode.getAttribute('data-productid')
+          || productIdNode.getAttribute('data-product_id')
+          || productIdNode.getAttribute('data-product');
+      }
+
+      if (!detectedProductId && metadata && metadata.productId) {
+        detectedProductId = metadata.productId;
+      }
 
       await fetch(boot.activityEndpoint, {
         method: 'POST',
@@ -245,13 +258,95 @@
           externalId: boot.externalId,
           eventType: eventType,
           pageUrl: url,
-          productId: productMatch ? productMatch[1] : null,
+          productId: detectedProductId || (productMatch ? productMatch[1] : null),
           metadata: metadata || {}
         })
       });
     } catch (_error) {
       // best effort only
     }
+  }
+
+  function getProductMetadataFromElement(element) {
+    var node = element;
+
+    while (node && node !== document.body) {
+      if (node.getAttribute) {
+        var productId = node.getAttribute('data-product-id')
+          || node.getAttribute('data-productid')
+          || node.getAttribute('data-product_id')
+          || node.getAttribute('data-product');
+        var variantId = node.getAttribute('data-variant-id')
+          || node.getAttribute('data-variantid')
+          || node.getAttribute('data-variant_id')
+          || node.getAttribute('data-variant');
+        var cartToken = node.getAttribute('data-cart-token') || node.getAttribute('data-cart');
+
+        if (productId || variantId || cartToken) {
+          return {
+            productId: productId || null,
+            variantId: variantId || null,
+            cartToken: cartToken || null,
+          };
+        }
+      }
+      node = node.parentElement;
+    }
+
+    return {
+      productId: null,
+      variantId: null,
+      cartToken: null,
+    };
+  }
+
+  function bindCommerceActivityTracking(boot) {
+    if (!boot || !boot.activityEndpoint || window.__pushEagleCommerceTrackingBound) {
+      return;
+    }
+
+    window.__pushEagleCommerceTrackingBound = true;
+
+    document.addEventListener('submit', function (event) {
+      var form = event.target;
+      if (!form || !form.getAttribute) {
+        return;
+      }
+
+      var action = String(form.getAttribute('action') || '').toLowerCase();
+      if (action.indexOf('/cart/add') === -1) {
+        return;
+      }
+
+      var details = getProductMetadataFromElement(form);
+      var variantInput = form.querySelector('[name="id"]');
+      var quantityInput = form.querySelector('[name="quantity"]');
+
+      sendActivityEvent(boot, 'add_to_cart', {
+        productId: details.productId,
+        variantId: details.variantId || (variantInput ? variantInput.value : null),
+        quantity: quantityInput ? Number(quantityInput.value || '1') : 1,
+      });
+    }, true);
+
+    document.addEventListener('click', function (event) {
+      var target = event.target;
+      if (!target || !target.closest) {
+        return;
+      }
+
+      var checkoutTrigger = target.closest('a[href*="/checkout"], button[name="checkout"], input[name="checkout"], [data-checkout-button]');
+      if (!checkoutTrigger) {
+        return;
+      }
+
+      var details = getProductMetadataFromElement(checkoutTrigger);
+      sendActivityEvent(boot, 'checkout_start', {
+        productId: details.productId,
+        variantId: details.variantId,
+        cartToken: details.cartToken,
+      });
+    }, true);
   }
 
   function normalizeVersion(value) {
@@ -1387,6 +1482,7 @@
 
     var boot = await bootstrap(config);
     syncExternalIdToCart(boot && boot.externalId ? boot.externalId : null);
+    bindCommerceActivityTracking(boot);
     sendActivityEvent(boot, window.location.pathname.indexOf('/products/') === 0 ? 'product_view' : 'page_view', {
       referrer: document.referrer || null
     });

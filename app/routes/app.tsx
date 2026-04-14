@@ -1,5 +1,4 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { createHmac } from "node:crypto";
 import { redirect, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
@@ -11,25 +10,9 @@ import {
   syncRecentCustomersToDashboard,
 } from "../shopify.server";
 
-const buildDashboardSsoUrl = (baseDashboardUrl: string, shopDomain: string) => {
-  const secret = process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() || process.env.SHOPIFY_API_SECRET?.trim();
-  const url = new URL("/api/integrations/shopify/sso", baseDashboardUrl);
-
-  if (!secret) {
-    url.searchParams.set("shop", shopDomain);
-    url.searchParams.set("redirect", "/dashboard");
-    return url.toString();
-  }
-
-  const ts = String(Date.now());
-  const payload = `${shopDomain}.${ts}`;
-  const sig = createHmac("sha256", secret).update(payload).digest("hex");
-
+const buildDashboardUrl = (baseDashboardUrl: string, shopDomain: string) => {
+  const url = new URL("/dashboard", baseDashboardUrl);
   url.searchParams.set("shop", shopDomain);
-  url.searchParams.set("ts", ts);
-  url.searchParams.set("sig", sig);
-  url.searchParams.set("redirect", "/dashboard");
-
   return url.toString();
 };
 
@@ -53,22 +36,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const headerShop = request.headers.get("x-shopify-shop-domain");
     let shopDomain = (queryShop || headerShop || "").trim().toLowerCase();
 
-    const isShopLaunch = shopDomain.endsWith(".myshopify.com");
-
-    if (isShopLaunch) {
-      // For Shopify-origin launches, force admin auth so sessions and tokens are created.
-      const auth = await authenticate.admin(request);
-      authSession = auth;
-      shopDomain = (auth.session?.shop || shopDomain).trim().toLowerCase();
-    } else {
+    if (!shopDomain) {
       try {
         const auth = await authenticate.admin(request);
         authSession = auth;
-        if (!shopDomain) {
-          shopDomain = (auth.session?.shop || "").trim().toLowerCase();
-        }
+        shopDomain = (auth.session?.shop || "").trim().toLowerCase();
       } catch {
-        // Continue with query/header-derived shop when admin auth context is not available yet.
+        // Continue with empty shop when admin auth context is not available yet.
       }
     }
 
@@ -90,7 +64,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
 
     if (shopDomain.endsWith(".myshopify.com")) {
-      throw redirect(buildDashboardSsoUrl(dashboardUrl, shopDomain));
+      throw redirect(buildDashboardUrl(dashboardUrl, shopDomain));
     }
 
     throw redirect(dashboardUrl);
