@@ -12,44 +12,55 @@ const WindowsIcon = (props: React.SVGProps<SVGSVGElement>) => (
     </svg>
 );
 
+const EdgeIcon = (props: React.SVGProps<SVGSVGElement>) => (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
+        <path d="M20 14.5c0 4.2-3.6 7.5-8 7.5s-8-3.3-8-7.5c0-4.4 3.6-8 8-8 2.2 0 4.2.9 5.6 2.4-1.1-.5-2.3-.8-3.6-.8-3.8 0-6.9 2.7-6.9 6 0 2.3 1.6 4.4 3.9 5.4-1.4-1-2.2-2.3-2.2-3.8 0-3 2.9-5.4 6.5-5.4 2.1 0 4 .8 5.3 2.1.3.6.4 1.3.4 2.1z" fill="#0ea5e9"/>
+        <path d="M20 14.5c0 4.2-3.6 7.5-8 7.5 4.6 0 8.3-2.9 8.9-6.8-.9.8-2.1 1.3-3.5 1.3-2.5 0-4.5-1.6-4.5-3.6 0-.8.3-1.5.9-2.1 2.2.2 4.1 1.2 5.4 2.8.5.3.8.6.8.9z" fill="#0369a1"/>
+    </svg>
+);
+
 type WindowsPreviewProps = {
   title: string;
   message: string;
   link: string;
+  icon?: string | null;
   hero: string | null;
   actionButtons: { title: string; link: string }[];
   showDeviceName?: boolean;
 };
 
 
-export const WindowsPreview = ({ title, message, link, hero, actionButtons, showDeviceName = true }: WindowsPreviewProps) => {
+export const WindowsPreview = ({ title, message, link, icon, hero, actionButtons, showDeviceName = true }: WindowsPreviewProps) => {
     const { storeUrl } = useSettings();
     const messageForDisplay = message ? (message.length > 100 ? `${message.substring(0, 100)}...` : message) : 'Your message will appear here...';
     
     return (
-        <div className="w-full max-w-sm mx-auto font-sans">
+        <div className="w-full font-sans">
             {showDeviceName && <p className="text-center text-sm font-medium mb-4">Windows</p>}
-            <div className="bg-[#2d2d2d] text-white rounded-md shadow-2xl border border-gray-700/50">
+            <div className="mx-auto w-[360px] max-w-full rounded-md border border-gray-700/50 bg-[#2d2d2d] text-white shadow-2xl">
                 <div className="p-3">
                     <div className="flex justify-between items-center mb-3">
-                        <div className="flex items-center gap-2">
-                            <WindowsIcon className="w-4 h-4" />
-                            <span className="text-sm">{storeUrl} via Microsoft Edge</span>
+                        <div className="flex items-center gap-2 overflow-hidden">
+                            <EdgeIcon className="h-4 w-4 shrink-0" />
+                            <span className="truncate text-sm">Microsoft Edge • {storeUrl}</span>
                         </div>
                         <div className="flex items-center gap-4">
                             <Settings2 className="w-4 h-4 text-gray-400" />
                             <X className="w-4 h-4 text-gray-400" />
                         </div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="flex items-start gap-2.5">
+                        <div className="flex-1 space-y-1">
                         <p className="font-semibold truncate">{title || 'Your Title Here'}</p>
-                        <p className="text-sm text-gray-300" style={{
+                        <p className="min-h-[40px] text-sm text-gray-300" style={{
                             display: '-webkit-box',
-                            WebkitLineClamp: 2,
+                            WebkitLineClamp: 3,
                             WebkitBoxOrient: 'vertical',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                         }}>{messageForDisplay}</p>
+                        </div>
+                        {icon ? <img src={icon} alt="logo" className="h-8 w-8 rounded-md object-cover" /> : <WindowsIcon className="h-7 w-7 shrink-0 text-gray-200" />}
                     </div>
                 </div>
                 

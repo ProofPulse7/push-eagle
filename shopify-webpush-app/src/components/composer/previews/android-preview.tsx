@@ -26,14 +26,14 @@ export const AndroidPreview = ({ title, message, link, icon, hero, actionButtons
     const messageForDisplay = message ? (message.length > 100 ? `${message.substring(0, 100)}...` : message) : 'Your message will appear here...';
     
     return (
-        <div className="w-full max-w-sm mx-auto font-sans">
+        <div className="w-full font-sans">
             {showDeviceName && <p className="text-center text-sm font-medium mb-4">Android</p>}
-            <div className="bg-white rounded-2xl p-1 shadow-2xl shadow-neutral-300/80 border border-neutral-300">
+            <div className="mx-auto w-[360px] max-w-full rounded-2xl border border-neutral-300 bg-white p-1 shadow-2xl shadow-neutral-300/80">
                 <div className="bg-white rounded-[14px] p-3 space-y-2">
                     <div className="flex justify-between items-center">
                         <div className="flex items-center gap-1.5">
                             <ChromeIcon className="w-4 h-4 text-gray-600"/>
-                            <span className="text-xs text-gray-500">Chrome &bull; now</span>
+                            <span className="text-xs text-gray-500">Chrome on Android • now</span>
                         </div>
                          <ChevronUp className="h-4 w-4 text-gray-500" />
                     </div>

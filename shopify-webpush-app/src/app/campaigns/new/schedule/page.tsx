@@ -1,6 +1,6 @@
 
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, type SVGProps } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { format } from 'date-fns';
@@ -137,6 +137,18 @@ export default function ScheduleCampaignPage() {
         scheduledDate,
         scheduledTime,
         segmentId,
+        // Smart Delivery
+        smartDeliver,
+        // Flash Sale
+        flashSaleEnabled,
+        flashSaleDiscountPercent,
+        flashSaleOriginalPrice,
+        flashSaleSalePrice,
+        flashSaleExpiresAt,
+        flashSaleUrgencyText,
+        // Recurring
+        recurringPattern,
+        setRecurringPattern,
     } = useCampaignState();
     const [isLaunching, setIsLaunching] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -234,6 +246,19 @@ export default function ScheduleCampaignPage() {
                     segmentId,
                     status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
                     scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
+                    // Smart Delivery
+                    smartDeliver,
+                    // Flash Sale
+                    flashSaleEnabled,
+                    flashSaleConfig: flashSaleEnabled ? {
+                        discountPercent: flashSaleDiscountPercent,
+                        originalPrice: flashSaleOriginalPrice,
+                        salePrice: flashSaleSalePrice,
+                        expiresAt: flashSaleExpiresAt?.toISOString(),
+                        urgencyText: flashSaleUrgencyText,
+                    } : undefined,
+                    // Recurring
+                    recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
                 }),
             });
 
@@ -243,13 +268,68 @@ export default function ScheduleCampaignPage() {
                 throw new Error(buildResponseError('Failed to create campaign.', createPayload));
             }
 
-            if (sendingOption !== 'schedule') {
-                const sendResponse = await fetch(`/api/campaigns/${createResult.campaign.id}/send`, {
+            if (sendingOption === 'schedule' || sendingOption === 'recurring') {
+                if (sendingOption === 'schedule') {
+                    if (!scheduledAt) {
+                        throw new Error('Choose a valid scheduled date and time.');
+                    }
+
+                    if (scheduledAt.getTime() <= Date.now()) {
+                        throw new Error('Scheduled time must be in the future.');
+                    }
+                }
+
+                if (sendingOption === 'recurring' && !recurringPattern) {
+                    throw new Error('Choose a recurring pattern.');
+                }
+
+                const scheduleResponse = await fetch('/api/campaigns/schedule', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ shopDomain, maxBatches: 20 }),
+                    body: JSON.stringify({
+                        campaignId: createResult.campaign.id,
+                        shopDomain,
+                        scheduleType: sendingOption,
+                        sendAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() : undefined,
+                        recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
+                        smartSendEnabled: smartDeliver,
+                        flashSaleEnabled,
+                        flashSaleConfig: flashSaleEnabled ? {
+                            discountPercent: flashSaleDiscountPercent,
+                            originalPrice: flashSaleOriginalPrice,
+                            salePrice: flashSaleSalePrice,
+                            expiresAt: flashSaleExpiresAt?.toISOString(),
+                            urgencyText: flashSaleUrgencyText,
+                        } : undefined,
+                    }),
+                });
+
+                const schedulePayload = await parseApiResponse(scheduleResponse);
+                const scheduleResult = schedulePayload.json;
+                if (!scheduleResponse.ok || !scheduleResult?.ok) {
+                    throw new Error(buildResponseError('Failed to schedule campaign.', schedulePayload));
+                }
+            } else {
+                // Send immediately
+                const sendResponse = await fetch('/api/campaigns/send', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        campaignId: createResult.campaign.id,
+                        shopDomain,
+                        title: title || 'Untitled Campaign',
+                        body: message || '',
+                        targetUrl: primaryLink || null,
+                        iconUrl,
+                        imageUrl: macosImageUrl,
+                        segmentId,
+                        smartDeliver,
+                        testMode: false,
+                    }),
                 });
 
                 const sendPayload = await parseApiResponse(sendResponse);
@@ -274,8 +354,8 @@ export default function ScheduleCampaignPage() {
                 }
             }
 
-            const toastTitle = sendingOption === 'schedule' ? "Campaign Scheduled!" : "Campaign Launched!";
-            const toastDescription = sendingOption === 'schedule' ? "Your campaign has been scheduled." : "Your campaign has been successfully sent.";
+            const toastTitle = sendingOption === 'schedule' ? "Campaign Scheduled!" : sendingOption === 'recurring' ? "Recurring Campaign Set!" : "Campaign Launched!";
+            const toastDescription = sendingOption === 'schedule' ? "Your campaign has been scheduled." : sendingOption === 'recurring' ? "Your recurring campaign has been configured." : "Your campaign has been successfully sent.";
             
             toast({
                 title: toastTitle,
@@ -355,7 +435,7 @@ export default function ScheduleCampaignPage() {
     const renderPreview = () => {
         switch (previewDevice) {
             case 'windows':
-                return <WindowsPreview title={title} message={message} link={primaryLink} hero={windowsHero.preview} actionButtons={actionButtons} showDeviceName={false} />;
+                return <WindowsPreview title={title} message={message} link={primaryLink} icon={logo.preview} hero={windowsHero.preview} actionButtons={actionButtons} showDeviceName={false} />;
             case 'macos':
                  return <MacOSPreview title={title} message={message} link={primaryLink} icon={logo.preview} hero={macHero.preview} actionButtons={actionButtons} showDeviceName={false} />;
             case 'android':
@@ -363,7 +443,7 @@ export default function ScheduleCampaignPage() {
             case 'ios':
                 return <IOSPreview title={title} message={message} link={primaryLink} icon={logo.preview} showDeviceName={false} />;
             default:
-                return <WindowsPreview title={title} message={message} link={primaryLink} hero={windowsHero.preview} actionButtons={actionButtons} showDeviceName={false} />;
+                return <WindowsPreview title={title} message={message} link={primaryLink} icon={logo.preview} hero={windowsHero.preview} actionButtons={actionButtons} showDeviceName={false} />;
         }
     }
     
@@ -464,20 +544,20 @@ export default function ScheduleCampaignPage() {
 }
 
 // Icons for preview switching
-const AndroidPreviewIcon = (props: React.SVGProps<SVGSVGElement>) => (
+const AndroidPreviewIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
     <path d="M16 8c0-2.2-1.8-4-4-4S8 5.8 8 8v4h8V8zm-2 0c0-1.1-.9-2-2-2s-2 .9-2 2v2h4V8z"/>
     <path d="M19 12H5c-1.1 0-2 .9-2 2v5h18v-5c0-1.1-.9-2-2-2zm-9 4H8v-2h2v2zm4 0h-2v-2h2v2z"/>
   </svg>
 );
 
-const WindowsPreviewIcon = (props: React.SVGProps<SVGSVGElement>) => (
+const WindowsPreviewIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
     <path d="M2 3h9v9H2V3zm11 0h9v9h-9V3zM2 12h9v9H2v-9zm11 0h9v9h-9v-9z"/>
   </svg>
 );
 
-const MacOSPreviewIcon = (props: React.SVGProps<SVGSVGElement>) => (
+const MacOSPreviewIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
     <path d="M20 12c0-2.2-1.8-4-4-4s-4 1.8-4 4 1.8 4 4 4 4-1.8 4-4zM9 12c0-2.2-1.8-4-4-4s-4 1.8-4 4 1.8 4 4 4 4-1.8 4-4zm11 7H4c-.6 0-1-.4-1-1s.4-1 1-1h16c.6 0 1 .4 1 1s-.4 1-1 1z"/>
   </svg>

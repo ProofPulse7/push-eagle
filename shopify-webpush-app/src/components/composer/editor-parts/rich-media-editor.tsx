@@ -99,7 +99,7 @@ export const RichMediaEditor = ({
         <div className="space-y-4 border-t pt-6 mt-4 p-4">
             <h3 className="text-base font-medium">Rich Media</h3>
             <p className="text-xs text-muted-foreground">
-                Uploading a hero image applies it to Windows, macOS, and Android. Cropping remains OS-specific.
+                First hero upload seeds Windows, macOS, and Android. Later uploads only replace the selected OS image.
             </p>
             <div className="space-y-6">
                 <HeroImageUploader title="Windows Hero" dimensions="728x360px" previewUrl={windowsHero.preview} showWarning={showWindowsWarning}

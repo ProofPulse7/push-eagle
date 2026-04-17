@@ -103,12 +103,32 @@ export function Composer() {
             setLogo({ file, preview: previewUrl });
         } else {
             const newImageValue = { file, preview: previewUrl, originalPreview: previewUrl };
-            setWindowsHero(newImageValue);
-            setMacHero(newImageValue);
-            setAndroidHero(newImageValue);
-            checkImageDimensions(file, 'windows');
-            checkImageDimensions(file, 'mac');
-            checkImageDimensions(file, 'android');
+            const hasExistingHero = Boolean(windowsHero.preview || macHero.preview || androidHero.preview);
+
+            if (!hasExistingHero) {
+                setWindowsHero(newImageValue);
+                setMacHero(newImageValue);
+                setAndroidHero(newImageValue);
+                checkImageDimensions(file, 'windows');
+                checkImageDimensions(file, 'mac');
+                checkImageDimensions(file, 'android');
+                return;
+            }
+
+            if (imageType === 'windows') {
+                setWindowsHero(newImageValue);
+                checkImageDimensions(file, 'windows');
+            }
+
+            if (imageType === 'mac') {
+                setMacHero(newImageValue);
+                checkImageDimensions(file, 'mac');
+            }
+
+            if (imageType === 'android') {
+                setAndroidHero(newImageValue);
+                checkImageDimensions(file, 'android');
+            }
         }
     };
     
@@ -282,6 +302,7 @@ export function Composer() {
                                 title={title}
                                 message={message}
                                 link={primaryLink}
+                                icon={logo.preview}
                                 hero={windowsHero.preview}
                                 actionButtons={actionButtons}
                             />

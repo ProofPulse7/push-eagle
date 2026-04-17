@@ -36,19 +36,19 @@ export const MacOSPreview = ({ title, message, link, icon, hero, actionButtons, 
     const messageForDisplay = message ? (message.length > 100 ? `${message.substring(0, 100)}...` : message) : 'Your message will appear here...';
     
     return (
-        <div className="w-full max-w-sm mx-auto font-sans">
+        <div className="w-full font-sans">
              {showDeviceName && (
                 <div className="flex justify-between items-center mb-2">
                     <p className="text-left text-sm font-medium">macOS</p>
                     <div className="flex gap-2">
                         <div className="h-8 px-3 flex items-center justify-center text-xs bg-white/80 border rounded-md shadow-sm">Big Sur and newer</div>
-                        <div className="h-8 px-3 flex items-center justify-center text-xs bg-white/80 border rounded-md shadow-sm">Chrome</div>
+                        <div className="h-8 px-3 flex items-center justify-center gap-1 text-xs bg-white/80 border rounded-md shadow-sm"><ChromeIcon className="h-3.5 w-3.5" /> Chrome</div>
                     </div>
                 </div>
             )}
             {!isExpanded ? (
                 // Collapsed View
-                <div onClick={() => setIsExpanded(true)} className="bg-white/90 backdrop-blur-xl rounded-xl shadow-lg border border-gray-200 p-3 pb-6 cursor-pointer">
+                <div onClick={() => setIsExpanded(true)} className="mx-auto w-[360px] max-w-full cursor-pointer rounded-xl border border-gray-200 bg-white/90 p-3 pb-6 shadow-lg backdrop-blur-xl">
                     <div className="flex justify-between items-center mb-1">
                         <div className="flex items-center gap-2">
                             <ChromeIcon className="w-4 h-4 text-gray-600"/>
@@ -73,7 +73,7 @@ export const MacOSPreview = ({ title, message, link, icon, hero, actionButtons, 
                  </div>
             ) : (
                 // Expanded View
-                 <div className="bg-[#f0f0f0] rounded-xl shadow-lg border border-gray-300/80">
+                 <div className="mx-auto w-[360px] max-w-full rounded-xl border border-gray-300/80 bg-[#f0f0f0] shadow-lg">
                     <div className="p-2 border-b border-gray-300/80 flex justify-between items-center">
                         <div className="flex items-center gap-2">
                             <ChromeIcon className="w-4 h-4 text-gray-600"/>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getNeonSql } from '@/lib/integrations/database/neon';
+import { extractShopDomain } from '@/lib/server/shop-context';
 import {
   upsertCampaignSchedule,
   listDueCampaigns,
@@ -11,7 +12,8 @@ import { sendCampaignNotification } from '@/lib/server/services/notification-bat
 
 const ScheduleCampaignSchema = z.object({
   campaignId: z.string().min(1),
-  scheduleType: z.enum(['immediate', 'scheduled', 'recurring']),
+  shopDomain: z.string().optional(),
+  scheduleType: z.enum(['now', 'schedule', 'recurring', 'immediate', 'scheduled']),
   sendAt: z.string().datetime().optional().nullable(),
   recurringPattern: z.string().optional().nullable(),
   smartSendEnabled: z.boolean().optional(),
@@ -35,18 +37,20 @@ const ScheduleCampaignSchema = z.object({
  */
 export async function POST(request: NextRequest) {
   try {
-    const shopDomain = request.headers.get('x-shop-domain');
-    if (!shopDomain) {
-      return NextResponse.json({ error: 'Shop domain required' }, { status: 400 });
-    }
-
     const body = await request.json();
     const parsed = ScheduleCampaignSchema.parse(body);
+    const shopDomain = extractShopDomain(request, parsed.shopDomain);
+    const normalizedScheduleType =
+      parsed.scheduleType === 'now'
+        ? 'immediate'
+        : parsed.scheduleType === 'schedule'
+          ? 'scheduled'
+          : parsed.scheduleType;
 
     const scheduleInput: ScheduleCampaignInput = {
       campaignId: parsed.campaignId,
       shopDomain,
-      scheduleType: parsed.scheduleType,
+      scheduleType: normalizedScheduleType,
       sendAt: parsed.sendAt ? new Date(parsed.sendAt) : undefined,
       recurringPattern: parsed.recurringPattern ?? undefined,
       smartSendEnabled: parsed.smartSendEnabled,
@@ -58,7 +62,7 @@ export async function POST(request: NextRequest) {
     const scheduleId = await upsertCampaignSchedule(scheduleInput);
 
     // If immediate, trigger sending now
-    if (parsed.scheduleType === 'immediate') {
+    if (normalizedScheduleType === 'immediate') {
       const sql = getNeonSql();
       const campaignRows = await sql`
         SELECT 
@@ -95,8 +99,9 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
+      ok: true,
       scheduleId,
-      status: parsed.scheduleType === 'immediate' ? 'sent' : 'scheduled',
+      status: normalizedScheduleType === 'immediate' ? 'sent' : 'scheduled',
     });
   } catch (error) {
     console.error('Campaign schedule error:', error);
@@ -113,10 +118,7 @@ export async function POST(request: NextRequest) {
  */
 export async function GET(request: NextRequest) {
   try {
-    const shopDomain = request.headers.get('x-shop-domain');
-    if (!shopDomain) {
-      return NextResponse.json({ error: 'Shop domain required' }, { status: 400 });
-    }
+    const shopDomain = extractShopDomain(request);
 
     const sql = getNeonSql();
     const rows = await sql`
