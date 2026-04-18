@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
-import { recordAttributedConversion, registerWebhookEvent, upsertShopifyCustomer, upsertShopifyOrderEvent } from '@/lib/server/data/store';
+import { enqueueIngestionJob, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getCustomerExternalId } from '@/lib/server/storefront-identity';
 
@@ -99,57 +99,36 @@ export async function POST(request: Request) {
       email: payload.customer?.email ?? null,
     });
 
-    await upsertShopifyCustomer({
+    const orderId = String(payload.id ?? payload.order_number ?? `shopify-${Date.now()}`);
+    const totalPriceCents = Math.round(Number(payload.total_price ?? 0) * 100);
+    const dedupeKey = eventId ? `orders-create:${eventId}` : `orders-create:${shopDomain}:${orderId}`;
+
+    const jobId = await enqueueIngestionJob({
       shopDomain,
-      customerId: payload.customer?.id ? String(payload.customer.id) : null,
-      email: payload.customer?.email ?? null,
-      firstName: payload.customer?.first_name ?? null,
-      lastName: payload.customer?.last_name ?? null,
-      externalId,
-      tags: normalizeCustomerTags(payload.customer?.tags),
+      jobType: 'shopify_order_create',
+      dedupeKey,
+      payload: {
+        shopDomain,
+        orderId,
+        externalId,
+        customerId: payload.customer?.id ? String(payload.customer.id) : null,
+        email: payload.customer?.email ?? null,
+        firstName: payload.customer?.first_name ?? null,
+        lastName: payload.customer?.last_name ?? null,
+        customerTags: normalizeCustomerTags(payload.customer?.tags),
+        totalPriceCents,
+        createdAt: payload.created_at ?? null,
+        lineItems: (payload.line_items ?? []).map((item) => ({
+          productId: item.product_id ? String(item.product_id) : null,
+          productTitle: item.title ?? null,
+          collectionHint: item.product_type ?? item.vendor ?? null,
+        })),
+        landingSite: payload.landing_site ?? null,
+        userAgent: payload.client_details?.user_agent ?? request.headers.get('user-agent'),
+      },
     });
 
-    await upsertShopifyOrderEvent({
-      shopDomain,
-      orderId: String(payload.id ?? payload.order_number ?? `shopify-${Date.now()}`),
-      externalId,
-      customerId: payload.customer?.id ? String(payload.customer.id) : null,
-      email: payload.customer?.email ?? null,
-      totalPriceCents: Math.round(Number(payload.total_price ?? 0) * 100),
-      createdAt: payload.created_at ?? null,
-      lineItems: (payload.line_items ?? []).map((item) => ({
-        productId: item.product_id ? String(item.product_id) : null,
-        productTitle: item.title ?? null,
-        collectionHint: item.product_type ?? item.vendor ?? null,
-      })),
-    });
-
-    let campaignId: string | null = null;
-    if (payload.landing_site) {
-      try {
-        const landingUrl = new URL(payload.landing_site);
-        campaignId = landingUrl.searchParams.get('utm_campaign');
-      } catch {
-        campaignId = null;
-      }
-    }
-
-    const revenue = Number(payload.total_price ?? 0);
-    const result = await recordAttributedConversion({
-      shopDomain,
-      orderId: String(payload.id ?? payload.order_number ?? `shopify-${Date.now()}`),
-      revenueCents: Math.round(revenue * 100),
-      occurredAt: payload.created_at ?? null,
-      externalId,
-      customerId: payload.customer?.id ? String(payload.customer.id) : null,
-      email: payload.customer?.email ?? null,
-      campaignId,
-      userAgent: payload.client_details?.user_agent ?? request.headers.get('user-agent'),
-      browser: payload.client_details?.user_agent ?? null,
-      country: null,
-    });
-
-    return NextResponse.json({ ok: true, shopDomain, attributed: result.attributed, campaignId: result.campaignId ?? null });
+    return NextResponse.json({ ok: true, shopDomain, queued: true, jobId });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to process order webhook.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

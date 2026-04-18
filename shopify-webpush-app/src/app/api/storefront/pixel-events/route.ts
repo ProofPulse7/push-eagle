@@ -1,8 +1,9 @@
+import { createHash } from 'crypto';
+
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
-import { recordSubscriberActivity } from '@/lib/server/data/store';
+import { enqueueIngestionJob, processIngestionJob } from '@/lib/server/data/store';
 import { extractShopDomain, parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -50,6 +51,7 @@ export async function OPTIONS() {
 
 export async function POST(request: Request) {
   try {
+    const url = new URL(request.url);
     const body = schema.parse(await request.json());
     const shopDomain = body.shopDomain ? parseShopDomain(body.shopDomain) : extractShopDomain(request);
 
@@ -61,8 +63,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Record raw pixel event to database (write-optimized logging)
-    const pixelEventId = await recordPixelEvent({
+    const payload = {
       shopDomain,
       externalId,
       eventType: body.eventType,
@@ -74,25 +75,29 @@ export async function POST(request: Request) {
         ...(body.metadata ?? {}),
         pixelEventName: body.eventName ?? null,
       },
-    });
+    };
 
-    // 2. Record subscriber activity and queue automations
-    const result = await recordSubscriberActivity({
+    const dedupeKey = createHash('sha256')
+      .update(`${shopDomain}:${externalId}:${body.eventType}:${body.pageUrl ?? ''}:${body.productId ?? ''}:${body.cartToken ?? ''}`)
+      .digest('hex');
+
+    const jobId = await enqueueIngestionJob({
       shopDomain,
-      externalId,
-      eventType: body.eventType,
-      pageUrl: body.pageUrl,
-      productId: body.productId,
-      cartToken: body.cartToken,
-      metadata: {
-        ...(body.metadata ?? {}),
-        pixelEventName: body.eventName ?? null,
-        pixelClientId: body.clientId ?? null,
-        pixelEventId,
-      },
+      jobType: 'pixel_event',
+      payload,
+      dedupeKey,
     });
 
-    return NextResponse.json({ ok: true, ...result }, { headers: corsHeaders });
+    if (!jobId) {
+      return NextResponse.json({ ok: true, queued: false, duplicate: true }, { headers: corsHeaders });
+    }
+
+    if (url.searchParams.get('sync') === '1') {
+      const processed = await processIngestionJob(jobId);
+      return NextResponse.json({ ok: true, queued: true, sync: true, jobId, ...processed }, { headers: corsHeaders });
+    }
+
+    return NextResponse.json({ ok: true, queued: true, jobId }, { headers: corsHeaders });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to ingest web pixel event.';
     return NextResponse.json(

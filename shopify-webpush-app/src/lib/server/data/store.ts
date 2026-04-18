@@ -4,6 +4,7 @@ import { env } from '@/lib/config/env';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
 import { sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
+import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
 
 type CreateCampaignInput = {
   shopDomain: string;
@@ -190,6 +191,56 @@ type AutomationJobPayload = {
   orderId?: string | null;
   triggeredAt?: string | null;
   metadata?: Record<string, unknown> | null;
+};
+
+type WelcomeStepKey = 'reminder-1' | 'reminder-2' | 'reminder-3';
+
+type WelcomeStepConfig = {
+  enabled: boolean;
+  delayMinutes: number;
+  title: string;
+  body: string;
+  targetUrl?: string | null;
+  iconUrl?: string | null;
+  imageUrl?: string | null;
+  actionButtons?: Array<{ title: string; link: string }>;
+};
+
+type WelcomeRuleConfig = {
+  steps: Record<WelcomeStepKey, WelcomeStepConfig>;
+};
+
+type IngestionJobType = 'pixel_event' | 'shopify_order_create';
+
+type PixelIngestionPayload = {
+  shopDomain: string;
+  externalId: string;
+  eventType: 'page_view' | 'product_view' | 'add_to_cart' | 'checkout_start';
+  pageUrl?: string | null;
+  productId?: string | null;
+  cartToken?: string | null;
+  clientId?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+type OrderCreateIngestionPayload = {
+  shopDomain: string;
+  orderId: string;
+  externalId?: string | null;
+  customerId?: string | null;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  customerTags?: string[] | null;
+  totalPriceCents: number;
+  createdAt?: string | null;
+  lineItems?: Array<{
+    productId?: string | null;
+    productTitle?: string | null;
+    collectionHint?: string | null;
+  }>;
+  landingSite?: string | null;
+  userAgent?: string | null;
 };
 
 type UpsertMerchantProfileInput = {
@@ -707,6 +758,21 @@ const ensureSchema = async () => {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
 
+      await sql`CREATE TABLE IF NOT EXISTS ingestion_jobs (
+        id TEXT PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        job_type TEXT NOT NULL,
+        dedupe_key TEXT,
+        payload JSONB NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        processed_at TIMESTAMPTZ
+      )`;
+
       await sql`CREATE TABLE IF NOT EXISTS campaign_schedules (
         id TEXT PRIMARY KEY,
         campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -816,6 +882,9 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_scheduled ON campaigns(shop_domain, status, scheduled_at)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_created ON pixel_events(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_external ON pixel_events(shop_domain, external_id, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_due ON ingestion_jobs(status, due_at)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_shop_type ON ingestion_jobs(shop_domain, job_type, status, due_at)`;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_ingestion_jobs_dedupe ON ingestion_jobs(shop_domain, job_type, dedupe_key) WHERE dedupe_key IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_schedules_send_at ON campaign_schedules(send_at) WHERE send_at IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_smart_delivery_metrics_shop ON smart_delivery_metrics(shop_domain)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
@@ -943,8 +1012,124 @@ export const ensureMerchantAccount = async (shopDomain: string) => {
   await ensureMerchant(shopDomain);
 };
 
+const DEFAULT_WELCOME_STEPS: Record<WelcomeStepKey, WelcomeStepConfig> = {
+  'reminder-1': {
+    enabled: true,
+    delayMinutes: 0,
+    title: 'You are subscribed',
+    body: 'We will keep you posted with latest updates.',
+    targetUrl: null,
+    iconUrl: null,
+    imageUrl: null,
+    actionButtons: [],
+  },
+  'reminder-2': {
+    enabled: true,
+    delayMinutes: 120,
+    title: "We're glad to have you here!",
+    body: "As a subscriber, you'll get our latest offers and products before anyone else.",
+    targetUrl: null,
+    iconUrl: null,
+    imageUrl: null,
+    actionButtons: [{ title: 'Shop now', link: '/collections/all' }],
+  },
+  'reminder-3': {
+    enabled: true,
+    delayMinutes: 1440,
+    title: 'Anything specific caught your eye?',
+    body: 'Our products are made with care, giving you the best value.',
+    targetUrl: null,
+    iconUrl: null,
+    imageUrl: null,
+    actionButtons: [
+      { title: 'View products', link: '/collections/all' },
+      { title: 'Special offers', link: '/collections/sale' },
+    ],
+  },
+};
+
+const deepCloneWelcomeDefaults = (): Record<WelcomeStepKey, WelcomeStepConfig> => {
+  return JSON.parse(JSON.stringify(DEFAULT_WELCOME_STEPS)) as Record<WelcomeStepKey, WelcomeStepConfig>;
+};
+
+const toSafeDelayMinutes = (value: unknown, fallback: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(60 * 24 * 30, Math.floor(parsed)));
+};
+
+const normalizeActionButtons = (value: unknown) => {
+  if (!Array.isArray(value)) {
+    return [] as Array<{ title: string; link: string }>;
+  }
+
+  return value
+    .map((item) => {
+      const title = String((item as { title?: unknown })?.title ?? '').trim();
+      const link = String((item as { link?: unknown })?.link ?? '').trim();
+      if (!title || !link) {
+        return null;
+      }
+      return { title, link };
+    })
+    .filter(Boolean) as Array<{ title: string; link: string }>;
+};
+
+const parseWelcomeRuleConfig = (config: unknown): WelcomeRuleConfig => {
+  const defaults = deepCloneWelcomeDefaults();
+  const raw = (config ?? {}) as Record<string, unknown>;
+  const rawSteps = (raw.steps ?? {}) as Record<string, unknown>;
+
+  for (const stepKey of Object.keys(defaults) as WelcomeStepKey[]) {
+    const rawStep = (rawSteps[stepKey] ?? {}) as Record<string, unknown>;
+    const current = defaults[stepKey];
+    defaults[stepKey] = {
+      enabled: typeof rawStep.enabled === 'boolean' ? rawStep.enabled : current.enabled,
+      delayMinutes: toSafeDelayMinutes(rawStep.delayMinutes, current.delayMinutes),
+      title: String(rawStep.title ?? current.title),
+      body: String(rawStep.body ?? current.body),
+      targetUrl: rawStep.targetUrl == null ? current.targetUrl ?? null : String(rawStep.targetUrl),
+      iconUrl: rawStep.iconUrl == null ? current.iconUrl ?? null : String(rawStep.iconUrl),
+      imageUrl: rawStep.imageUrl == null ? current.imageUrl ?? null : String(rawStep.imageUrl),
+      actionButtons: normalizeActionButtons(rawStep.actionButtons ?? current.actionButtons ?? []),
+    };
+  }
+
+  return { steps: defaults };
+};
+
+const mergeRuleConfig = (ruleKey: AutomationRuleKey, existingConfig: unknown, patchConfig: unknown) => {
+  if (ruleKey !== 'welcome_subscriber') {
+    return { ...(existingConfig as Record<string, unknown>), ...(patchConfig as Record<string, unknown>) };
+  }
+
+  const existing = parseWelcomeRuleConfig(existingConfig);
+  const rawPatch = (patchConfig ?? {}) as Record<string, unknown>;
+  const patchSteps = (rawPatch.steps ?? {}) as Record<string, unknown>;
+  const mergedSteps = deepCloneWelcomeDefaults();
+
+  for (const stepKey of Object.keys(mergedSteps) as WelcomeStepKey[]) {
+    const current = existing.steps[stepKey];
+    const patchStep = (patchSteps[stepKey] ?? {}) as Record<string, unknown>;
+    mergedSteps[stepKey] = {
+      enabled: typeof patchStep.enabled === 'boolean' ? patchStep.enabled : current.enabled,
+      delayMinutes: patchStep.delayMinutes == null ? current.delayMinutes : toSafeDelayMinutes(patchStep.delayMinutes, current.delayMinutes),
+      title: patchStep.title == null ? current.title : String(patchStep.title),
+      body: patchStep.body == null ? current.body : String(patchStep.body),
+      targetUrl: patchStep.targetUrl == null ? current.targetUrl ?? null : String(patchStep.targetUrl),
+      iconUrl: patchStep.iconUrl == null ? current.iconUrl ?? null : String(patchStep.iconUrl),
+      imageUrl: patchStep.imageUrl == null ? current.imageUrl ?? null : String(patchStep.imageUrl),
+      actionButtons: patchStep.actionButtons == null ? normalizeActionButtons(current.actionButtons ?? []) : normalizeActionButtons(patchStep.actionButtons),
+    };
+  }
+
+  return { steps: mergedSteps };
+};
+
 const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean; config: Record<string, unknown> }> = [
-  { key: 'welcome_subscriber', enabled: true, config: { delayMinutes: 0 } },
+  { key: 'welcome_subscriber', enabled: true, config: parseWelcomeRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'browse_abandonment_15m', enabled: true, config: { delayMinutes: 15 } },
   { key: 'cart_abandonment_30m', enabled: true, config: { delayMinutes: 30 } },
   { key: 'checkout_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
@@ -965,6 +1150,27 @@ const ensureAutomationRules = async (shopDomain: string) => {
       INSERT INTO automation_rules (id, shop_domain, rule_key, enabled, config)
       VALUES (${randomUUID()}, ${shopDomain}, ${rule.key}, ${rule.enabled}, ${JSON.stringify(rule.config)}::jsonb)
       ON CONFLICT (shop_domain, rule_key) DO NOTHING
+    `;
+  }
+
+  const welcomeRows = await sql`
+    SELECT config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+    LIMIT 1
+  `;
+
+  const welcomeConfig = (welcomeRows[0]?.config ?? {}) as Record<string, unknown>;
+  const hasSteps = Boolean((welcomeConfig.steps as Record<string, unknown> | undefined));
+  if (!hasSteps) {
+    const normalized = parseWelcomeRuleConfig(welcomeConfig);
+    await sql`
+      UPDATE automation_rules
+      SET config = ${JSON.stringify(normalized)}::jsonb,
+          updated_at = NOW()
+      WHERE shop_domain = ${shopDomain}
+        AND rule_key = 'welcome_subscriber'
     `;
   }
 };
@@ -992,15 +1198,32 @@ export const listAutomationRules = async (shopDomain: string) => {
 export const upsertAutomationRule = async (
   shopDomain: string,
   ruleKey: AutomationRuleKey,
-  enabled: boolean,
+  enabled?: boolean,
   config?: Record<string, unknown>,
 ) => {
   await ensureAutomationRules(shopDomain);
   const sql = getNeonSql();
 
+  const currentRows = await sql`
+    SELECT enabled, config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = ${ruleKey}
+    LIMIT 1
+  `;
+
+  if (!currentRows[0]) {
+    return null;
+  }
+
+  const currentEnabled = Boolean(currentRows[0]?.enabled);
+  const currentConfig = (currentRows[0]?.config ?? {}) as Record<string, unknown>;
+  const nextEnabled = typeof enabled === 'boolean' ? enabled : currentEnabled;
+  const nextConfig = config === undefined ? currentConfig : mergeRuleConfig(ruleKey, currentConfig, config);
+
   const rows = await sql`
     UPDATE automation_rules
-    SET enabled = ${enabled}, config = ${JSON.stringify(config ?? {})}::jsonb, updated_at = NOW()
+    SET enabled = ${nextEnabled}, config = ${JSON.stringify(nextConfig)}::jsonb, updated_at = NOW()
     WHERE shop_domain = ${shopDomain}
       AND rule_key = ${ruleKey}
     RETURNING id, rule_key, enabled, config, updated_at
@@ -1382,17 +1605,234 @@ export const dispatchWelcomeJobNow = async (shopDomain: string, tokenId: number)
       AND rule_key = 'welcome_subscriber'
       AND token_id = ${tokenId}
       AND status = 'pending'
-    ORDER BY created_at DESC
-    LIMIT 1
+      AND due_at <= NOW()
+    ORDER BY due_at ASC, created_at ASC
+    LIMIT 20
   `;
 
-  const jobId = jobRows[0]?.id ? String(jobRows[0].id) : null;
-  if (!jobId) {
+  if (!jobRows.length) {
     return { dispatched: false };
   }
 
-  const result = await processAutomationJob(jobId);
-  return { dispatched: true, ...result };
+  const results = await Promise.all(
+    jobRows.map((row) => processAutomationJob(String(row.id))),
+  );
+
+  return {
+    dispatched: true,
+    processedCount: results.filter((item) => item.processed).length,
+    failedCount: results.filter((item) => !item.processed && item.error).length,
+  };
+};
+
+export const enqueueIngestionJob = async (input: {
+  shopDomain: string;
+  jobType: IngestionJobType;
+  payload: PixelIngestionPayload | OrderCreateIngestionPayload;
+  dedupeKey?: string | null;
+  dueAt?: Date;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const jobId = randomUUID();
+  const dueAt = input.dueAt ?? new Date();
+
+  const rows = await sql`
+    INSERT INTO ingestion_jobs (id, shop_domain, job_type, dedupe_key, payload, due_at)
+    VALUES (
+      ${jobId},
+      ${input.shopDomain},
+      ${input.jobType},
+      ${input.dedupeKey ?? null},
+      ${JSON.stringify(input.payload)}::jsonb,
+      ${dueAt}
+    )
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `;
+
+  return rows[0] ? String(rows[0].id) : null;
+};
+
+export const listDueIngestionJobs = async (limit = 500, shardCount = 1, shardIndex = 0) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
+  const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
+
+  const rows = await sql`
+    SELECT id, shop_domain, job_type, payload
+    FROM ingestion_jobs
+    WHERE status = 'pending'
+      AND due_at <= NOW()
+      AND (
+        ${safeShardCount} = 1
+        OR MOD(ABS(hashtext(id)), ${safeShardCount}) = ${safeShardIndex}
+      )
+    ORDER BY due_at ASC
+    LIMIT ${limit}
+  `;
+
+  return rows as Array<{ id: string; shop_domain: string; job_type: string; payload: unknown }>;
+};
+
+const getCampaignIdFromLandingSite = (landingSite: string | null | undefined) => {
+  if (!landingSite) {
+    return null;
+  }
+
+  try {
+    const url = new URL(landingSite);
+    return url.searchParams.get('utm_campaign');
+  } catch {
+    return null;
+  }
+};
+
+export const processIngestionJob = async (jobId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const claimRows = await sql`
+    UPDATE ingestion_jobs
+    SET status = 'processing', attempts = attempts + 1, updated_at = NOW()
+    WHERE id = ${jobId}
+      AND status = 'pending'
+    RETURNING id, shop_domain, job_type, payload
+  `;
+
+  const claim = claimRows[0] as
+    | { id: string; shop_domain: string; job_type: string; payload: unknown }
+    | undefined;
+  if (!claim) {
+    return { processed: false };
+  }
+
+  try {
+    if (claim.job_type === 'pixel_event') {
+      const payload = claim.payload as PixelIngestionPayload;
+
+      const pixelEventId = await recordPixelEvent({
+        shopDomain: payload.shopDomain,
+        externalId: payload.externalId,
+        eventType: payload.eventType,
+        pageUrl: payload.pageUrl,
+        productId: payload.productId,
+        cartToken: payload.cartToken,
+        clientId: payload.clientId,
+        metadata: payload.metadata,
+      });
+
+      await recordSubscriberActivity({
+        shopDomain: payload.shopDomain,
+        externalId: payload.externalId,
+        eventType: payload.eventType,
+        pageUrl: payload.pageUrl,
+        productId: payload.productId,
+        cartToken: payload.cartToken,
+        metadata: {
+          ...(payload.metadata ?? {}),
+          pixelEventId,
+        },
+      });
+    } else if (claim.job_type === 'shopify_order_create') {
+      const payload = claim.payload as OrderCreateIngestionPayload;
+
+      await upsertShopifyCustomer({
+        shopDomain: payload.shopDomain,
+        customerId: payload.customerId ?? null,
+        email: payload.email ?? null,
+        firstName: payload.firstName ?? null,
+        lastName: payload.lastName ?? null,
+        externalId: payload.externalId ?? null,
+        tags: payload.customerTags ?? null,
+      });
+
+      await upsertShopifyOrderEvent({
+        shopDomain: payload.shopDomain,
+        orderId: payload.orderId,
+        externalId: payload.externalId ?? null,
+        customerId: payload.customerId ?? null,
+        email: payload.email ?? null,
+        totalPriceCents: payload.totalPriceCents,
+        createdAt: payload.createdAt ?? null,
+        lineItems: payload.lineItems ?? [],
+      });
+
+      await recordAttributedConversion({
+        shopDomain: payload.shopDomain,
+        orderId: payload.orderId,
+        revenueCents: payload.totalPriceCents,
+        occurredAt: payload.createdAt ?? null,
+        externalId: payload.externalId ?? null,
+        customerId: payload.customerId ?? null,
+        email: payload.email ?? null,
+        campaignId: getCampaignIdFromLandingSite(payload.landingSite),
+        userAgent: payload.userAgent ?? null,
+        browser: payload.userAgent ?? null,
+        country: null,
+      });
+    }
+
+    await sql`
+      UPDATE ingestion_jobs
+      SET status = 'processed', processed_at = NOW(), error_message = NULL, updated_at = NOW()
+      WHERE id = ${jobId}
+    `;
+
+    return { processed: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to process ingestion job.';
+
+    await sql`
+      UPDATE ingestion_jobs
+      SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
+          error_message = ${message},
+          due_at = CASE WHEN attempts >= 5 THEN due_at ELSE NOW() + INTERVAL '2 minutes' END,
+          updated_at = NOW()
+      WHERE id = ${jobId}
+    `;
+
+    return { processed: false, error: message };
+  }
+};
+
+export const processIngestionQueue = async (input?: {
+  limit?: number;
+  maxConcurrent?: number;
+  shardCount?: number;
+  shardIndex?: number;
+}) => {
+  const limit = Math.max(1, Math.min(Number(input?.limit ?? 500), 5000));
+  const maxConcurrent = Math.max(1, Math.min(Number(input?.maxConcurrent ?? 50), 200));
+  const shardCount = Math.max(1, Math.min(Number(input?.shardCount ?? 1), 128));
+  const shardIndex = Math.max(0, Math.min(Number(input?.shardIndex ?? 0), shardCount - 1));
+
+  const jobs = await listDueIngestionJobs(limit, shardCount, shardIndex);
+  const processed = [] as Array<{ jobId: string; processed: boolean; error?: string }>;
+
+  for (let index = 0; index < jobs.length; index += maxConcurrent) {
+    const chunk = jobs.slice(index, index + maxConcurrent);
+    const results = await Promise.all(
+      chunk.map(async (job) => {
+        const result = await processIngestionJob(String(job.id));
+        return {
+          jobId: String(job.id),
+          processed: Boolean(result.processed),
+          error: result.error,
+        };
+      }),
+    );
+    processed.push(...results);
+  }
+
+  return {
+    dueJobs: jobs.length,
+    processed,
+    processedCount: processed.filter((item) => item.processed).length,
+    failedCount: processed.filter((item) => !item.processed && item.error).length,
+  };
 };
 
 export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIndex = 0) => {
@@ -2941,7 +3381,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   const tokenId = Number(tokenRows[0]?.id);
 
   const welcomeRuleRows = await sql`
-    SELECT enabled
+    SELECT enabled, config
     FROM automation_rules
     WHERE shop_domain = ${input.shopDomain}
       AND rule_key = 'welcome_subscriber'
@@ -2949,21 +3389,41 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   `;
 
   if (Boolean(welcomeRuleRows[0]?.enabled)) {
-    await enqueueAutomationJob({
-      shopDomain: input.shopDomain,
-      ruleKey: 'welcome_subscriber',
-      tokenId,
-      subscriberId,
-      dedupeKey: `welcome:${input.shopDomain}:${input.token}`,
-      payload: {
-        title: 'Thanks for subscribing',
-        body: 'You will now receive updates, offers, and reminders from this store.',
-        campaignLabel: 'welcome_subscriber',
+    const welcomeConfig = parseWelcomeRuleConfig(welcomeRuleRows[0]?.config ?? null);
+    const now = Date.now();
+
+    for (const stepKey of Object.keys(welcomeConfig.steps) as WelcomeStepKey[]) {
+      const step = welcomeConfig.steps[stepKey];
+      if (!step.enabled) {
+        continue;
+      }
+
+      const dueAt = new Date(now + step.delayMinutes * 60_000);
+
+      await enqueueAutomationJob({
+        shopDomain: input.shopDomain,
         ruleKey: 'welcome_subscriber',
-        externalId: input.externalId,
-        triggeredAt: new Date().toISOString(),
-      },
-    });
+        tokenId,
+        subscriberId,
+        dedupeKey: `welcome:${input.shopDomain}:${input.token}:${stepKey}`,
+        dueAt,
+        payload: {
+          title: step.title,
+          body: step.body,
+          targetUrl: step.targetUrl ?? null,
+          iconUrl: step.iconUrl ?? null,
+          imageUrl: step.imageUrl ?? null,
+          metadata: {
+            stepKey,
+            actionButtons: step.actionButtons ?? [],
+          },
+          campaignLabel: `welcome_subscriber:${stepKey}`,
+          ruleKey: 'welcome_subscriber',
+          externalId: input.externalId,
+          triggeredAt: new Date().toISOString(),
+        },
+      });
+    }
   }
 
   return {

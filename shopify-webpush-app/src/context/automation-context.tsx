@@ -8,6 +8,7 @@ type AutomationInitialState = {
     notification?: {
         title?: string;
         message?: string;
+        targetUrl?: string | null;
         iconUrl?: string | null;
         heroUrl?: string | null;
         actionButtons?: ActionButton[];
@@ -60,6 +61,7 @@ export function AutomationStateProvider({ children }: { children: ReactNode }) {
         if (initialState?.notification) {
             setTitle(initialState.notification.title || '');
             setMessage(initialState.notification.message || '');
+            setPrimaryLink(initialState.notification.targetUrl || 'https://example.com');
             if (!logo.preview) {
                 setLogo({ file: null, preview: initialState.notification.iconUrl || null });
             }

@@ -29,13 +29,21 @@ export const FlowNotificationCard = ({
     step, 
     previewDevice,
     onStatusChange,
-    automationName
+    onDelayChange,
+    automationName,
+    shopDomain,
 }: { 
     step: NotificationStep, 
     previewDevice: string,
     onStatusChange: (id: string, checked: boolean) => void,
-    automationName: string
+    onDelayChange?: (id: string, delay: string) => void,
+    automationName: string,
+    shopDomain?: string,
 }) => {
+    const editHref = shopDomain
+      ? `/automations/${automationName}/${step.id}/edit?shop=${encodeURIComponent(shopDomain)}`
+      : `/automations/${automationName}/${step.id}/edit`;
+
     return (
         <Card className={cn("border-l-4", step.status === 'Active' ? "border-l-primary" : "border-l-border")}>
             <CardHeader className="p-2">
@@ -52,7 +60,7 @@ export const FlowNotificationCard = ({
                         <CardTitle className="text-xs font-semibold">{step.title}</CardTitle>
                         <Badge variant={step.status === 'Active' ? 'default' : 'secondary'}>{step.status}</Badge>
                     </div>
-                    <DelaySelector currentDelay={step.delay} />
+                    <DelaySelector currentDelay={step.delay} onDelayChange={(value) => onDelayChange?.(step.id, value)} />
                 </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -60,7 +68,7 @@ export const FlowNotificationCard = ({
             </CardContent>
             <CardFooter className="p-2">
                  <Button variant="default" size="sm" className="w-full" asChild>
-                    <Link href={`/automations/${automationName}/${step.id}/edit`}>
+                          <Link href={editHref}>
                         Edit automation
                     </Link>
                  </Button>

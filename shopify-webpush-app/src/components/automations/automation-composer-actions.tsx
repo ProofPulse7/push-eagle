@@ -3,10 +3,11 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { handleSendLivePreview } from '@/lib/notification-service';
 import { saveAutomationStep } from '@/app/actions/automation-actions';
+import { useSettings } from '@/context/settings-context';
 
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Eye, Loader2, Save } from "lucide-react";
@@ -26,7 +27,10 @@ export const AutomationComposerActions = ({
     const { toast } = useToast();
     const router = useRouter();
     const params = useParams();
+    const searchParams = useSearchParams();
+    const { shopDomain: settingsShop } = useSettings();
     const stepId = params.id as string;
+    const shopDomain = searchParams.get('shop') || settingsShop || '';
 
     const [isSendingPreview, setIsSendingPreview] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -60,6 +64,10 @@ export const AutomationComposerActions = ({
             toast({ variant: "destructive", title: "Title is missing", description: "Cannot save without a title." });
             return;
         }
+        if (!shopDomain) {
+            toast({ variant: "destructive", title: "Shop context missing", description: "Re-open this automation from Shopify and try again." });
+            return;
+        }
         setIsSaving(true);
         setSaveStatus('Saving...');
         try {
@@ -71,7 +79,7 @@ export const AutomationComposerActions = ({
                 heroUrl: macHero.preview,
                 actionButtons,
             };
-            await saveAutomationStep(stepId, dataToSave);
+            await saveAutomationStep(stepId, shopDomain, dataToSave);
             toast({ title: "Automation Saved!", description: "Your changes have been saved successfully." });
             setSaveStatus('Changes saved');
             setTimeout(() => router.push(automationPath), 1000);

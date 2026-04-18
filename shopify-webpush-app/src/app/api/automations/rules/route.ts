@@ -27,7 +27,7 @@ const updateSchema = z.object({
     'win_back_7d',
     'post_purchase_followup',
   ]),
-  enabled: z.boolean(),
+  enabled: z.boolean().optional(),
   config: z.record(z.any()).optional(),
 });
 

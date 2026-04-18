@@ -1,8 +1,6 @@
 'use client';
 
-import { useState } from 'react';
 import { Clock } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const delayOptions = [
@@ -12,13 +10,11 @@ const delayOptions = [
     '15 days', '30 days'
 ];
 
-export const DelaySelector = ({ currentDelay }: { currentDelay: string }) => {
-    const [delay, setDelay] = useState(currentDelay);
-
+export const DelaySelector = ({ currentDelay, onDelayChange }: { currentDelay: string; onDelayChange?: (value: string) => void }) => {
     return (
          <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
-            <Select value={delay} onValueChange={setDelay}>
+            <Select value={currentDelay} onValueChange={(value) => onDelayChange?.(value)}>
                 <SelectTrigger className="w-[120px] h-8 text-xs">
                     <SelectValue placeholder="Set delay" />
                 </SelectTrigger>

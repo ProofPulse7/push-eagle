@@ -66,7 +66,11 @@ async function triggerScheduledJobs(env, cronLabel) {
   const appUrl = (env.APP_URL || 'https://push-eagle-dashboard.vercel.app').replace(/\/$/, '');
   const processCampaignsUrl = env.PROCESS_CAMPAIGNS_URL || `${appUrl}/api/cron/process-campaigns`;
   const processAutomationsUrl = env.PROCESS_AUTOMATIONS_URL || `${appUrl}/api/cron/process-automations`;
+  const processIngestionUrl = env.PROCESS_INGESTION_URL || `${appUrl}/api/cron/process-ingestion`;
   const cronSecret = env.CRON_SECRET || '';
+  const campaignShards = Math.max(1, Number(env.CAMPAIGN_SHARDS || 4));
+  const automationShards = Math.max(1, Number(env.AUTOMATION_SHARDS || 6));
+  const ingestionShards = Math.max(1, Number(env.INGESTION_SHARDS || 4));
 
   if (!cronSecret) {
     console.error('[cron] CRON_SECRET is not set. Aborting.');
@@ -82,13 +86,27 @@ async function triggerScheduledJobs(env, cronLabel) {
 
   console.log(`[cron] Firing at ${new Date().toISOString()} for cron: ${cronLabel}`);
 
-  const results = await Promise.allSettled([
-    callCronEndpoint(processCampaignsUrl, headers),
-    callCronEndpoint(processAutomationsUrl, headers),
-  ]);
+  const jobs = [];
+
+  for (let shard = 0; shard < campaignShards; shard += 1) {
+    const url = `${processCampaignsUrl}?shardCount=${campaignShards}&shardIndex=${shard}&maxCampaigns=50&maxBatches=30`;
+    jobs.push({ label: `process-campaigns[${shard}]`, promise: callCronEndpoint(url, headers) });
+  }
+
+  for (let shard = 0; shard < automationShards; shard += 1) {
+    const url = `${processAutomationsUrl}?shardCount=${automationShards}&shardIndex=${shard}&maxJobs=500&maxConcurrent=80`;
+    jobs.push({ label: `process-automations[${shard}]`, promise: callCronEndpoint(url, headers) });
+  }
+
+  for (let shard = 0; shard < ingestionShards; shard += 1) {
+    const url = `${processIngestionUrl}?shardCount=${ingestionShards}&shardIndex=${shard}&limit=1500&maxConcurrent=100`;
+    jobs.push({ label: `process-ingestion[${shard}]`, promise: callCronEndpoint(url, headers) });
+  }
+
+  const results = await Promise.allSettled(jobs.map((job) => job.promise));
 
   for (const [index, result] of results.entries()) {
-    const label = index === 0 ? 'process-campaigns' : 'process-automations';
+    const label = jobs[index].label;
     if (result.status === 'fulfilled') {
       console.log(`[cron] ${label}:`, JSON.stringify(result.value));
     } else {
