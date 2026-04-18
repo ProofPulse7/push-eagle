@@ -173,8 +173,6 @@ export default function WelcomeNotificationsPage() {
   const [previewDevice, setPreviewDevice] = useState<'windows' | 'macos' | 'android' | 'ios'>('android');
   const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
-  const [ruleEnabled, setRuleEnabled] = useState(false);
-  const [saving, setSaving] = useState(false);
   const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
 
   useEffect(() => {
@@ -191,7 +189,6 @@ export default function WelcomeNotificationsPage() {
         const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'welcome_subscriber');
         if (rule) {
           setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
-          setRuleEnabled(rule.enabled ?? false);
         }
       })
       .catch(() => undefined);
@@ -227,33 +224,21 @@ export default function WelcomeNotificationsPage() {
       .catch(() => undefined);
   }, [shopDomain]);
 
-  const saveWelcomeConfig = async (updatedNotifications: FlowNotification[], enabledOverride?: boolean) => {
+  const saveWelcomeConfig = async (updatedNotifications: FlowNotification[]) => {
     if (!shopDomain) return;
 
     const config = { steps: buildStepsConfigFromNotifications(updatedNotifications) };
+    const enabled = updatedNotifications.some((item) => item.status === 'Active');
     await fetch('/api/automations/rules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         shopDomain,
         ruleKey: 'welcome_subscriber',
-        enabled: typeof enabledOverride === 'boolean' ? enabledOverride : ruleEnabled,
+        enabled,
         config,
       }),
     });
-  };
-
-  const handleToggleFlow = async () => {
-    if (!shopDomain) return;
-    setSaving(true);
-    const newEnabled = !ruleEnabled;
-
-    try {
-      await saveWelcomeConfig(notifications, newEnabled);
-      setRuleEnabled(newEnabled);
-    } finally {
-      setSaving(false);
-    }
   };
 
   const handleStatusChange = async (id: string, checked: boolean) => {
@@ -282,7 +267,7 @@ export default function WelcomeNotificationsPage() {
     }
   };
 
-  const isFlowActive = ruleEnabled;
+  const isFlowActive = notifications.some((item) => item.status === 'Active');
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">
@@ -297,12 +282,6 @@ export default function WelcomeNotificationsPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight md:text-3xl">{flowData.title}</h1>
           </div>
-        </div>
-
-        <div className="flex items-center justify-end mb-4">
-          <Button onClick={handleToggleFlow} disabled={saving} variant={ruleEnabled ? 'outline' : 'default'}>
-            {saving ? 'Saving...' : ruleEnabled ? 'Deactivate Flow' : 'Activate Flow'}
-          </Button>
         </div>
 
         <div className="mb-4">
@@ -335,7 +314,7 @@ export default function WelcomeNotificationsPage() {
           {!isFlowActive && (
             <Alert className="w-full mb-8">
               <AlertTitle>This automation is inactive</AlertTitle>
-              <AlertDescription>Activate a reminder to start sending these notifications to new subscribers.</AlertDescription>
+              <AlertDescription>Enable at least one reminder to start sending these notifications to new subscribers.</AlertDescription>
             </Alert>
           )}
           <div className="text-center">

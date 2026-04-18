@@ -3623,7 +3623,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
         ruleKey: 'welcome_subscriber',
         tokenId,
         subscriberId,
-        dedupeKey: `welcome:${input.shopDomain}:${input.token}:${stepKey}`,
+        dedupeKey: `welcome:${input.shopDomain}:${input.externalId || input.token}:${stepKey}`,
         dueAt,
         payload: {
           title: step.title,
@@ -3642,6 +3642,8 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
         },
       });
     }
+
+    await dispatchWelcomeJobNow(input.shopDomain, tokenId);
   }
 
   return {

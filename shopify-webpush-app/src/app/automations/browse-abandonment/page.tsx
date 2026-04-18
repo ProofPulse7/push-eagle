@@ -229,8 +229,6 @@ export default function BrowseAbandonmentPage() {
   const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [showReminderStats, setShowReminderStats] = useState(true);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
-  const [ruleEnabled, setRuleEnabled] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
@@ -246,7 +244,6 @@ export default function BrowseAbandonmentPage() {
         const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'browse_abandonment_15m');
         if (rule) {
           setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
-          setRuleEnabled(rule.enabled ?? false);
         }
       })
       .catch(() => undefined);
@@ -281,8 +278,10 @@ export default function BrowseAbandonmentPage() {
       .catch(() => undefined);
   }, [shopDomain]);
 
-  const saveBrowseConfig = async (updatedNotifications: FlowNotification[], enabledOverride?: boolean) => {
+  const saveBrowseConfig = async (updatedNotifications: FlowNotification[]) => {
     if (!shopDomain) return;
+
+    const enabled = updatedNotifications.some((item) => item.status === 'Active');
 
     await fetch('/api/automations/rules', {
       method: 'POST',
@@ -290,23 +289,10 @@ export default function BrowseAbandonmentPage() {
       body: JSON.stringify({
         shopDomain,
         ruleKey: 'browse_abandonment_15m',
-        enabled: typeof enabledOverride === 'boolean' ? enabledOverride : ruleEnabled,
+        enabled,
         config: { steps: buildStepsConfigFromNotifications(updatedNotifications) },
       }),
     });
-  };
-
-  const handleToggleFlow = async () => {
-    if (!shopDomain) return;
-    setSaving(true);
-    const newEnabled = !ruleEnabled;
-
-    try {
-      await saveBrowseConfig(notifications, newEnabled);
-      setRuleEnabled(newEnabled);
-    } finally {
-      setSaving(false);
-    }
   };
 
   const handleStatusChange = async (id: string, checked: boolean) => {
@@ -335,7 +321,7 @@ export default function BrowseAbandonmentPage() {
     }
   };
 
-  const isFlowActive = ruleEnabled;
+  const isFlowActive = notifications.some((item) => item.status === 'Active');
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">
@@ -350,12 +336,6 @@ export default function BrowseAbandonmentPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight md:text-3xl">{flowData.title}</h1>
           </div>
-        </div>
-
-        <div className="flex items-center justify-end">
-          <Button onClick={handleToggleFlow} disabled={saving} variant={ruleEnabled ? 'outline' : 'default'}>
-            {saving ? 'Saving...' : ruleEnabled ? 'Deactivate Flow' : 'Activate Flow'}
-          </Button>
         </div>
 
         <Card>
@@ -417,7 +397,7 @@ export default function BrowseAbandonmentPage() {
                 <Alert className="w-full mb-8">
                   <AlertTitle>This automation is inactive</AlertTitle>
                   <AlertDescription>
-                    Activate a reminder to start sending these notifications.
+                    Enable at least one reminder to start sending these notifications.
                   </AlertDescription>
                 </Alert>
               )}

@@ -229,8 +229,6 @@ export default function AbandonedCartPage() {
   const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [showReminderStats, setShowReminderStats] = useState(true);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
-  const [ruleEnabled, setRuleEnabled] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
@@ -246,7 +244,6 @@ export default function AbandonedCartPage() {
         const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'cart_abandonment_30m');
         if (rule) {
           setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
-          setRuleEnabled(rule.enabled ?? false);
         }
       })
       .catch(() => undefined);
@@ -281,8 +278,10 @@ export default function AbandonedCartPage() {
       .catch(() => undefined);
   }, [shopDomain]);
 
-  const saveCartConfig = async (updatedNotifications: FlowNotification[], enabledOverride?: boolean) => {
+  const saveCartConfig = async (updatedNotifications: FlowNotification[]) => {
     if (!shopDomain) return;
+
+    const enabled = updatedNotifications.some((item) => item.status === 'Active');
 
     await fetch('/api/automations/rules', {
       method: 'POST',
@@ -290,23 +289,10 @@ export default function AbandonedCartPage() {
       body: JSON.stringify({
         shopDomain,
         ruleKey: 'cart_abandonment_30m',
-        enabled: typeof enabledOverride === 'boolean' ? enabledOverride : ruleEnabled,
+        enabled,
         config: { steps: buildStepsConfigFromNotifications(updatedNotifications) },
       }),
     });
-  };
-
-  const handleToggleFlow = async () => {
-    if (!shopDomain) return;
-    setSaving(true);
-    const newEnabled = !ruleEnabled;
-
-    try {
-      await saveCartConfig(notifications, newEnabled);
-      setRuleEnabled(newEnabled);
-    } finally {
-      setSaving(false);
-    }
   };
 
   const handleStatusChange = async (id: string, checked: boolean) => {
@@ -335,7 +321,7 @@ export default function AbandonedCartPage() {
     }
   };
 
-  const isFlowActive = ruleEnabled;
+  const isFlowActive = notifications.some((item) => item.status === 'Active');
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">
@@ -352,12 +338,6 @@ export default function AbandonedCartPage() {
           </div>
         </div>
 
-        <div className="flex items-center justify-between">
-          <div />
-          <Button onClick={handleToggleFlow} disabled={saving} variant={ruleEnabled ? 'outline' : 'default'}>
-            {saving ? 'Saving...' : ruleEnabled ? 'Deactivate Flow' : 'Activate Flow'}
-          </Button>
-        </div>
         <Card>
           <CardContent className="p-0">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x">
@@ -417,7 +397,7 @@ export default function AbandonedCartPage() {
                 <Alert className="w-full mb-8">
                   <AlertTitle>This automation is inactive</AlertTitle>
                   <AlertDescription>
-                    Activate a reminder to start sending these notifications to new subscribers.
+                    Enable at least one reminder to start sending these notifications.
                   </AlertDescription>
                 </Alert>
               )}
