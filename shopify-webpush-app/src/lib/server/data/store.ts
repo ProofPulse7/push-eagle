@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { env } from '@/lib/config/env';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
+import { sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
 
 type CreateCampaignInput = {
   shopDomain: string;
@@ -31,6 +32,11 @@ type UpsertTokenInput = {
   city?: string | null;
   userAgent?: string | null;
   deviceContext?: Record<string, unknown> | null;
+  /** For VAPID (Firefox / Safari) subscriptions */
+  tokenType?: 'fcm' | 'vapid';
+  vapidEndpoint?: string | null;
+  vapidP256dh?: string | null;
+  vapidAuth?: string | null;
 };
 
 type UpdateAttributionSettingsInput = {
@@ -535,6 +541,13 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS location_store_option TEXT NOT NULL DEFAULT 'yes'`;
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS name_store_option TEXT NOT NULL DEFAULT 'yes'`;
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS brand_logo_url TEXT`;
+
+      // VAPID / cross-browser Web Push columns on subscriber_tokens
+      // token_type: 'fcm' (Chrome/Edge/Opera/Samsung) or 'vapid' (Firefox/Safari)
+      await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS token_type TEXT NOT NULL DEFAULT 'fcm'`;
+      await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS vapid_endpoint TEXT`;
+      await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS vapid_p256dh TEXT`;
+      await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS vapid_auth TEXT`;
 
       await sql`CREATE TABLE IF NOT EXISTS campaign_deliveries (
         id BIGSERIAL PRIMARY KEY,
@@ -1354,6 +1367,34 @@ export const enqueueAutomationJob = async (input: {
   return rows[0] ? String(rows[0].id) : null;
 };
 
+/**
+ * Immediately process the pending welcome_subscriber job for the given tokenId.
+ * Called right after upsertSubscriberToken so the welcome notification fires
+ * instantly without waiting for the next cron cycle.
+ */
+export const dispatchWelcomeJobNow = async (shopDomain: string, tokenId: number) => {
+  const sql = getNeonSql();
+
+  const jobRows = await sql`
+    SELECT id
+    FROM automation_jobs
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+      AND token_id = ${tokenId}
+      AND status = 'pending'
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+
+  const jobId = jobRows[0]?.id ? String(jobRows[0].id) : null;
+  if (!jobId) {
+    return { dispatched: false };
+  }
+
+  const result = await processAutomationJob(jobId);
+  return { dispatched: true, ...result };
+};
+
 export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIndex = 0) => {
   await ensureSchema();
   const sql = getNeonSql();
@@ -1405,12 +1446,13 @@ export const processAutomationJob = async (jobId: string) => {
   }
 
   const tokenRows = await sql`
-    SELECT fcm_token, status
+    SELECT fcm_token, token_type, vapid_endpoint, vapid_p256dh, vapid_auth, status
     FROM subscriber_tokens
     WHERE id = ${claim.token_id ?? 0}
     LIMIT 1
   `;
   const token = String(tokenRows[0]?.fcm_token ?? '');
+  const tokenType = String(tokenRows[0]?.token_type ?? 'fcm');
   const tokenStatus = String(tokenRows[0]?.status ?? '');
 
   if (!token || tokenStatus !== 'active') {
@@ -1434,32 +1476,56 @@ export const processAutomationJob = async (jobId: string) => {
       return { processed: false, error: skipReason };
     }
 
-    const messaging = getFirebaseAdminMessaging();
     const trackedTargetUrl = payload.ruleKey
       ? buildAutomationTrackedUrl(payload.targetUrl ?? null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
       : payload.targetUrl ?? null;
-    const message = {
-      token,
-      notification: {
-        title: payload.title,
-        body: payload.body,
-        imageUrl: payload.imageUrl ?? undefined,
-      },
-      webpush: {
-        fcmOptions: { link: trackedTargetUrl ?? undefined },
-        notification: {
-          icon: payload.iconUrl ?? undefined,
-          image: payload.imageUrl ?? undefined,
-        },
-      },
-      data: {
-        source: 'automation',
-        ruleKey: String(payload.ruleKey ?? ''),
-        url: trackedTargetUrl ?? payload.targetUrl ?? '',
-      },
-    };
 
-    const fcmMessageId = await messaging.send(message);
+    let fcmMessageId: string;
+
+    if (tokenType === 'vapid') {
+      // VAPID send for Firefox / Safari
+      const vapidEndpoint = String(tokenRows[0]?.vapid_endpoint ?? '');
+      const vapidP256dh = String(tokenRows[0]?.vapid_p256dh ?? '');
+      const vapidAuth = String(tokenRows[0]?.vapid_auth ?? '');
+      if (!vapidEndpoint || !vapidP256dh || !vapidAuth) {
+        throw new Error('Incomplete VAPID subscription data.');
+      }
+      fcmMessageId = await sendVapidPushNotification(
+        { endpoint: vapidEndpoint, keys: { p256dh: vapidP256dh, auth: vapidAuth } },
+        {
+          title: payload.title,
+          body: payload.body,
+          icon: payload.iconUrl ?? null,
+          image: payload.imageUrl ?? null,
+          url: trackedTargetUrl ?? payload.targetUrl ?? null,
+        },
+      );
+    } else {
+      // FCM send for Chrome / Edge / Opera / Samsung
+      const messaging = getFirebaseAdminMessaging();
+      const message = {
+        token,
+        notification: {
+          title: payload.title,
+          body: payload.body,
+          imageUrl: payload.imageUrl ?? undefined,
+        },
+        webpush: {
+          fcmOptions: { link: trackedTargetUrl ?? undefined },
+          notification: {
+            icon: payload.iconUrl ?? undefined,
+            image: payload.imageUrl ?? undefined,
+          },
+        },
+        data: {
+          source: 'automation',
+          ruleKey: String(payload.ruleKey ?? ''),
+          url: trackedTargetUrl ?? payload.targetUrl ?? '',
+        },
+      };
+
+      fcmMessageId = await messaging.send(message);
+    }
 
     await sql`
       UPDATE automation_jobs
@@ -2538,6 +2604,10 @@ export const resolveCampaignAudience = async (
       SELECT
         t.id AS token_id,
         t.fcm_token,
+        t.token_type,
+        t.vapid_endpoint,
+        t.vapid_p256dh,
+        t.vapid_auth,
         s.id AS subscriber_id,
         s.external_id,
         s.platform
@@ -2557,7 +2627,17 @@ export const resolveCampaignAudience = async (
         )
       ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
     `;
-    return rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null; platform: string | null }>;
+    return rows as Array<{
+      token_id: string | number;
+      fcm_token: string;
+      token_type: string | null;
+      vapid_endpoint: string | null;
+      vapid_p256dh: string | null;
+      vapid_auth: string | null;
+      subscriber_id: string | number;
+      external_id: string | null;
+      platform: string | null;
+    }>;
   }
 
   const segmentRows = await sql`
@@ -2578,6 +2658,10 @@ export const resolveCampaignAudience = async (
     SELECT
       t.id AS token_id,
       t.fcm_token,
+      t.token_type,
+      t.vapid_endpoint,
+      t.vapid_p256dh,
+      t.vapid_auth,
       s.id AS subscriber_id,
       s.external_id,
       s.platform
@@ -2598,7 +2682,17 @@ export const resolveCampaignAudience = async (
     ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
   `;
 
-  return (rows as Array<{ token_id: string | number; fcm_token: string; subscriber_id: string | number; external_id: string | null; platform: string | null }>).filter((row) =>
+  return (rows as Array<{
+    token_id: string | number;
+    fcm_token: string;
+    token_type: string | null;
+    vapid_endpoint: string | null;
+    vapid_p256dh: string | null;
+    vapid_auth: string | null;
+    subscriber_id: string | number;
+    external_id: string | null;
+    platform: string | null;
+  }>).filter((row) =>
     allowedIds.has(Number(row.subscriber_id)),
   );
 };
@@ -2816,13 +2910,17 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   const subscriberId = Number(subscriberRows[0]?.id);
 
   const tokenRows = await sql`
-    INSERT INTO subscriber_tokens (shop_domain, subscriber_id, fcm_token, user_agent, status, updated_at, last_seen_at)
+    INSERT INTO subscriber_tokens (shop_domain, subscriber_id, fcm_token, user_agent, status, token_type, vapid_endpoint, vapid_p256dh, vapid_auth, updated_at, last_seen_at)
     VALUES (
       ${input.shopDomain},
       ${subscriberId},
       ${input.token},
       ${input.userAgent ?? null},
       'active',
+      ${input.tokenType ?? 'fcm'},
+      ${input.vapidEndpoint ?? null},
+      ${input.vapidP256dh ?? null},
+      ${input.vapidAuth ?? null},
       NOW(),
       NOW()
     )
@@ -2830,6 +2928,10 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     DO UPDATE SET
       subscriber_id = EXCLUDED.subscriber_id,
       user_agent = EXCLUDED.user_agent,
+      token_type = EXCLUDED.token_type,
+      vapid_endpoint = COALESCE(EXCLUDED.vapid_endpoint, subscriber_tokens.vapid_endpoint),
+      vapid_p256dh = COALESCE(EXCLUDED.vapid_p256dh, subscriber_tokens.vapid_p256dh),
+      vapid_auth = COALESCE(EXCLUDED.vapid_auth, subscriber_tokens.vapid_auth),
       status = 'active',
       updated_at = NOW(),
       last_seen_at = NOW()
@@ -3565,7 +3667,7 @@ export const sendCampaign = async (
       }
 
       const chunk = recipients.slice(i, i + chunkSize);
-      const messages = chunk.map((item) => {
+      const chunkWithPayload = chunk.map((item) => {
         const platform = String((item as { platform?: string }).platform ?? '').toLowerCase();
         const platformImage =
           platform === 'windows'
@@ -3596,6 +3698,20 @@ export const sendCampaign = async (
           : null;
 
         return {
+          item,
+          platformImage,
+          trackedUrl,
+          firstButtonUrl,
+          secondButtonUrl,
+          actions,
+        };
+      });
+
+      const fcmRecipients = chunkWithPayload.filter(({ item }) => String((item as { token_type?: string | null }).token_type ?? 'fcm') !== 'vapid');
+      const vapidRecipients = chunkWithPayload.filter(({ item }) => String((item as { token_type?: string | null }).token_type ?? 'fcm') === 'vapid');
+
+      if (fcmRecipients.length > 0) {
+        const messages = fcmRecipients.map(({ item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, actions }) => ({
           token: item.fcm_token,
           notification: {
             title: campaign.title,
@@ -3619,44 +3735,97 @@ export const sendCampaign = async (
             button1Url: firstButtonUrl ?? '',
             button2Url: secondButtonUrl ?? '',
           },
-        };
-      });
+        }));
 
-      const multicast = await messaging.sendEach(messages);
+        const multicast = await messaging.sendEach(messages);
 
-      successCount += multicast.successCount;
-      failureCount += multicast.failureCount;
-  processedRecipients += chunk.length;
-  processedBatches += 1;
+        successCount += multicast.successCount;
+        failureCount += multicast.failureCount;
 
-      for (let index = 0; index < multicast.responses.length; index += 1) {
-        const response = multicast.responses[index];
-        const recipient = chunk[index];
+        for (let index = 0; index < multicast.responses.length; index += 1) {
+          const response = multicast.responses[index];
+          const recipient = fcmRecipients[index]?.item;
+          if (!recipient) {
+            continue;
+          }
 
-        if (response.success) {
+          if (response.success) {
+            await sql`
+              INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
+              VALUES (
+                ${campaignId},
+                ${shopDomain},
+                ${Number(recipient.subscriber_id)},
+                ${Number(recipient.token_id)},
+                ${response.messageId ?? null}
+              )
+              ON CONFLICT (campaign_id, token_id) DO NOTHING
+            `;
+            continue;
+          }
+
+          const code = response.error?.code ?? '';
+          if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
+            await sql`
+              UPDATE subscriber_tokens
+              SET status = 'revoked', updated_at = NOW()
+              WHERE id = ${Number(recipient.token_id)}
+            `;
+          }
+        }
+      }
+
+      for (const { item, platformImage, trackedUrl } of vapidRecipients) {
+        try {
+          const endpoint = String((item as { vapid_endpoint?: string | null }).vapid_endpoint ?? '');
+          const p256dh = String((item as { vapid_p256dh?: string | null }).vapid_p256dh ?? '');
+          const auth = String((item as { vapid_auth?: string | null }).vapid_auth ?? '');
+
+          if (!endpoint || !p256dh || !auth) {
+            failureCount += 1;
+            continue;
+          }
+
+          const vapidMessageId = await sendVapidPushNotification(
+            { endpoint, keys: { p256dh, auth } },
+            {
+              title: campaign.title,
+              body: campaign.body,
+              icon: campaign.icon_url,
+              image: platformImage,
+              url: trackedUrl,
+            },
+          );
+
+          successCount += 1;
+
           await sql`
             INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
             VALUES (
               ${campaignId},
               ${shopDomain},
-              ${Number(recipient.subscriber_id)},
-              ${Number(recipient.token_id)},
-              ${response.messageId ?? null}
+              ${Number(item.subscriber_id)},
+              ${Number(item.token_id)},
+              ${vapidMessageId}
             )
             ON CONFLICT (campaign_id, token_id) DO NOTHING
           `;
-          continue;
-        }
+        } catch (error) {
+          failureCount += 1;
 
-        const code = response.error?.code ?? '';
-        if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
-          await sql`
-            UPDATE subscriber_tokens
-            SET status = 'revoked', updated_at = NOW()
-            WHERE id = ${Number(recipient.token_id)}
-          `;
+          const message = error instanceof Error ? error.message : String(error ?? '');
+          if (message.includes('410') || message.includes('404') || message.toLowerCase().includes('unsub')) {
+            await sql`
+              UPDATE subscriber_tokens
+              SET status = 'revoked', updated_at = NOW()
+              WHERE id = ${Number(item.token_id)}
+            `;
+          }
         }
       }
+
+      processedRecipients += chunk.length;
+      processedBatches += 1;
     }
 
     const remainingRecipients = Math.max(recipients.length - processedRecipients, 0);

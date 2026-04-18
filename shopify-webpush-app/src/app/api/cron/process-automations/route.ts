@@ -4,7 +4,7 @@ import { env } from '@/lib/config/env';
 import { listDueAutomationJobs, processAutomationJob, pruneAutomationData } from '@/lib/server/data/store';
 
 export const runtime = 'nodejs';
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 const isAuthorized = (request: Request) => {
   if (!env.CRON_SECRET) {

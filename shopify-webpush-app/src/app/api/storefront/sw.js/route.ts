@@ -41,6 +41,28 @@ self.addEventListener('notificationclick', function(event) {
   const target = event.notification?.data?.url || '/';
   event.waitUntil(clients.openWindow(target));
 });
+
+// Fallback for VAPID/browser-native push payloads (Firefox/Safari).
+self.addEventListener('push', function(event) {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (_error) {
+    payload = {};
+  }
+
+  const title = payload.title || payload.notification?.title || 'Push Eagle';
+  const options = {
+    body: payload.body || payload.notification?.body,
+    icon: payload.icon || payload.notification?.icon,
+    image: payload.image || payload.notification?.image,
+    data: {
+      url: payload.url || payload.data?.url || '/'
+    }
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
 `;
 
 const handleRequest = async (request: Request) => {

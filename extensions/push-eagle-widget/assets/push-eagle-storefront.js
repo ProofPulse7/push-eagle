@@ -1222,6 +1222,35 @@
     return window.firebase.messaging();
   }
 
+  function urlBase64ToUint8Array(base64String) {
+    var padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    var rawData = window.atob(base64);
+    var outputArray = new Uint8Array(rawData.length);
+
+    for (var i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+
+    return outputArray;
+  }
+
+  async function subscribeWithVapid(registration, vapidKey) {
+    if (!registration || !registration.pushManager || !vapidKey) {
+      return null;
+    }
+
+    var existing = await registration.pushManager.getSubscription();
+    if (existing) {
+      return existing;
+    }
+
+    return registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidKey)
+    });
+  }
+
   async function registerToken(runtimeConfig, boot, options, profile) {
     var clientProfile = refreshClientProfile(profile);
     var support = getBrowserSupport(clientProfile);
@@ -1251,7 +1280,12 @@
     }
 
     try {
-      var messaging = await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
+      var messaging = null;
+      try {
+        messaging = await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
+      } catch (_firebaseInitError) {
+        messaging = null;
+      }
 
       var swPath = runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH;
       var swScope = deriveServiceWorkerScope(swPath);
@@ -1279,10 +1313,40 @@
         return { ok: false, reason: 'sw-not-active', message: activationMessage };
       }
 
-      var token = await messaging.getToken({
-        vapidKey: (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey,
-        serviceWorkerRegistration: registration
-      });
+      var vapidKey = (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey;
+      var token = null;
+      var tokenType = 'fcm';
+      var vapidEndpoint = null;
+      var vapidP256dh = null;
+      var vapidAuth = null;
+
+      if (messaging && messaging.getToken) {
+        try {
+          token = await messaging.getToken({
+            vapidKey: vapidKey,
+            serviceWorkerRegistration: registration
+          });
+        } catch (_fcmError) {
+          token = null;
+        }
+      }
+
+      // Firefox/Safari may not return FCM token; fallback to native Web Push subscription.
+      if (!token && vapidKey) {
+        try {
+          var subscription = await subscribeWithVapid(registration, vapidKey);
+          if (subscription && subscription.endpoint) {
+            token = subscription.endpoint;
+            tokenType = 'vapid';
+            vapidEndpoint = subscription.endpoint;
+            var keys = subscription.toJSON && subscription.toJSON().keys ? subscription.toJSON().keys : null;
+            vapidP256dh = keys && keys.p256dh ? keys.p256dh : null;
+            vapidAuth = keys && keys.auth ? keys.auth : null;
+          }
+        } catch (_vapidError) {
+          token = null;
+        }
+      }
 
       if (!token) {
         return { ok: false, reason: 'token-empty' };
@@ -1292,6 +1356,10 @@
         shopDomain: boot.shopDomain,
         externalId: boot.externalId,
         token: token,
+        tokenType: tokenType,
+        vapidEndpoint: vapidEndpoint,
+        vapidP256dh: vapidP256dh,
+        vapidAuth: vapidAuth,
         browser: clientProfile && clientProfile.browserName ? clientProfile.browserName : detectBrowser(),
         platform: clientProfile && clientProfile.osName ? clientProfile.osName : detectPlatform(),
         locale: clientProfile && clientProfile.language ? clientProfile.language : navigator.language,
@@ -1350,7 +1418,7 @@
       }
 
       markSubscribed(boot.shopDomain, token);
-      return { ok: true, token: token };
+      return { ok: true, token: token, tokenType: tokenType };
     } catch (error) {
       var message = error && error.message ? String(error.message) : '';
       if (/unsupported-browser|not supported|secure context/i.test(message)) {

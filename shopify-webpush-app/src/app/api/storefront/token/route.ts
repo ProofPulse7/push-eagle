@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { getRequestGeo } from '@/lib/server/request-geo';
-import { upsertSubscriberToken } from '@/lib/server/data/store';
+import { dispatchWelcomeJobNow, upsertSubscriberToken } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -14,6 +14,10 @@ export const runtime = 'nodejs';
 const schema = z.object({
   shopDomain: z.string(),
   token: z.string().min(10),
+  tokenType: z.enum(['fcm', 'vapid']).optional(),
+  vapidEndpoint: z.string().url().optional(),
+  vapidP256dh: z.string().optional(),
+  vapidAuth: z.string().optional(),
   externalId: z.string().optional(),
   browser: z.string().optional(),
   platform: z.string().optional(),
@@ -132,6 +136,10 @@ export async function POST(request: Request) {
       shopDomain,
       externalId,
       token: body.token,
+      tokenType: body.tokenType,
+      vapidEndpoint: body.vapidEndpoint,
+      vapidP256dh: body.vapidP256dh,
+      vapidAuth: body.vapidAuth,
       browser,
       platform,
       locale,
@@ -140,6 +148,10 @@ export async function POST(request: Request) {
       userAgent,
       deviceContext: body.deviceContext ?? null,
     });
+
+    if (saved.tokenId) {
+      dispatchWelcomeJobNow(shopDomain, saved.tokenId).catch(() => undefined);
+    }
 
     return NextResponse.json(
       {

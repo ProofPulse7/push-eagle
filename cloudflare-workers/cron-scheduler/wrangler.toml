@@ -1,0 +1,17 @@
+name = "push-eagle-cron"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Cron triggers - runs every 5 minutes for free on Cloudflare
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Environment variables (non-secret). Set secrets via: wrangler secret put CRON_SECRET
+[vars]
+APP_URL = "https://push-eagle-dashboard.vercel.app"
+PROCESS_CAMPAIGNS_URL = "https://push-eagle-dashboard.vercel.app/api/cron/process-campaigns"
+PROCESS_AUTOMATIONS_URL = "https://push-eagle-dashboard.vercel.app/api/cron/process-automations"
+
+# For local dev: create a .dev.vars file with:
+# CRON_SECRET=your-cron-secret-here
+# APP_URL=http://localhost:3000
