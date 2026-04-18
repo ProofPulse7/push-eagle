@@ -80,12 +80,14 @@ export default function SettingsPage() {
     } = useSettings();
     const { toast } = useToast();
   const [allowSupport, setAllowSupport] = useState(true);
-  const [ipAddressOption, setIpAddressOption] = useState('anonymized');
+    const [ipAddressOption, setIpAddressOption] = useState<'anonymized' | 'no-ip'>('anonymized');
   const [enableGeo, setEnableGeo] = useState(true);
   const [enablePreferences, setEnablePreferences] = useState(false);
-  const [emailStoreOption, setEmailStoreOption] = useState('full-email');
-  const [locationStoreOption, setLocationStoreOption] = useState('yes');
-  const [nameStoreOption, setNameStoreOption] = useState('yes');
+    const [emailStoreOption, setEmailStoreOption] = useState<'full-email' | 'hash-email' | 'no-email'>('full-email');
+    const [locationStoreOption, setLocationStoreOption] = useState<'yes' | 'no'>('yes');
+    const [nameStoreOption, setNameStoreOption] = useState<'yes' | 'no'>('yes');
+        const [savingPrivacy, setSavingPrivacy] = useState(false);
+        const [savingBranding, setSavingBranding] = useState(false);
     const [overview, setOverview] = useState<MerchantOverview | null>(null);
     const [overviewRefreshTick, setOverviewRefreshTick] = useState(0);
     const [syncingShopify, setSyncingShopify] = useState(false);
@@ -115,6 +117,58 @@ export default function SettingsPage() {
             isMounted = false;
         };
     }, [shopDomain, setAttributionModel, setClickWindowDays, setImpressionWindowDays]);
+
+    useEffect(() => {
+        if (!shopDomain) {
+            return;
+        }
+
+        let isMounted = true;
+        fetch(`/api/settings/privacy?shop=${encodeURIComponent(shopDomain)}`)
+            .then(async (res) => {
+                const data = await res.json();
+                if (!res.ok || !data?.ok || !isMounted) {
+                    return;
+                }
+
+                setAllowSupport(Boolean(data.allowSupport));
+                setIpAddressOption((String(data.ipAddressOption || 'anonymized') as 'anonymized' | 'no-ip'));
+                setEnableGeo(Boolean(data.enableGeo));
+                setEnablePreferences(Boolean(data.enablePreferences));
+                setEmailStoreOption((String(data.emailStoreOption || 'full-email') as 'full-email' | 'hash-email' | 'no-email'));
+                setLocationStoreOption((String(data.locationStoreOption || 'yes') as 'yes' | 'no'));
+                setNameStoreOption((String(data.nameStoreOption || 'yes') as 'yes' | 'no'));
+            })
+            .catch(() => undefined);
+
+        return () => {
+            isMounted = false;
+        };
+    }, [shopDomain]);
+
+    useEffect(() => {
+        if (!shopDomain) {
+            return;
+        }
+
+        let isMounted = true;
+        fetch(`/api/settings/branding?shop=${encodeURIComponent(shopDomain)}`)
+            .then(async (res) => {
+                const data = await res.json();
+                if (!res.ok || !data?.ok || !isMounted) {
+                    return;
+                }
+
+                if (data.logoUrl) {
+                    setLogo({ file: null, preview: String(data.logoUrl) });
+                }
+            })
+            .catch(() => undefined);
+
+        return () => {
+            isMounted = false;
+        };
+    }, [shopDomain, setLogo]);
 
     useEffect(() => {
         let isMounted = true;
@@ -263,6 +317,110 @@ export default function SettingsPage() {
         }
     };
 
+    const activeShopDomain = shopDomain || overview?.myshopifyDomain || '';
+
+    const saveBrandingSettings = async () => {
+        if (!activeShopDomain) {
+            toast({
+                variant: 'destructive',
+                title: 'Shop domain required',
+                description: 'Open app from Shopify first so we can save branding settings.',
+            });
+            return;
+        }
+
+        setSavingBranding(true);
+        try {
+            const response = await fetch('/api/settings/branding', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    shopDomain: activeShopDomain,
+                    logoUrl: logo.preview || null,
+                }),
+            });
+
+            const result = await response.json();
+            if (!response.ok || !result?.ok) {
+                toast({
+                    variant: 'destructive',
+                    title: 'Failed to save branding settings',
+                    description: result?.error ?? 'Unexpected error while saving branding settings.',
+                });
+                return;
+            }
+
+            toast({
+                title: 'Branding settings saved',
+                description: 'Your logo has been saved for this store.',
+            });
+        } catch {
+            toast({
+                variant: 'destructive',
+                title: 'Failed to save branding settings',
+                description: 'Unexpected error while saving branding settings.',
+            });
+        } finally {
+            setSavingBranding(false);
+        }
+    };
+
+    const savePrivacySettings = async () => {
+        if (!activeShopDomain) {
+            toast({
+                variant: 'destructive',
+                title: 'Shop domain required',
+                description: 'Open app from Shopify first so we can save privacy settings.',
+            });
+            return;
+        }
+
+        setSavingPrivacy(true);
+        try {
+            const response = await fetch('/api/settings/privacy', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    shopDomain: activeShopDomain,
+                    allowSupport,
+                    ipAddressOption,
+                    enableGeo,
+                    enablePreferences,
+                    emailStoreOption,
+                    locationStoreOption,
+                    nameStoreOption,
+                }),
+            });
+
+            const result = await response.json();
+            if (!response.ok || !result?.ok) {
+                toast({
+                    variant: 'destructive',
+                    title: 'Failed to save privacy settings',
+                    description: result?.error ?? 'Unexpected error while saving privacy settings.',
+                });
+                return;
+            }
+
+            toast({
+                title: 'Privacy settings saved',
+                description: 'Your privacy preferences are now active.',
+            });
+        } catch {
+            toast({
+                variant: 'destructive',
+                title: 'Failed to save privacy settings',
+                description: 'Unexpected error while saving privacy settings.',
+            });
+        } finally {
+            setSavingPrivacy(false);
+        }
+    };
+
 
   return (
     <div className="flex flex-col gap-8">
@@ -323,6 +481,9 @@ export default function SettingsPage() {
                             <div className="flex items-center gap-2">
                                 <Button variant="ghost" size="icon" onClick={() => logo.preview && setEditingState({url: logo.preview, aspect: 1, type: 'logo'})} disabled={!logo.preview}><Crop className="h-4 w-4" /></Button>
                                 <Button variant="ghost" size="icon" onClick={() => logoInputRef.current?.click()}><Upload className="h-4 w-4" /></Button>
+                                <Button variant="outline" size="sm" onClick={saveBrandingSettings} disabled={savingBranding}>
+                                    {savingBranding ? 'Saving...' : 'Save Logo'}
+                                </Button>
                                 <Input type="file" ref={logoInputRef} className="hidden" accept="image/*" onChange={handleLogoUpload} />
                             </div>
                         </div>
@@ -441,7 +602,7 @@ export default function SettingsPage() {
                         <CardHeader><CardTitle>Subscriber</CardTitle></CardHeader>
                         <CardContent>
                              <SettingsSection title="IP ADDRESS" description="Choose whether or not you want to collect and store the anonymized IP addresses (classified as personal data under GDPR) of your subscribers. By storing the last octet of the IP address, the subscriber is anonymized to a sufficient degree, ensuring your GDPR compliance.">
-                                <RadioGroup value={ipAddressOption} onValueChange={setIpAddressOption} className="space-y-2">
+                                <RadioGroup value={ipAddressOption} onValueChange={(value) => setIpAddressOption(value as 'anonymized' | 'no-ip')} className="space-y-2">
                                     <div className="flex items-center gap-3 p-3 rounded-md bg-background/50 border">
                                         <RadioGroupItem value="anonymized" id="anonymized" />
                                         <Label htmlFor="anonymized" className="font-medium cursor-pointer w-full">
@@ -499,7 +660,7 @@ export default function SettingsPage() {
                         <CardHeader><CardTitle>Store subscriber information</CardTitle></CardHeader>
                         <CardContent>
                             <SettingsSection title="EMAIL" description="Email of the subscriber is used by some third-party integrations to send push notification.">
-                                 <RadioGroup value={emailStoreOption} onValueChange={setEmailStoreOption} className="space-y-2">
+                                 <RadioGroup value={emailStoreOption} onValueChange={(value) => setEmailStoreOption(value as 'full-email' | 'hash-email' | 'no-email')} className="space-y-2">
                                     <div className="p-3 rounded-md bg-background/50 border space-y-2">
                                         <div className="flex items-center gap-3"><RadioGroupItem value="full-email" id="full-email" /><Label htmlFor="full-email">Full Email <Info className="inline-block ml-2 h-4 w-4 text-yellow-500" /></Label></div>
                                         <div className="flex items-center gap-3"><RadioGroupItem value="hash-email" id="hash-email" /><Label htmlFor="hash-email">Hash</Label></div>
@@ -514,7 +675,7 @@ export default function SettingsPage() {
                             </SettingsSection>
                             <Separator className="my-6" />
                              <SettingsSection title="LOCATION" description="Location of the subscriber is used for user segmentation based on location.">
-                                <RadioGroup value={locationStoreOption} onValueChange={setLocationStoreOption} className="space-y-2">
+                                <RadioGroup value={locationStoreOption} onValueChange={(value) => setLocationStoreOption(value as 'yes' | 'no')} className="space-y-2">
                                     <div className="p-3 rounded-md bg-background/50 border space-y-2">
                                         <div className="flex items-center gap-3"><RadioGroupItem value="yes" id="loc-yes" /><Label htmlFor="loc-yes">Yes <Info className="inline-block ml-2 h-4 w-4 text-yellow-500" /></Label></div>
                                         <div className="flex items-center gap-3"><RadioGroupItem value="no" id="loc-no" /><Label htmlFor="loc-no">No</Label></div>
@@ -528,7 +689,7 @@ export default function SettingsPage() {
                             </SettingsSection>
                             <Separator className="my-6" />
                             <SettingsSection title="NAME" description="Name of the subscriber is used by placeholders in notification like {{customer_first_name}}">
-                                 <RadioGroup value={nameStoreOption} onValueChange={setNameStoreOption} className="space-y-2">
+                                 <RadioGroup value={nameStoreOption} onValueChange={(value) => setNameStoreOption(value as 'yes' | 'no')} className="space-y-2">
                                      <div className="p-3 rounded-md bg-background/50 border space-y-2">
                                         <div className="flex items-center gap-3"><RadioGroupItem value="yes" id="name-yes" /><Label htmlFor="name-yes">Yes <Info className="inline-block ml-2 h-4 w-4 text-yellow-500" /></Label></div>
                                         <div className="flex items-center gap-3"><RadioGroupItem value="no" id="name-no" /><Label htmlFor="name-no">No</Label></div>
@@ -542,6 +703,11 @@ export default function SettingsPage() {
                             </SettingsSection>
                         </CardContent>
                     </Card>
+                    <div className="flex justify-end">
+                        <Button onClick={savePrivacySettings} disabled={savingPrivacy}>
+                            {savingPrivacy ? 'Saving...' : 'Save Privacy Settings'}
+                        </Button>
+                    </div>
                 </div>
             </TabsContent>
             <TabsContent value="attribution">

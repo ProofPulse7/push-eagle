@@ -67,6 +67,28 @@ type UpdateOptInSettingsInput = {
   shopDomain: string;
 } & OptInSettings;
 
+type PrivacySettings = {
+  allowSupport: boolean;
+  ipAddressOption: 'anonymized' | 'no-ip';
+  enableGeo: boolean;
+  enablePreferences: boolean;
+  emailStoreOption: 'full-email' | 'hash-email' | 'no-email';
+  locationStoreOption: 'yes' | 'no';
+  nameStoreOption: 'yes' | 'no';
+};
+
+type UpdatePrivacySettingsInput = {
+  shopDomain: string;
+} & PrivacySettings;
+
+type BrandingSettings = {
+  logoUrl: string | null;
+};
+
+type UpdateBrandingSettingsInput = {
+  shopDomain: string;
+} & BrandingSettings;
+
 type RecordIosHomeScreenInput = {
   shopDomain: string;
   externalId: string;
@@ -302,6 +324,16 @@ const defaultOptInSettings: OptInSettings = {
   iosWidgetMessage: 'Add this store to your Home Screen. When you open it from there, we will ask for notification permission using your saved prompt settings.',
 };
 
+const defaultPrivacySettings: PrivacySettings = {
+  allowSupport: true,
+  ipAddressOption: 'anonymized',
+  enableGeo: true,
+  enablePreferences: false,
+  emailStoreOption: 'full-email',
+  locationStoreOption: 'yes',
+  nameStoreOption: 'yes',
+};
+
 const parseScopes = (value?: string | null) =>
   String(value || '')
     .split(',')
@@ -495,6 +527,14 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS ios_widget_enabled BOOLEAN NOT NULL DEFAULT TRUE`;
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS ios_widget_title TEXT`;
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS ios_widget_message TEXT`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS support_tools_enabled BOOLEAN NOT NULL DEFAULT TRUE`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS ip_address_option TEXT NOT NULL DEFAULT 'anonymized'`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS geo_location_enabled BOOLEAN NOT NULL DEFAULT TRUE`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS notification_preferences_enabled BOOLEAN NOT NULL DEFAULT FALSE`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS email_store_option TEXT NOT NULL DEFAULT 'full-email'`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS location_store_option TEXT NOT NULL DEFAULT 'yes'`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS name_store_option TEXT NOT NULL DEFAULT 'yes'`;
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS brand_logo_url TEXT`;
 
       await sql`CREATE TABLE IF NOT EXISTS campaign_deliveries (
         id BIGSERIAL PRIMARY KEY,
@@ -3949,6 +3989,140 @@ export const updateAttributionSettings = async (input: UpdateAttributionSettings
   `;
 
   return getAttributionSettings(input.shopDomain);
+};
+
+export const getPrivacySettings = async (shopDomain: string): Promise<PrivacySettings> => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  await sql`
+    INSERT INTO merchant_settings (shop_domain)
+    VALUES (${shopDomain})
+    ON CONFLICT (shop_domain) DO NOTHING
+  `;
+
+  const rows = await sql`
+    SELECT
+      support_tools_enabled,
+      ip_address_option,
+      geo_location_enabled,
+      notification_preferences_enabled,
+      email_store_option,
+      location_store_option,
+      name_store_option
+    FROM merchant_settings
+    WHERE shop_domain = ${shopDomain}
+    LIMIT 1
+  `;
+
+  const row = rows[0];
+
+  return {
+    allowSupport: row?.support_tools_enabled === undefined ? defaultPrivacySettings.allowSupport : Boolean(row.support_tools_enabled),
+    ipAddressOption: (row?.ip_address_option as PrivacySettings['ipAddressOption']) ?? defaultPrivacySettings.ipAddressOption,
+    enableGeo: row?.geo_location_enabled === undefined ? defaultPrivacySettings.enableGeo : Boolean(row.geo_location_enabled),
+    enablePreferences:
+      row?.notification_preferences_enabled === undefined
+        ? defaultPrivacySettings.enablePreferences
+        : Boolean(row.notification_preferences_enabled),
+    emailStoreOption: (row?.email_store_option as PrivacySettings['emailStoreOption']) ?? defaultPrivacySettings.emailStoreOption,
+    locationStoreOption: (row?.location_store_option as PrivacySettings['locationStoreOption']) ?? defaultPrivacySettings.locationStoreOption,
+    nameStoreOption: (row?.name_store_option as PrivacySettings['nameStoreOption']) ?? defaultPrivacySettings.nameStoreOption,
+  };
+};
+
+export const updatePrivacySettings = async (input: UpdatePrivacySettingsInput): Promise<PrivacySettings> => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  await sql`
+    INSERT INTO merchant_settings (
+      shop_domain,
+      support_tools_enabled,
+      ip_address_option,
+      geo_location_enabled,
+      notification_preferences_enabled,
+      email_store_option,
+      location_store_option,
+      name_store_option,
+      updated_at
+    )
+    VALUES (
+      ${input.shopDomain},
+      ${input.allowSupport},
+      ${input.ipAddressOption},
+      ${input.enableGeo},
+      ${input.enablePreferences},
+      ${input.emailStoreOption},
+      ${input.locationStoreOption},
+      ${input.nameStoreOption},
+      NOW()
+    )
+    ON CONFLICT (shop_domain)
+    DO UPDATE SET
+      support_tools_enabled = EXCLUDED.support_tools_enabled,
+      ip_address_option = EXCLUDED.ip_address_option,
+      geo_location_enabled = EXCLUDED.geo_location_enabled,
+      notification_preferences_enabled = EXCLUDED.notification_preferences_enabled,
+      email_store_option = EXCLUDED.email_store_option,
+      location_store_option = EXCLUDED.location_store_option,
+      name_store_option = EXCLUDED.name_store_option,
+      updated_at = NOW()
+  `;
+
+  return {
+    allowSupport: Boolean(input.allowSupport),
+    ipAddressOption: input.ipAddressOption,
+    enableGeo: Boolean(input.enableGeo),
+    enablePreferences: Boolean(input.enablePreferences),
+    emailStoreOption: input.emailStoreOption,
+    locationStoreOption: input.locationStoreOption,
+    nameStoreOption: input.nameStoreOption,
+  };
+};
+
+export const getBrandingSettings = async (shopDomain: string): Promise<BrandingSettings> => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  await sql`
+    INSERT INTO merchant_settings (shop_domain)
+    VALUES (${shopDomain})
+    ON CONFLICT (shop_domain) DO NOTHING
+  `;
+
+  const rows = await sql`
+    SELECT brand_logo_url
+    FROM merchant_settings
+    WHERE shop_domain = ${shopDomain}
+    LIMIT 1
+  `;
+
+  return {
+    logoUrl: rows[0]?.brand_logo_url ? String(rows[0].brand_logo_url) : null,
+  };
+};
+
+export const updateBrandingSettings = async (input: UpdateBrandingSettingsInput): Promise<BrandingSettings> => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  await sql`
+    INSERT INTO merchant_settings (shop_domain, brand_logo_url, updated_at)
+    VALUES (${input.shopDomain}, ${input.logoUrl ?? null}, NOW())
+    ON CONFLICT (shop_domain)
+    DO UPDATE SET
+      brand_logo_url = EXCLUDED.brand_logo_url,
+      updated_at = NOW()
+  `;
+
+  return {
+    logoUrl: input.logoUrl ?? null,
+  };
 };
 
 export const trackCampaignClick = async (input: TrackCampaignClickInput) => {
