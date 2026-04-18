@@ -139,7 +139,7 @@ export default function CampaignDetailsPage() {
         }
 
         setSegments(nextSegments);
-        if (!nextSegments.some((item) => item.id === segmentId)) {
+        if (!nextSegments.some((item: { id: string }) => item.id === segmentId)) {
           setSegmentId(nextSegments[0].id);
         }
       })

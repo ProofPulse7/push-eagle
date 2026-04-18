@@ -19,7 +19,6 @@ const showLocalPreview = async (payload: LivePreviewPayload) => {
         await registration.showNotification(payload.title, {
             body: payload.body,
             icon: payload.icon ?? undefined,
-            image: payload.image ?? undefined,
             data: {
                 url: payload.url ?? undefined,
             },
@@ -30,7 +29,6 @@ const showLocalPreview = async (payload: LivePreviewPayload) => {
     new Notification(payload.title, {
         body: payload.body,
         icon: payload.icon ?? undefined,
-        image: payload.image ?? undefined,
     });
 };
 

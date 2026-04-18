@@ -8,22 +8,10 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } f
 import { formatCurrency } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
-import { addDays, eachDayOfInterval, format } from 'date-fns';
+import { format, parseISO, eachDayOfInterval, addDays } from 'date-fns';
 import { AreaChart as AreaChartIcon, BarChart3 } from 'lucide-react';
-
-const generateData = () => {
-    const from = addDays(new Date(), -6);
-    const to = new Date();
-
-    const data = eachDayOfInterval({ start: from, end: to }).map(day => ({
-        date: format(day, 'MMM d'),
-        revenue: Math.floor(Math.random() * 2000) + 500,
-    }));
-
-    const total = data.reduce((acc, item) => acc + item.revenue, 0);
-
-    return { data, total };
-};
+import { useSettings } from '@/context/settings-context';
+import { useSearchParams } from 'next/navigation';
 
 const chartConfig = {
   revenue: {
@@ -33,20 +21,66 @@ const chartConfig = {
 } satisfies ChartConfig;
 
 export function PerformanceChart() {
-    const [chartData, setChartData] = useState<{ data: any[], total: number }>({ data: [], total: 0 });
+    const { shopDomain: settingsShop } = useSettings();
+    const searchParams = useSearchParams();
+    const shopDomain = searchParams.get('shop') || settingsShop || '';
+
+    const [chartData, setChartData] = useState<{ data: { date: string; revenue: number }[]; total: number }>({ data: [], total: 0 });
     const [chartType, setChartType] = useState<'bar' | 'area'>('bar');
     const [isClient, setIsClient] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
         setIsClient(true);
     }, []);
 
     useEffect(() => {
-        if (isClient) {
-            const { data, total } = generateData();
-            setChartData({ data, total });
+        if (!isClient) return;
+
+        const to = new Date();
+        const from = addDays(to, -6);
+
+        if (!shopDomain) {
+            const emptyDays = eachDayOfInterval({ start: from, end: to }).map(day => ({
+                date: format(day, 'MMM d'),
+                revenue: 0,
+            }));
+            setChartData({ data: emptyDays, total: 0 });
+            return;
         }
-    }, [isClient]);
+
+        let active = true;
+        setIsLoading(true);
+
+        fetch(
+            `/api/analytics/stats?shop=${encodeURIComponent(shopDomain)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
+        )
+            .then((res) => res.json())
+            .then((payload) => {
+                if (!active || !payload?.ok) return;
+
+                const byDate = new Map<string, number>(
+                    (payload.dailyRevenue ?? []).map((r: { date: string; revenueCents: number }) => [
+                        r.date,
+                        r.revenueCents / 100,
+                    ]),
+                );
+
+                const days = eachDayOfInterval({ start: from, end: to }).map((day) => {
+                    const key = format(day, 'yyyy-MM-dd');
+                    return { date: format(day, 'MMM d'), revenue: byDate.get(key) ?? 0 };
+                });
+
+                const total = days.reduce((acc, d) => acc + d.revenue, 0);
+                setChartData({ data: days, total });
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                if (active) setIsLoading(false);
+            });
+
+        return () => { active = false; };
+    }, [isClient, shopDomain]);
 
     if (!isClient) {
         return <CardSkeleton />;
@@ -105,6 +139,7 @@ export function PerformanceChart() {
                         </ResponsiveContainer>
                     )}
                 </ChartContainer>
+                {isLoading && <p className="text-xs text-muted-foreground mt-2">Loading revenue data...</p>}
             </CardContent>
         </Card>
     );

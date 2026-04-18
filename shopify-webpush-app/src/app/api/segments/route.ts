@@ -14,11 +14,11 @@ const locationValueSchema = z.object({
 
 const conditionSchema = z.object({
   id: z.string().optional(),
-  type: z.string().min(1),
-  operator: z.string().optional(),
-  countOperator: z.string().optional(),
+  type: z.enum(['Clicked', 'Purchased', 'Purchased a product', 'Purchased from collection', 'Subscribed', 'Location', 'Customer tag']),
+  operator: z.enum(['is', 'is not', 'has', 'has not']).optional(),
+  countOperator: z.enum(['at least once', 'more than', 'less than', 'exactly']).optional(),
   countValue: z.number().optional(),
-  dateOperator: z.string().optional(),
+  dateOperator: z.enum(['at any time', 'before', 'after', 'less than', 'more than', 'between', 'in the last']).optional(),
   dateValue: z
     .object({
       from: z.string().optional(),

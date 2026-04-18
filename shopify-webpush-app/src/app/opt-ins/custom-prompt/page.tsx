@@ -57,8 +57,8 @@ const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}
 };
 
 
-const DesktopScreen = ({ selected, onSelect }: { selected: string, onSelect: (pos: string) => void }) => {
-    const positions = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
+const DesktopScreen = ({ selected, onSelect }: { selected: DesktopPosition, onSelect: (pos: DesktopPosition) => void }) => {
+    const positions: DesktopPosition[] = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
     return (
         <div className="w-full max-w-xs mx-auto">
             <div className="aspect-[16/10] bg-gray-50 dark:bg-gray-900 border-2 border-b-0 border-gray-300 dark:border-gray-700 rounded-t-lg p-2 flex flex-col justify-between">
@@ -84,8 +84,8 @@ const DesktopScreen = ({ selected, onSelect }: { selected: string, onSelect: (po
     );
 }
 
-const MobileScreen = ({ selected, onSelect }: { selected: string, onSelect: (pos: string) => void }) => {
-    const positions = ['top', 'bottom'];
+const MobileScreen = ({ selected, onSelect }: { selected: MobilePosition, onSelect: (pos: MobilePosition) => void }) => {
+    const positions: MobilePosition[] = ['top', 'bottom'];
     return (
         <div className="w-full max-w-[120px] mx-auto">
              <div className="aspect-[9/19] bg-gray-50 dark:bg-gray-900 border-2 border-gray-300 dark:border-gray-700 rounded-2xl p-2 flex flex-col justify-between">
@@ -593,7 +593,7 @@ export default function CustomPromptPage() {
                             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div className="space-y-2">
                                     <Label>Desktop</Label>
-                                    <Select value={desktopPosition} onValueChange={setDesktopPosition}>
+                                    <Select value={desktopPosition} onValueChange={(value) => setDesktopPosition(value as DesktopPosition)}>
                                         <SelectTrigger><SelectValue /></SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="top-left">Top-left</SelectItem>
@@ -608,7 +608,7 @@ export default function CustomPromptPage() {
                                 </div>
                                 <div className="space-y-2">
                                     <Label>Mobile</Label>
-                                    <Select value={mobilePosition} onValueChange={setMobilePosition}>
+                                    <Select value={mobilePosition} onValueChange={(value) => setMobilePosition(value as MobilePosition)}>
                                         <SelectTrigger><SelectValue /></SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="top">Top</SelectItem>

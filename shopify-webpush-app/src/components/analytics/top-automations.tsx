@@ -4,56 +4,64 @@ import { useEffect, useState } from "react";
 import type { DateRange } from "react-day-picker";
 import { ArrowUpRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Skeleton } from "@/components/ui/skeleton"
 import Link from "next/link"
 import { formatCurrency } from "@/lib/utils"
 
-const initialAutomations = [
-    { name: "Abandoned Cart Recovery", revenue: 8450.30, clicks: "22,100", impressions: "221,000" },
-    { name: "Welcome Series", revenue: 4200.00, clicks: "18,500", impressions: "185,000" },
-    { name: "Browse Abandonment", revenue: 2110.50, clicks: "9,800", impressions: "98,000" },
-    { name: "Back in Stock", revenue: 1230.00, clicks: "4,500", impressions: "45,000" },
-    { name: "Price Drop", revenue: 698.00, clicks: "3,200", impressions: "32,000" },
-];
+type AutomationRow = {
+  ruleKey: string;
+  name: string;
+  revenue: number;
+  impressions: number;
+  clicks: number;
+};
 
-const generateData = () => {
-    return initialAutomations.map(c => ({
-        ...c,
-        revenue: c.revenue * (Math.random() * (1.2 - 0.8) + 0.8),
-        clicks: (parseInt(c.clicks.replace(/,/g, '')) * (Math.random() * (1.2 - 0.8) + 0.8)).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ","),
-        impressions: (parseInt(c.impressions.replace(/,/g, '')) * (Math.random() * (1.2 - 0.8) + 0.8)).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ","),
-    })).sort((a,b) => b.revenue - a.revenue);
-}
+export function TopAutomations({ dateRange, shopDomain }: { dateRange: DateRange | undefined; shopDomain?: string }) {
+  const [automations, setAutomations] = useState<AutomationRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
-export function TopAutomations({ dateRange }: { dateRange: DateRange | undefined }) {
-  const [automations, setAutomations] = useState(initialAutomations);
-  
   useEffect(() => {
-      setAutomations(generateData());
-  }, [dateRange]);
+    if (!shopDomain) {
+      setAutomations([]);
+      return;
+    }
+
+    const from = dateRange?.from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const to = dateRange?.to ?? new Date();
+
+    let active = true;
+    setLoading(true);
+
+    fetch(
+      `/api/analytics/stats?shop=${encodeURIComponent(shopDomain)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
+    )
+      .then((res) => res.json())
+      .then((payload) => {
+        if (!active || !payload?.ok) return;
+        setAutomations(
+          (payload.topAutomations ?? []).map((a: { ruleKey: string; name: string; revenueCents: number; impressions: number; clicks: number }) => ({
+            ruleKey: a.ruleKey,
+            name: a.name,
+            revenue: a.revenueCents / 100,
+            impressions: a.impressions,
+            clicks: a.clicks,
+          })),
+        );
+      })
+      .catch(() => undefined)
+      .finally(() => { if (active) setLoading(false); });
+
+    return () => { active = false; };
+  }, [shopDomain, dateRange]);
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-center">
         <div className="grid gap-2">
             <CardTitle>Top Performing Automations</CardTitle>
-            <CardDescription>
-                Your most successful automated flows by revenue.
-            </CardDescription>
+            <CardDescription>Your most successful automated flows by revenue.</CardDescription>
         </div>
         <Button asChild size="sm" className="ml-auto gap-1">
           <Link href="/automations">
@@ -63,29 +71,36 @@ export function TopAutomations({ dateRange }: { dateRange: DateRange | undefined
         </Button>
       </CardHeader>
       <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Automation</TableHead>
-              <TableHead className="text-right">Revenue</TableHead>
-              <TableHead className="text-right">Impressions</TableHead>
-              <TableHead className="text-right">Clicks</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {automations.map((automation) => (
-              <TableRow key={automation.name}>
-                <TableCell>
-                  <div className="font-medium">{automation.name}</div>
-                </TableCell>
-                <TableCell className="text-right">{formatCurrency(automation.revenue)}</TableCell>
-                <TableCell className="text-right">{automation.impressions}</TableCell>
-                <TableCell className="text-right">{automation.clicks}</TableCell>
+        {loading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+          </div>
+        ) : automations.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">No automation data for the selected period.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Automation</TableHead>
+                <TableHead className="text-right">Revenue</TableHead>
+                <TableHead className="text-right">Impressions</TableHead>
+                <TableHead className="text-right">Clicks</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {automations.map((automation) => (
+                <TableRow key={automation.ruleKey}>
+                  <TableCell><div className="font-medium">{automation.name}</div></TableCell>
+                  <TableCell className="text-right">{formatCurrency(automation.revenue)}</TableCell>
+                  <TableCell className="text-right">{automation.impressions.toLocaleString()}</TableCell>
+                  <TableCell className="text-right">{automation.clicks.toLocaleString()}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </CardContent>
     </Card>
   )
 }
+

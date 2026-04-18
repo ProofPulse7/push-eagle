@@ -8,6 +8,8 @@
     "genkit:watch": "genkit start -- tsx --watch src/ai/dev.ts",
     "db:bootstrap": "node scripts/bootstrap-neon.mjs",
     "db:cleanup-merchants": "node scripts/cleanup-merchant-tables.mjs",
+    "automations:step": "node scripts/step-all-automations.mjs",
+    "automations:test-six": "node scripts/verify-six-automations.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

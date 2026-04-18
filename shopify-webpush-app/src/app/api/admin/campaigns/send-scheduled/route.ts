@@ -69,8 +69,6 @@ export async function GET(request: Request) {
                 notification: {
                   title: campaign.title,
                   body: campaign.body,
-                  icon: campaign.icon_url || undefined,
-                  image: campaign.image_url || undefined,
                 },
                 webpush: {
                   fcmOptions: { link: campaign.target_url || '/' },

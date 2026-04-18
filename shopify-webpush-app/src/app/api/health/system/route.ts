@@ -65,31 +65,33 @@ export async function GET(request: Request) {
 
     // Recent errors
     const recentFailures = await sql`
-      SELECT 
-        'campaign' as type,
-        id,
-        title as label,
-        status,
-        updated_at,
-        NULL as error_message
-      FROM campaigns
-      WHERE status = 'failed' OR (status = 'sent' AND delivery_count = 0)
-      ORDER BY updated_at DESC
-      LIMIT 5
-
+      SELECT * FROM (
+        SELECT 
+          'campaign' as type,
+          id,
+          title as label,
+          status,
+          created_at as updated_at,
+          NULL as error_message
+        FROM campaigns
+        WHERE status = 'failed' OR (status = 'sent' AND delivery_count = 0)
+        ORDER BY created_at DESC
+        LIMIT 5
+      ) campaign_failures
       UNION ALL
-
-      SELECT 
-        'automation' as type,
-        id,
-        rule_key as label,
-        status,
-        updated_at,
-        error_message
-      FROM automation_jobs
-      WHERE status = 'failed' AND attempts >= 3
-      ORDER BY updated_at DESC
-      LIMIT 5
+      SELECT * FROM (
+        SELECT 
+          'automation' as type,
+          id,
+          rule_key as label,
+          status,
+          updated_at,
+          error_message
+        FROM automation_jobs
+        WHERE status = 'failed' AND attempts >= 3
+        ORDER BY updated_at DESC
+        LIMIT 5
+      ) automation_failures
     `;
 
     // System stats

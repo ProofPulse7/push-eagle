@@ -117,7 +117,7 @@ export function SubscriberGrowthChart({ showDatePicker = false }: { showDatePick
 
                 setChartData({
                     data: normalized,
-                    total: Number(payload.totalNewSubscribers ?? normalized.reduce((sum, item) => sum + item.subscribers, 0)),
+                    total: Number(payload.totalNewSubscribers ?? normalized.reduce((sum: number, item: { subscribers: number }) => sum + item.subscribers, 0)),
                 });
             })
             .catch(() => undefined)

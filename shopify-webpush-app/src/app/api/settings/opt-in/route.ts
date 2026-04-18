@@ -45,78 +45,30 @@ export async function PUT(request: Request) {
   try {
     const body = updateSchema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
-    const hasFullPayload =
-      body.promptType !== undefined &&
-      body.title !== undefined &&
-      body.message !== undefined &&
-      body.allowText !== undefined &&
-      body.allowBgColor !== undefined &&
-      body.allowTextColor !== undefined &&
-      body.laterText !== undefined &&
-      body.logoUrl !== undefined &&
-      body.desktopDelaySeconds !== undefined &&
-      body.mobileDelaySeconds !== undefined &&
-      body.maxDisplaysPerSession !== undefined &&
-      body.hideForDays !== undefined &&
-      body.desktopPosition !== undefined &&
-      body.mobilePosition !== undefined &&
-      body.placementPreset !== undefined &&
-      body.offsetX !== undefined &&
-      body.offsetY !== undefined &&
-      body.iosWidgetEnabled !== undefined &&
-      body.iosWidgetTitle !== undefined &&
-      body.iosWidgetMessage !== undefined;
-
-    const settings = hasFullPayload
-      ? await updateOptInSettings({
-          shopDomain,
-          promptType: body.promptType,
-          title: body.title,
-          message: body.message,
-          allowText: body.allowText,
-          allowBgColor: body.allowBgColor,
-          allowTextColor: body.allowTextColor,
-          laterText: body.laterText,
-          logoUrl: body.logoUrl,
-          desktopDelaySeconds: body.desktopDelaySeconds,
-          mobileDelaySeconds: body.mobileDelaySeconds,
-          maxDisplaysPerSession: body.maxDisplaysPerSession,
-          hideForDays: body.hideForDays,
-          desktopPosition: body.desktopPosition,
-          mobilePosition: body.mobilePosition,
-          placementPreset: body.placementPreset,
-          offsetX: body.offsetX,
-          offsetY: body.offsetY,
-          iosWidgetEnabled: body.iosWidgetEnabled,
-          iosWidgetTitle: body.iosWidgetTitle,
-          iosWidgetMessage: body.iosWidgetMessage,
-        })
-      : await (async () => {
-          const current = await getOptInSettings(shopDomain);
-          return updateOptInSettings({
-            shopDomain,
-            promptType: body.promptType ?? current.promptType,
-            title: body.title ?? current.title,
-            message: body.message ?? current.message,
-            allowText: body.allowText ?? current.allowText,
-            allowBgColor: body.allowBgColor ?? current.allowBgColor,
-            allowTextColor: body.allowTextColor ?? current.allowTextColor,
-            laterText: body.laterText ?? current.laterText,
-            logoUrl: body.logoUrl === undefined ? current.logoUrl : body.logoUrl,
-            desktopDelaySeconds: body.desktopDelaySeconds ?? current.desktopDelaySeconds,
-            mobileDelaySeconds: body.mobileDelaySeconds ?? current.mobileDelaySeconds,
-            maxDisplaysPerSession: body.maxDisplaysPerSession ?? current.maxDisplaysPerSession,
-            hideForDays: body.hideForDays ?? current.hideForDays,
-            desktopPosition: body.desktopPosition ?? current.desktopPosition,
-            mobilePosition: body.mobilePosition ?? current.mobilePosition,
-            placementPreset: body.placementPreset ?? current.placementPreset,
-            offsetX: body.offsetX ?? current.offsetX,
-            offsetY: body.offsetY ?? current.offsetY,
-            iosWidgetEnabled: body.iosWidgetEnabled ?? current.iosWidgetEnabled,
-            iosWidgetTitle: body.iosWidgetTitle ?? current.iosWidgetTitle,
-            iosWidgetMessage: body.iosWidgetMessage ?? current.iosWidgetMessage,
-          });
-        })();
+    const current = await getOptInSettings(shopDomain);
+    const settings = await updateOptInSettings({
+      shopDomain,
+      promptType: body.promptType ?? current.promptType,
+      title: body.title ?? current.title,
+      message: body.message ?? current.message,
+      allowText: body.allowText ?? current.allowText,
+      allowBgColor: body.allowBgColor ?? current.allowBgColor,
+      allowTextColor: body.allowTextColor ?? current.allowTextColor,
+      laterText: body.laterText ?? current.laterText,
+      logoUrl: body.logoUrl === undefined ? current.logoUrl : body.logoUrl,
+      desktopDelaySeconds: body.desktopDelaySeconds ?? current.desktopDelaySeconds,
+      mobileDelaySeconds: body.mobileDelaySeconds ?? current.mobileDelaySeconds,
+      maxDisplaysPerSession: body.maxDisplaysPerSession ?? current.maxDisplaysPerSession,
+      hideForDays: body.hideForDays ?? current.hideForDays,
+      desktopPosition: body.desktopPosition ?? current.desktopPosition,
+      mobilePosition: body.mobilePosition ?? current.mobilePosition,
+      placementPreset: body.placementPreset ?? current.placementPreset,
+      offsetX: body.offsetX ?? current.offsetX,
+      offsetY: body.offsetY ?? current.offsetY,
+      iosWidgetEnabled: body.iosWidgetEnabled ?? current.iosWidgetEnabled,
+      iosWidgetTitle: body.iosWidgetTitle ?? current.iosWidgetTitle,
+      iosWidgetMessage: body.iosWidgetMessage ?? current.iosWidgetMessage,
+    });
 
     return NextResponse.json({ ok: true, shopDomain, ...settings });
   } catch (error) {

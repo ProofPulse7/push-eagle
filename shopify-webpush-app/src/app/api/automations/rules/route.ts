@@ -6,6 +6,14 @@ import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
 
+const getRequestErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof z.ZodError) {
+    return 'Missing shop context. Re-open the app from Shopify and try again.';
+  }
+
+  return error instanceof Error ? error.message : fallback;
+};
+
 const updateSchema = z.object({
   shopDomain: z.string().optional(),
   ruleKey: z.enum([
@@ -29,7 +37,7 @@ export async function GET(request: Request) {
     const rules = await listAutomationRules(shopDomain);
     return NextResponse.json({ ok: true, rules });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load automation rules.';
+    const message = getRequestErrorMessage(error, 'Failed to load automation rules.');
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
   }
 }
@@ -46,7 +54,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, rule: updated });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to update automation rule.';
+    const message = getRequestErrorMessage(error, 'Failed to update automation rule.');
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
   }
 }

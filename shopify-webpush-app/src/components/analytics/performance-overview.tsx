@@ -9,35 +9,8 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } f
 import { formatCurrency } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
-import { addDays, eachDayOfInterval, format, differenceInDays, eachMonthOfInterval } from 'date-fns';
+import { addDays, eachDayOfInterval, eachMonthOfInterval, differenceInDays, format } from 'date-fns';
 import { AreaChart as AreaChartIcon, BarChart3 } from 'lucide-react';
-
-const generateData = (dateRange: DateRange | undefined) => {
-  const from = dateRange?.from ?? addDays(new Date(), -29);
-  const to = dateRange?.to ?? new Date();
-
-  if (from > to) return { data: [], total: 0 };
-
-  const daysDiff = differenceInDays(to, from);
-  let data;
-
-  if (daysDiff > 90) {
-      const months = eachMonthOfInterval({ start: from, end: to });
-      data = months.map(month => ({
-          date: format(month, 'MMM yy'),
-          revenue: Math.floor(Math.random() * 50000) + 20000,
-      }));
-  } else {
-      const days = eachDayOfInterval({ start: from, end: to });
-      data = days.map(day => ({
-        date: format(day, 'MMM d'),
-        revenue: Math.floor(Math.random() * 5000) + 1000,
-      }));
-  }
-
-  const total = data.reduce((acc, item) => acc + item.revenue, 0);
-  return { data, total };
-};
 
 const chartConfig = {
   revenue: {
@@ -61,9 +34,10 @@ const getXAxisProps = (dataCount: number) => {
 };
 
 
-export function PerformanceOverview({ dateRange }: { dateRange: DateRange | undefined }) {
-  const [chartData, setChartData] = useState<{ data: any[], total: number }>({ data: [], total: 0 });
+export function PerformanceOverview({ dateRange, shopDomain }: { dateRange: DateRange | undefined; shopDomain?: string }) {
+  const [chartData, setChartData] = useState<{ data: { date: string; revenue: number }[]; total: number }>({ data: [], total: 0 });
   const [isClient, setIsClient] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [chartType, setChartType] = useState<'bar' | 'area'>('bar');
 
   useEffect(() => {
@@ -71,13 +45,63 @@ export function PerformanceOverview({ dateRange }: { dateRange: DateRange | unde
   }, []);
 
   useEffect(() => {
-    if (isClient) {
-      const timer = setTimeout(() => {
-        setChartData(generateData(dateRange));
-      }, 100);
-      return () => clearTimeout(timer);
+    if (!isClient) return;
+
+    const from = dateRange?.from ?? addDays(new Date(), -29);
+    const to = dateRange?.to ?? new Date();
+
+    if (!shopDomain) {
+      const daysDiff = differenceInDays(to, from);
+      const emptyPoints = daysDiff > 90
+        ? eachMonthOfInterval({ start: from, end: to }).map((m) => ({ date: format(m, 'MMM yy'), revenue: 0 }))
+        : eachDayOfInterval({ start: from, end: to }).map((d) => ({ date: format(d, 'MMM d'), revenue: 0 }));
+      setChartData({ data: emptyPoints, total: 0 });
+      return;
     }
-  }, [dateRange, isClient]);
+
+    let active = true;
+    setIsLoading(true);
+
+    fetch(
+      `/api/analytics/stats?shop=${encodeURIComponent(shopDomain)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
+    )
+      .then((res) => res.json())
+      .then((payload) => {
+        if (!active || !payload?.ok) return;
+
+        const byDate = new Map<string, number>(
+          (payload.dailyRevenue ?? []).map((r: { date: string; revenueCents: number }) => [r.date, r.revenueCents / 100]),
+        );
+
+        const daysDiff = differenceInDays(to, from);
+        let points: { date: string; revenue: number }[];
+
+        if (daysDiff > 90) {
+          const months = eachMonthOfInterval({ start: from, end: to });
+          const monthlyMap = new Map<string, number>();
+          for (const [dateStr, rev] of byDate) {
+            const d = new Date(dateStr);
+            const key = format(d, 'MMM yy');
+            monthlyMap.set(key, (monthlyMap.get(key) ?? 0) + rev);
+          }
+          points = months.map((m) => ({ date: format(m, 'MMM yy'), revenue: monthlyMap.get(format(m, 'MMM yy')) ?? 0 }));
+        } else {
+          points = eachDayOfInterval({ start: from, end: to }).map((d) => ({
+            date: format(d, 'MMM d'),
+            revenue: byDate.get(format(d, 'yyyy-MM-dd')) ?? 0,
+          }));
+        }
+
+        const total = points.reduce((acc, p) => acc + p.revenue, 0);
+        setChartData({ data: points, total });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [isClient, shopDomain, dateRange]);
 
   const xAxisProps = getXAxisProps(chartData.data.length);
 
@@ -105,9 +129,7 @@ export function PerformanceOverview({ dateRange }: { dateRange: DateRange | unde
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4">
           <div className="flex items-baseline gap-2">
             <p className="text-2xl font-bold">{formatCurrency(chartData.total)}</p>
-            <p className="text-sm text-muted-foreground">
-              Total Revenue
-            </p>
+            <p className="text-sm text-muted-foreground">Total Revenue</p>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center rounded-md bg-muted p-1">
@@ -116,90 +138,40 @@ export function PerformanceOverview({ dateRange }: { dateRange: DateRange | unde
             </div>
           </div>
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-h-[250px]">
             <ChartContainer config={chartConfig} className="h-full w-full">
                 {chartType === 'bar' ? (
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={chartData.data}>
                         <CartesianGrid vertical={false} />
-                        <XAxis
-                            dataKey="date"
-                            tickLine={false}
-                            axisLine={false}
-                            {...xAxisProps}
-                        />
-                        <YAxis
-                            tickLine={false}
-                            axisLine={false}
-                            tickMargin={10}
-                            tickFormatter={(value) => formatCurrency(value, true)}
-                        />
-                        <ChartTooltip
-                            cursor={false}
-                            content={<ChartTooltipContent indicator="dot" />}
-                        />
-                        <Bar
-                            dataKey="revenue"
-                            fill="var(--color-revenue)"
-                            radius={4}
-                        />
+                        <XAxis dataKey="date" tickLine={false} axisLine={false} {...xAxisProps} />
+                        <YAxis tickLine={false} axisLine={false} tickMargin={10} tickFormatter={(value) => formatCurrency(value, true)} />
+                        <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="dot" />} />
+                        <Bar dataKey="revenue" fill="var(--color-revenue)" radius={4} />
                         </BarChart>
                     </ResponsiveContainer>
                 ) : (
                      <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={chartData.data}>
                             <defs>
-                                <linearGradient id="fillRevenue" x1="0" y1="0" x2="0" y2="1">
-                                    <stop
-                                        offset="5%"
-                                        stopColor="var(--color-revenue)"
-                                        stopOpacity={0.8}
-                                    />
-                                    <stop
-                                        offset="95%"
-                                        stopColor="var(--color-revenue)"
-                                        stopOpacity={0.1}
-                                    />
+                                <linearGradient id="fillRevenuePO" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="var(--color-revenue)" stopOpacity={0.8} />
+                                    <stop offset="95%" stopColor="var(--color-revenue)" stopOpacity={0.1} />
                                 </linearGradient>
                             </defs>
                             <CartesianGrid vertical={false} />
-                            <XAxis
-                                dataKey="date"
-                                tickLine={false}
-                                axisLine={false}
-                                {...xAxisProps}
-                            />
-                            <YAxis
-                                tickLine={false}
-                                axisLine={false}
-                                tickMargin={10}
-                                tickFormatter={(value) => formatCurrency(value, true)}
-                            />
-                            <ChartTooltip
-                                cursor={false}
-                                content={<ChartTooltipContent indicator="dot" />}
-                            />
-                            <Area
-                                dataKey="revenue"
-                                type="monotone"
-                                stroke="var(--color-revenue)"
-                                strokeWidth={2}
-                                fillOpacity={1}
-                                fill="url(#fillRevenue)"
-                                 dot={{
-                                    fill: "var(--color-revenue)",
-                                    r: 2,
-                                }}
-                                activeDot={{
-                                    r: 6,
-                                }}
-                            />
+                            <XAxis dataKey="date" tickLine={false} axisLine={false} {...xAxisProps} />
+                            <YAxis tickLine={false} axisLine={false} tickMargin={10} tickFormatter={(value) => formatCurrency(value, true)} />
+                            <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="dot" />} />
+                            <Area dataKey="revenue" type="monotone" stroke="var(--color-revenue)" strokeWidth={2} fillOpacity={1} fill="url(#fillRevenuePO)" dot={{ fill: "var(--color-revenue)", r: 2 }} activeDot={{ r: 6 }} />
                         </AreaChart>
                     </ResponsiveContainer>
                 )}
             </ChartContainer>
         </div>
+        {isLoading && <p className="text-xs text-muted-foreground mt-2">Loading revenue data...</p>}
       </CardContent>
     </Card>
   );
 }
+

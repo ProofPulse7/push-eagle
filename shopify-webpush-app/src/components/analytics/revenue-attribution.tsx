@@ -11,9 +11,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
 
 
-const generateData = () => [
-  { source: 'campaigns', revenue: Math.floor(Math.random() * 20000) + 10000, fill: 'var(--color-campaigns)' },
-  { source: 'automations', revenue: Math.floor(Math.random() * 15000) + 5000, fill: 'var(--color-automations)' },
+const emptyData = [
+  { source: 'campaigns', revenue: 0, fill: 'var(--color-campaigns)' },
+  { source: 'automations', revenue: 0, fill: 'var(--color-automations)' },
 ];
 
 const chartConfig = {
@@ -67,8 +67,8 @@ const renderCustomizedLabel = ({
 };
 
 
-export function RevenueAttribution({ dateRange }: { dateRange: DateRange | undefined }) {
-  const [data, setData] = useState<ReturnType<typeof generateData>>([]);
+export function RevenueAttribution({ dateRange, shopDomain }: { dateRange: DateRange | undefined; shopDomain?: string }) {
+  const [data, setData] = useState<typeof emptyData>(emptyData);
   const [isClient, setIsClient] = useState(false);
 
   useEffect(() => {
@@ -76,10 +76,24 @@ export function RevenueAttribution({ dateRange }: { dateRange: DateRange | undef
   }, []);
 
   useEffect(() => {
-    if (isClient) {
-      setData(generateData());
-    }
-  }, [dateRange, isClient]);
+    if (!isClient || !shopDomain) return;
+
+    const from = dateRange?.from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const to = dateRange?.to ?? new Date();
+
+    fetch(
+      `/api/analytics/stats?shop=${encodeURIComponent(shopDomain)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
+    )
+      .then((res) => res.json())
+      .then((payload) => {
+        if (!payload?.ok) return;
+        setData([
+          { source: 'campaigns', revenue: (payload.attribution?.campaignRevenueCents ?? 0) / 100, fill: 'var(--color-campaigns)' },
+          { source: 'automations', revenue: (payload.attribution?.automationRevenueCents ?? 0) / 100, fill: 'var(--color-automations)' },
+        ]);
+      })
+      .catch(() => undefined);
+  }, [isClient, shopDomain, dateRange]);
 
   if (!isClient || data.length === 0) {
     return (

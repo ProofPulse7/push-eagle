@@ -1,7 +1,7 @@
 
 'use client';
 
-import React, { useState, Fragment } from 'react';
+import React, { useState, Fragment, useEffect } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Zap } from 'lucide-react';
 
@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { formatCurrency } from '@/lib/utils';
+import { useSettings } from '@/context/settings-context';
 
 
 const flowData = {
@@ -130,19 +131,68 @@ const ReminderStats = ({ stats }: { stats: typeof flowData.notifications[0]['sta
 
 export default function AbandonedCartPage() {
     type FlowNotification = typeof flowData.notifications[number] & { status: 'Active' | 'Inactive' };
+    const { shopDomain: settingsShop } = useSettings();
+    const [queryShop, setQueryShop] = useState('');
+    const shopDomain = queryShop || settingsShop || '';
+
     const [previewDevice, setPreviewDevice] = useState<'windows' | 'macos' | 'android' | 'ios'>('android');
     const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
     const [showReminderStats, setShowReminderStats] = useState(true);
+    const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
+    const [ruleEnabled, setRuleEnabled] = useState(false);
+    const [saving, setSaving] = useState(false);
 
-    const handleStatusChange = (id: string, checked: boolean) => {
+    useEffect(() => {
+        setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
+    }, []);
+
+    useEffect(() => {
+        if (!shopDomain) return;
+        fetch(`/api/automations/overview?shop=${encodeURIComponent(shopDomain)}`)
+            .then(res => res.json())
+            .then(payload => {
+                if (!payload?.ok) return;
+                const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'cart_abandonment_30m');
+                if (rule) {
+                    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+                    setRuleEnabled(rule.enabled ?? false);
+                }
+            })
+            .catch(() => undefined);
+    }, [shopDomain]);
+
+    const handleToggleFlow = async () => {
+        if (!shopDomain) return;
+        setSaving(true);
+        const newEnabled = !ruleEnabled;
+        await fetch('/api/automations/rules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shopDomain, ruleKey: 'cart_abandonment_30m', enabled: newEnabled, config: {} }),
+        }).catch(() => undefined);
+        setRuleEnabled(newEnabled);
+        setSaving(false);
+    };
+
+    const handleStatusChange = async (id: string, checked: boolean) => {
         setNotifications(currentNotifications =>
             currentNotifications.map(n =>
                 n.id === id ? { ...n, status: checked ? 'Active' : 'Inactive' } : n
             )
         );
+        if (!shopDomain) return;
+        const updatedNotifications = notifications.map(n =>
+            n.id === id ? { ...n, status: checked ? 'Active' : 'Inactive' } : n
+        );
+        const stepsConfig = Object.fromEntries(updatedNotifications.map(n => [n.id, { enabled: n.status === 'Active' }]));
+        await fetch('/api/automations/rules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shopDomain, ruleKey: 'cart_abandonment_30m', config: { steps: stepsConfig } }),
+        }).catch(() => undefined);
     };
 
-    const isFlowActive = notifications.some(n => n.status === 'Active');
+    const isFlowActive = ruleEnabled;
 
     return (
         <div className="flex flex-col bg-muted/40 min-h-screen">
@@ -159,24 +209,30 @@ export default function AbandonedCartPage() {
                     </div>
                 </div>
                 
+                <div className="flex items-center justify-between">
+                    <div/>
+                    <Button onClick={handleToggleFlow} disabled={saving} variant={ruleEnabled ? 'outline' : 'default'}>
+                        {saving ? 'Saving...' : ruleEnabled ? 'Deactivate Flow' : 'Activate Flow'}
+                    </Button>
+                </div>
                 <Card>
                     <CardContent className="p-0">
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x">
                             <div className="p-4 text-center">
                                 <p className="text-sm text-muted-foreground">Impressions</p>
-                                <p className="text-2xl font-bold">{flowData.topStats.impressions}</p>
+                                <p className="text-2xl font-bold">{ruleStats.impressions.toLocaleString()}</p>
                             </div>
                             <div className="p-4 text-center">
                                 <p className="text-sm text-muted-foreground">Clicks</p>
-                                <p className="text-2xl font-bold">{flowData.topStats.clicks}</p>
+                                <p className="text-2xl font-bold">{ruleStats.clicks.toLocaleString()}</p>
                             </div>
                             <div className="p-4 text-center">
                                 <p className="text-sm text-muted-foreground">Carts recovered</p>
-                                <p className="text-2xl font-bold">{flowData.topStats.cartsRecovered}</p>
+                                <p className="text-2xl font-bold">0</p>
                             </div>
                              <div className="p-4 text-center">
                                 <p className="text-sm text-muted-foreground">Revenue generated</p>
-                                <p className="text-2xl font-bold">{flowData.topStats.revenue}</p>
+                                <p className="text-2xl font-bold">{formatCurrency(ruleStats.revenueCents / 100)}</p>
                             </div>
                         </div>
                     </CardContent>

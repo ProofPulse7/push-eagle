@@ -33,23 +33,35 @@ export async function GET(request: Request) {
     const shardCount = parsePositiveInt(url.searchParams.get('shardCount'), 1, 1, 128);
     const shardIndex = parsePositiveInt(url.searchParams.get('shardIndex'), 0, 0, shardCount - 1);
     const maxJobs = parsePositiveInt(url.searchParams.get('maxJobs'), 200, 1, 2000);
+    const maxConcurrent = parsePositiveInt(url.searchParams.get('maxConcurrent'), 50, 1, 200);
+    const workerId = request.headers.get('x-worker-id') ?? `worker-${shardIndex}`;
 
     await pruneAutomationData();
 
     const jobs = await listDueAutomationJobs(maxJobs, shardCount, shardIndex);
     const processed = [] as Array<{ jobId: string; processed: boolean; error?: string }>;
 
-    for (const job of jobs) {
-      const result = await processAutomationJob(job.id);
-      processed.push({ jobId: job.id, processed: Boolean(result.processed), error: result.error });
+    for (let index = 0; index < jobs.length; index += maxConcurrent) {
+      const chunk = jobs.slice(index, index + maxConcurrent);
+      const results = await Promise.all(
+        chunk.map(async (job) => {
+          const result = await processAutomationJob(job.id);
+          return { jobId: job.id, processed: Boolean(result.processed), error: result.error };
+        }),
+      );
+
+      processed.push(...results);
     }
 
     return NextResponse.json({
       ok: true,
+      workerId,
       shardCount,
       shardIndex,
+      maxConcurrent,
       dueJobs: jobs.length,
       sentCount: processed.filter((item) => item.processed).length,
+      skippedCount: processed.filter((item) => !item.processed && item.error && !String(item.error).toLowerCase().includes('failed')).length,
       failedCount: processed.filter((item) => !item.processed && item.error).length,
       processed,
     });

@@ -92,25 +92,21 @@ export const sendCampaignNotification = async (input: SendNotificationInput): Pr
   for (let i = 0; i < totalDeliveries; i += chunkSize) {
     const chunk = targetTokens.slice(i, Math.min(i + chunkSize, totalDeliveries));
 
-    await sql`
-      INSERT INTO campaign_deliveries (
-        campaign_id,
-        shop_domain,
-        subscriber_id,
-        token_id,
-        delivered_at
-      )
-      SELECT * FROM (VALUES
-        ${sql.join(
-          chunk.map(
-            (token) =>
-              sql`(${input.campaignId}, ${input.shopDomain}, NULL, ${token.tokenId}, NOW())`,
-          ),
-          sql`,`,
-        )}
-      ) AS t(campaign_id, shop_domain, subscriber_id, token_id, delivered_at)
-      ON CONFLICT DO NOTHING
-    `;
+    await Promise.all(
+      chunk.map((token) =>
+        sql`
+          INSERT INTO campaign_deliveries (
+            campaign_id,
+            shop_domain,
+            subscriber_id,
+            token_id,
+            delivered_at
+          )
+          VALUES (${input.campaignId}, ${input.shopDomain}, NULL, ${token.tokenId}, NOW())
+          ON CONFLICT DO NOTHING
+        `,
+      ),
+    );
   }
 
   // Queue async FCM sends (non-blocking)
@@ -189,7 +185,7 @@ const queueFcmBatchSend = async (input: {
         },
       }));
 
-      await messaging.sendAll(messages);
+      await Promise.all(messages.map((message) => messaging.send(message)));
     } catch (error) {
       console.error(`FCM batch send failed for campaign ${input.campaignId}:`, error);
     }

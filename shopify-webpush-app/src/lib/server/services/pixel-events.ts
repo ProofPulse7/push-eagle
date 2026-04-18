@@ -60,47 +60,7 @@ export const recordPixelEventBatch = async (events: PixelEventInput[]): Promise<
     return [];
   }
 
-  const sql = getNeonSql();
-  const ids = events.map(() => randomUUID());
-
-  await sql`
-    INSERT INTO pixel_events (
-      id,
-      shop_domain,
-      external_id,
-      event_type,
-      page_url,
-      product_id,
-      cart_token,
-      client_id,
-      metadata,
-      created_at
-    )
-    SELECT * FROM (VALUES
-      ${sql.join(
-        events.map(
-          (e, i) =>
-            sql`
-            (
-              ${ids[i]},
-              ${e.shopDomain},
-              ${e.externalId},
-              ${e.eventType},
-              ${e.pageUrl ?? null},
-              ${e.productId ?? null},
-              ${e.cartToken ?? null},
-              ${e.clientId ?? null},
-              ${JSON.stringify(e.metadata ?? {})}::jsonb,
-              NOW()
-            )
-          `,
-        ),
-        sql`,`,
-      )}
-    ) AS t(id, shop_domain, external_id, event_type, page_url, product_id, cart_token, client_id, metadata, created_at)
-  `;
-
-  return ids;
+  return Promise.all(events.map((event) => recordPixelEvent(event)));
 };
 
 /**

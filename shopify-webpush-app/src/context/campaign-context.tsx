@@ -3,7 +3,7 @@ import { createContext, useState, useContext, ReactNode, useEffect, useRef } fro
 import { useSettings } from '@/context/settings-context';
 
 type ActionButton = { title: string; link: string };
-type ImageValue = { file: File | null; preview: string | null; originalPreview: string | null };
+type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
 
 export interface CampaignContextType {
     title: string;
@@ -30,6 +30,25 @@ export interface CampaignContextType {
     setScheduledTime: (value: string) => void;
     segmentId: string;
     setSegmentId: (value: string) => void;
+    // Smart Delivery
+    smartDeliver: boolean;
+    setSmartDeliver: (enabled: boolean) => void;
+    // Flash Sale
+    flashSaleEnabled: boolean;
+    setFlashSaleEnabled: (enabled: boolean) => void;
+    flashSaleDiscountPercent: number;
+    setFlashSaleDiscountPercent: (percent: number) => void;
+    flashSaleOriginalPrice: number;
+    setFlashSaleOriginalPrice: (price: number) => void;
+    flashSaleSalePrice: number;
+    setFlashSaleSalePrice: (price: number) => void;
+    flashSaleExpiresAt: Date | undefined;
+    setFlashSaleExpiresAt: (date: Date | undefined) => void;
+    flashSaleUrgencyText: string;
+    setFlashSaleUrgencyText: (text: string) => void;
+    // Recurring campaigns
+    recurringPattern: string;
+    setRecurringPattern: (pattern: string) => void;
 }
 
 export const CampaignContext = createContext<CampaignContextType | undefined>(undefined);
@@ -56,6 +75,17 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
     const [scheduledTime, setScheduledTime] = useState('10:00 AM');
     const [segmentId, setSegmentId] = useState('all');
+    // Smart Delivery
+    const [smartDeliver, setSmartDeliver] = useState(false);
+    // Flash Sale
+    const [flashSaleEnabled, setFlashSaleEnabled] = useState(false);
+    const [flashSaleDiscountPercent, setFlashSaleDiscountPercent] = useState(20);
+    const [flashSaleOriginalPrice, setFlashSaleOriginalPrice] = useState(0);
+    const [flashSaleSalePrice, setFlashSaleSalePrice] = useState(0);
+    const [flashSaleExpiresAt, setFlashSaleExpiresAt] = useState<Date | undefined>(new Date(Date.now() + 24 * 60 * 60 * 1000)); // 24 hours from now
+    const [flashSaleUrgencyText, setFlashSaleUrgencyText] = useState('⏰ Limited time offer!');
+    // Recurring
+    const [recurringPattern, setRecurringPattern] = useState('');
 
     const value: CampaignContextType = {
         title, setTitle,
@@ -70,6 +100,17 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
         scheduledDate, setScheduledDate,
         scheduledTime, setScheduledTime,
         segmentId, setSegmentId,
+        // Smart Delivery
+        smartDeliver, setSmartDeliver,
+        // Flash Sale
+        flashSaleEnabled, setFlashSaleEnabled,
+        flashSaleDiscountPercent, setFlashSaleDiscountPercent,
+        flashSaleOriginalPrice, setFlashSaleOriginalPrice,
+        flashSaleSalePrice, setFlashSaleSalePrice,
+        flashSaleExpiresAt, setFlashSaleExpiresAt,
+        flashSaleUrgencyText, setFlashSaleUrgencyText,
+        // Recurring
+        recurringPattern, setRecurringPattern,
     };
 
     useEffect(() => {

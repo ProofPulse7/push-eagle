@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Upload, Crop, Trash2, Info } from "lucide-react";
 
-type ImageValue = { file: File | null; preview: string | null; originalPreview: string | null };
+type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
 
 const HeroImageUploader = ({ 
     title,

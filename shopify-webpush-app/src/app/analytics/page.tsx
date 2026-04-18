@@ -1,9 +1,10 @@
 
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import type { DateRange } from 'react-day-picker';
 import { BarChart, DollarSign, MousePointerClick, TrendingUp, Users } from "lucide-react";
+import type { LucideIcon } from 'lucide-react';
 
 import { KpiCard } from "@/components/analytics/kpi-card";
 import { PerformanceOverview } from "@/components/analytics/performance-overview";
@@ -14,34 +15,87 @@ import { DevicePerformance } from "@/components/analytics/device-performance";
 import { formatCurrency } from "@/lib/utils";
 import { DateRangePicker } from '@/components/analytics/date-range-picker';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useSettings } from '@/context/settings-context';
 
-
-const generateKpiData = () => {
-    return [
-        { title: "Total Revenue", value: formatCurrency(Math.random() * 50000), change: `+${(Math.random() * 20).toFixed(1)}% from last period`, icon: DollarSign },
-        { title: "Subscribers", value: `+${(Math.floor(Math.random() * 2000))}`, change: `+${(Math.floor(Math.random() * 500))} from last period`, icon: Users },
-        { title: "Avg. Click Rate", value: `${(Math.random() * 10 + 5).toFixed(1)}%`, change: `${(Math.random() > 0.5 ? '+' : '-')}${(Math.random() * 3).toFixed(1)}% from last period`, icon: MousePointerClick },
-        { title: "Total Impressions", value: (Math.floor(Math.random() * 2000000) + 500000).toLocaleString(), change: `+${(Math.floor(Math.random() * 100000)).toLocaleString()} from last period`, icon: TrendingUp },
-    ];
-}
-
+type KpiItem = {
+  title: string;
+  value: string;
+  change: string;
+    icon: LucideIcon;
+};
 
 export default function AnalyticsPage() {
-    const [date, setDate] = useState<DateRange | undefined>(undefined);
+    const { shopDomain: settingsShop } = useSettings();
+    const [queryShop, setQueryShop] = useState('');
+    const shopDomain = queryShop || settingsShop || '';
 
+    const [date, setDate] = useState<DateRange | undefined>(undefined);
     const [loading, setLoading] = useState(true);
-    const [kpis, setKpis] = useState<any[]>([]);
+    const [kpis, setKpis] = useState<KpiItem[]>([]);
 
     useEffect(() => {
-        setLoading(true);
-        // Simulate API call
-        const timer = setTimeout(() => {
-            setKpis(generateKpiData());
-            setLoading(false);
-        }, 500);
+        setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
+    }, []);
 
-        return () => clearTimeout(timer);
-    }, [date]);
+    useEffect(() => {
+        if (!shopDomain) {
+            setKpis([
+                { title: "Total Revenue", value: formatCurrency(0), change: 'No shop connected', icon: DollarSign },
+                { title: "New Subscribers", value: '0', change: 'No shop connected', icon: Users },
+                { title: "Avg. Click Rate", value: '0%', change: 'No shop connected', icon: MousePointerClick },
+                { title: "Total Impressions", value: '0', change: 'No shop connected', icon: TrendingUp },
+            ]);
+            setLoading(false);
+            return;
+        }
+
+        let active = true;
+        setLoading(true);
+
+        const from = date?.from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const to = date?.to ?? new Date();
+
+        fetch(
+            `/api/analytics/stats?shop=${encodeURIComponent(shopDomain)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
+        )
+            .then((res) => res.json())
+            .then((payload) => {
+                if (!active || !payload?.ok) return;
+                const { kpis: k } = payload;
+                setKpis([
+                    {
+                        title: "Total Revenue",
+                        value: formatCurrency((k?.totalRevenueCents ?? 0) / 100),
+                        change: `${k?.totalRevenueCents > 0 ? 'Revenue attributed via push' : 'No revenue yet'}`,
+                        icon: DollarSign,
+                    },
+                    {
+                        title: "New Subscribers",
+                        value: `+${(k?.newSubscribers ?? 0).toLocaleString()}`,
+                        change: 'In selected period',
+                        icon: Users,
+                    },
+                    {
+                        title: "Avg. Click Rate",
+                        value: `${(k?.avgCtrPercent ?? 0).toFixed(1)}%`,
+                        change: `${(k?.totalClicks ?? 0).toLocaleString()} total clicks`,
+                        icon: MousePointerClick,
+                    },
+                    {
+                        title: "Total Impressions",
+                        value: (k?.totalImpressions ?? 0).toLocaleString(),
+                        change: 'Campaigns + automations',
+                        icon: TrendingUp,
+                    },
+                ]);
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                if (active) setLoading(false);
+            });
+
+        return () => { active = false; };
+    }, [shopDomain, date]);
 
     if (loading) {
         return (
@@ -92,16 +146,16 @@ export default function AnalyticsPage() {
             </div>
 
             <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-                <PerformanceOverview dateRange={date} />
-                <RevenueAttribution dateRange={date} />
+                <PerformanceOverview dateRange={date} shopDomain={shopDomain} />
+                <RevenueAttribution dateRange={date} shopDomain={shopDomain} />
             </div>
             
              <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-                <TopCampaigns dateRange={date} />
-                <TopAutomations dateRange={date} />
+                <TopCampaigns dateRange={date} shopDomain={shopDomain} />
+                <TopAutomations dateRange={date} shopDomain={shopDomain} />
             </div>
 
-            <DevicePerformance dateRange={date} />
+            <DevicePerformance dateRange={date} shopDomain={shopDomain} />
         </div>
     );
 }

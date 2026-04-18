@@ -9,10 +9,11 @@ import type { DateRange } from "react-day-picker";
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge";
-import { PlusCircle, Rocket, Users, Calendar, Hash, Copy } from "lucide-react"
+import { PlusCircle, Rocket, Users, Calendar, Hash, Copy, Loader2, CheckCircle, Clock, AlertCircle } from "lucide-react"
 import { Card, CardContent } from "../ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Skeleton } from "../ui/skeleton";
+import { Progress } from "../ui/progress";
 import { formatCurrency } from "@/lib/utils";
 import { useSettings } from "@/context/settings-context";
 
@@ -26,8 +27,17 @@ type Campaign = {
     reached: number;
     clickRate: string;
     sales: number;
-    status: 'Sent' | 'Scheduled' | 'Draft' | 'Archived' | 'Paused';
+    status: 'Sent' | 'Scheduled' | 'Draft' | 'Archived' | 'Paused' | 'Sending';
     createdAt?: string;
+    // Real-time delivery stats
+    deliveryStats?: {
+        totalTokens: number;
+        deliveryStarted: boolean;
+        deliveredCount: number;
+        failedCount: number;
+        queuedCount: number;
+        estimatedTimeMinutes: number;
+    };
 };
 
 const TableSkeleton = () => (
@@ -45,12 +55,44 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
     const [activeTab, setActiveTab] = useState('sent');
     const { shopDomain } = useSettings();
 
+    const fetchDeliveryStats = async (campaignId: string) => {
+        try {
+            const response = await fetch(`/api/campaigns/${campaignId}/delivery-stats`);
+            const data = await response.json();
+            if (response.ok && data?.ok) {
+                return data.stats;
+            }
+        } catch (error) {
+            console.error('Failed to fetch delivery stats:', error);
+        }
+        return null;
+    };
+
+    const updateCampaignStats = async () => {
+        const sendingCampaigns = campaigns.filter(c => c.status === 'Sending');
+        if (sendingCampaigns.length === 0) return;
+
+        const updatedCampaigns = await Promise.all(
+            campaigns.map(async (campaign) => {
+                if (campaign.status === 'Sending') {
+                    const stats = await fetchDeliveryStats(campaign.id);
+                    if (stats) {
+                        return { ...campaign, deliveryStats: stats };
+                    }
+                }
+                return campaign;
+            })
+        );
+
+        setCampaigns(updatedCampaigns);
+    };
+
     const mapApiCampaign = (campaign: any): Campaign => {
         const statusMap: Record<string, Campaign['status']> = {
             draft: 'Draft',
             scheduled: 'Scheduled',
             queued: 'Scheduled',
-            sending: 'Scheduled',
+            sending: 'Sending',
             sent: 'Sent',
             archived: 'Archived',
             paused: 'Paused',
@@ -103,10 +145,20 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
 
         fetchCampaigns();
     }, [shopDomain]);
+
+    // Update stats for sending campaigns every 10 seconds
+    useEffect(() => {
+        const interval = setInterval(updateCampaignStats, 10000);
+        return () => clearInterval(interval);
+    }, [campaigns]);
     
     const filteredCampaigns = useMemo(() => {
         let tabFiltered;
-        tabFiltered = campaigns.filter(c => c.status.toLowerCase() === activeTab);
+        if (activeTab === 'sending') {
+            tabFiltered = campaigns.filter(c => c.status === 'Sending');
+        } else {
+            tabFiltered = campaigns.filter(c => c.status.toLowerCase() === activeTab);
+        }
         
         if (!dateRange || !dateRange.from) {
             return tabFiltered;
@@ -114,7 +166,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
 
         return tabFiltered.filter(campaign => {
             try {
-                if (campaign.status === 'Draft' || campaign.status === 'Scheduled') return true;
+                if (campaign.status === 'Draft' || campaign.status === 'Scheduled' || campaign.status === 'Sending') return true;
                 const campaignDate = new Date(campaign.sendTime);
                 if (isNaN(campaignDate.getTime())) return false;
                  
@@ -130,6 +182,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
         return {
             sent: campaigns.filter(c => c.status === 'Sent').length,
             scheduled: campaigns.filter(c => c.status === 'Scheduled').length,
+            sending: campaigns.filter(c => c.status === 'Sending').length,
             draft: campaigns.filter(c => c.status === 'Draft').length,
         }
     }, [campaigns]);
@@ -144,6 +197,10 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             scheduled: {
                 title: "No Scheduled Campaigns",
                 description: "Future campaigns you schedule will appear here."
+            },
+            sending: {
+                title: "No Campaigns Sending",
+                description: "Campaigns currently being sent will appear here with real-time progress."
             },
             draft: {
                 title: "No Draft Campaigns",
@@ -180,6 +237,39 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                 const ctr = Number.parseFloat(campaign.clickRate);
                 const clicks = Number.isFinite(ctr) ? Math.round(campaign.reached * (ctr / 100)) : null;
 
+                const getStatusIcon = (status: string) => {
+                    switch (status) {
+                        case 'Sending':
+                            return <Loader2 className="h-3 w-3 animate-spin text-blue-500" />;
+                        case 'Sent':
+                            return <CheckCircle className="h-3 w-3 text-green-500" />;
+                        case 'Scheduled':
+                            return <Clock className="h-3 w-3 text-orange-500" />;
+                        case 'Draft':
+                            return <AlertCircle className="h-3 w-3 text-gray-500" />;
+                        default:
+                            return null;
+                    }
+                };
+
+                const getStatusBadge = (status: string) => {
+                    const variants = {
+                        'Sent': 'default',
+                        'Scheduled': 'secondary',
+                        'Draft': 'outline',
+                        'Sending': 'default',
+                        'Archived': 'outline',
+                        'Paused': 'destructive',
+                    } as const;
+
+                    return (
+                        <Badge variant={variants[status as keyof typeof variants] || 'outline'} className="flex items-center gap-1">
+                            {getStatusIcon(status)}
+                            {status}
+                        </Badge>
+                    );
+                };
+
                 return (
                     <Card key={campaign.id} className="transition-shadow duration-300 hover:shadow-lg">
                         <div className="p-4 space-y-4">
@@ -195,12 +285,32 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                 </div>
                                 <div className="flex-grow flex flex-col sm:flex-row justify-between gap-4">
                                     <div className="flex flex-col">
-                                        <h3 className="font-semibold text-base line-clamp-1" title={campaign.name}>
-                                            <Link href={`/campaigns/${campaign.id}/results`} className="hover:underline">{campaign.name}</Link>
-                                        </h3>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <h3 className="font-semibold text-base line-clamp-1" title={campaign.name}>
+                                                <Link href={`/campaigns/${campaign.id}/results`} className="hover:underline">{campaign.name}</Link>
+                                            </h3>
+                                            {getStatusBadge(campaign.status)}
+                                        </div>
                                         <p className="text-sm text-muted-foreground mt-1 line-clamp-2 max-w-prose" title={campaign.message}>
                                             {campaign.message || "No message provided."}
                                         </p>
+                                        {campaign.status === 'Sending' && campaign.deliveryStats && (
+                                            <div className="mt-2 space-y-2">
+                                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                                    <span>Sending progress:</span>
+                                                    <span className="font-medium">
+                                                        {campaign.deliveryStats.deliveredCount.toLocaleString()} / {campaign.deliveryStats.totalTokens.toLocaleString()} delivered
+                                                    </span>
+                                                </div>
+                                                <Progress 
+                                                    value={(campaign.deliveryStats.deliveredCount / campaign.deliveryStats.totalTokens) * 100} 
+                                                    className="h-2"
+                                                />
+                                                <div className="text-xs text-muted-foreground">
+                                                    Est. completion: {campaign.deliveryStats.estimatedTimeMinutes} min
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm sm:text-right w-full sm:max-w-md">
                                         <div>
@@ -255,6 +365,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             <h2 className="text-xl font-semibold tracking-tight">Campaign History</h2>
             <Tabs defaultValue="sent" onValueChange={(value) => startTransition(() => setActiveTab(value))}>
                 <TabsList>
+                    <TabsTrigger value="sending">Sending <Badge variant={activeTab === 'sending' ? 'default' : 'secondary'} className="ml-2">{tabCounts.sending}</Badge></TabsTrigger>
                     <TabsTrigger value="sent">Sent <Badge variant={activeTab === 'sent' ? 'default' : 'secondary'} className="ml-2">{tabCounts.sent}</Badge></TabsTrigger>
                     <TabsTrigger value="scheduled">Scheduled <Badge variant={activeTab === 'scheduled' ? 'default' : 'secondary'} className="ml-2">{tabCounts.scheduled}</Badge></TabsTrigger>
                     <TabsTrigger value="draft">Drafts <Badge variant={activeTab === 'draft' ? 'default' : 'secondary'} className="ml-2">{tabCounts.draft}</Badge></TabsTrigger>
