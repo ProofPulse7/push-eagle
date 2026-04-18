@@ -22,7 +22,7 @@ export function AutomationComposer({
     automationRuleKey = 'welcome_subscriber',
 }: {
     automationPath?: string;
-    automationRuleKey?: 'welcome_subscriber' | 'cart_abandonment_30m';
+    automationRuleKey?: 'welcome_subscriber' | 'cart_abandonment_30m' | 'browse_abandonment_15m';
 }) {
     const { 
         title, setTitle, 

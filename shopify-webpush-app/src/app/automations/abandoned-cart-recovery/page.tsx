@@ -363,11 +363,11 @@ export default function AbandonedCartPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x">
               <div className="p-4 text-center">
                 <p className="text-sm text-muted-foreground">Impressions</p>
-                <p className="text-2xl font-bold">{ruleStats.impressions.toLocaleString()}</p>
+                <p className="text-2xl font-bold">{(ruleStats?.impressions ?? 0).toLocaleString()}</p>
               </div>
               <div className="p-4 text-center">
                 <p className="text-sm text-muted-foreground">Clicks</p>
-                <p className="text-2xl font-bold">{ruleStats.clicks.toLocaleString()}</p>
+                <p className="text-2xl font-bold">{(ruleStats?.clicks ?? 0).toLocaleString()}</p>
               </div>
               <div className="p-4 text-center">
                 <p className="text-sm text-muted-foreground">Carts recovered</p>

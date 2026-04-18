@@ -155,7 +155,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           <CardContent>
             <div className="text-2xl font-bold">{stats.totalSubscribers.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">
-              {'subscriberChange' in stats ? (stats as any).subscriberChange : ''}
+               {(stats as any)?.subscriberChange || ''}
             </p>
           </CardContent>
         </Card>
@@ -166,12 +166,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           </CardHeader>
           <CardContent>
             <div className="text-xl font-bold">
-                {stats.impressionsConsumed.toLocaleString()}
+                {(stats?.impressionsConsumed ?? 0).toLocaleString()}
                 <span className="text-muted-foreground"> / </span>
-                <span className="text-muted-foreground">{stats.impressionsLimit.toLocaleString()}</span>
+               <span className="text-muted-foreground">{(stats?.impressionsLimit ?? 0).toLocaleString()}</span>
             </div>
             <p className="text-xs text-muted-foreground">
-              {(stats.impressionsLimit - stats.impressionsConsumed).toLocaleString()} impressions remaining
+               {((stats?.impressionsLimit ?? 0) - (stats?.impressionsConsumed ?? 0)).toLocaleString()} impressions remaining
             </p>
           </CardContent>
         </Card>
@@ -197,7 +197,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                  <div className="space-y-2">
                     <Progress value={(stats.totalSubscribers / 4000000) * 100} aria-label="Plan usage" />
                     <div className="text-sm text-muted-foreground">
-                        <span className="font-semibold text-foreground">{stats.totalSubscribers.toLocaleString()} / 4,000,000</span> Subscribers
+                      <span className="font-semibold text-foreground">{(stats?.totalSubscribers ?? 0).toLocaleString()} / 4,000,000</span> Subscribers
                     </div>
                  </div>
                  <Separator/>

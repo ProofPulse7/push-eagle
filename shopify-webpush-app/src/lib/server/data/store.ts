@@ -216,6 +216,12 @@ type CartRuleConfig = {
   steps: Record<CartStepKey, WelcomeStepConfig>;
 };
 
+type BrowseStepKey = 'browse-reminder-1' | 'browse-reminder-2' | 'browse-reminder-3';
+
+type BrowseRuleConfig = {
+  steps: Record<BrowseStepKey, WelcomeStepConfig>;
+};
+
 type IngestionJobType = 'pixel_event' | 'shopify_order_create';
 
 type PixelIngestionPayload = {
@@ -1090,6 +1096,39 @@ const DEFAULT_CART_STEPS: Record<CartStepKey, WelcomeStepConfig> = {
   },
 };
 
+const DEFAULT_BROWSE_STEPS: Record<BrowseStepKey, WelcomeStepConfig> = {
+  'browse-reminder-1': {
+    enabled: true,
+    delayMinutes: 20,
+    title: 'Still interested in this?',
+    body: 'We noticed you viewed this product. Take another look before it sells out.',
+    targetUrl: null,
+    iconUrl: null,
+    imageUrl: null,
+    actionButtons: [{ title: 'View Product', link: '/products' }],
+  },
+  'browse-reminder-2': {
+    enabled: false,
+    delayMinutes: 120,
+    title: 'A special offer for you',
+    body: "Here is 10% off the products you viewed. Don't miss out!",
+    targetUrl: null,
+    iconUrl: null,
+    imageUrl: null,
+    actionButtons: [{ title: 'Shop Now', link: '/collections/all' }],
+  },
+  'browse-reminder-3': {
+    enabled: false,
+    delayMinutes: 1440,
+    title: "Don't let it get away!",
+    body: 'The product you viewed is getting a lot of attention. Secure yours before it is gone.',
+    targetUrl: null,
+    iconUrl: null,
+    imageUrl: null,
+    actionButtons: [{ title: 'View Product', link: '/products' }],
+  },
+};
+
 const deepCloneStepDefaults = <T extends string>(defaults: Record<T, WelcomeStepConfig>): Record<T, WelcomeStepConfig> => {
   return JSON.parse(JSON.stringify(defaults)) as Record<T, WelcomeStepConfig>;
 };
@@ -1100,6 +1139,10 @@ const deepCloneWelcomeDefaults = (): Record<WelcomeStepKey, WelcomeStepConfig> =
 
 const deepCloneCartDefaults = (): Record<CartStepKey, WelcomeStepConfig> => {
   return deepCloneStepDefaults(DEFAULT_CART_STEPS);
+};
+
+const deepCloneBrowseDefaults = (): Record<BrowseStepKey, WelcomeStepConfig> => {
+  return deepCloneStepDefaults(DEFAULT_BROWSE_STEPS);
 };
 
 const toSafeDelayMinutes = (value: unknown, fallback: number) => {
@@ -1161,6 +1204,10 @@ const parseCartRuleConfig = (config: unknown): CartRuleConfig => {
   return parseSteppedRuleConfig(config, deepCloneCartDefaults);
 };
 
+const parseBrowseRuleConfig = (config: unknown): BrowseRuleConfig => {
+  return parseSteppedRuleConfig(config, deepCloneBrowseDefaults);
+};
+
 const mergeSteppedRuleConfig = <T extends string>(
   existingConfig: unknown,
   patchConfig: unknown,
@@ -1198,12 +1245,16 @@ const mergeRuleConfig = (ruleKey: AutomationRuleKey, existingConfig: unknown, pa
     return mergeSteppedRuleConfig(existingConfig, patchConfig, deepCloneCartDefaults);
   }
 
+  if (ruleKey === 'browse_abandonment_15m') {
+    return mergeSteppedRuleConfig(existingConfig, patchConfig, deepCloneBrowseDefaults);
+  }
+
   return { ...(existingConfig as Record<string, unknown>), ...(patchConfig as Record<string, unknown>) };
 };
 
 const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean; config: Record<string, unknown> }> = [
   { key: 'welcome_subscriber', enabled: true, config: parseWelcomeRuleConfig(null) as unknown as Record<string, unknown> },
-  { key: 'browse_abandonment_15m', enabled: true, config: { delayMinutes: 15 } },
+  { key: 'browse_abandonment_15m', enabled: true, config: parseBrowseRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'cart_abandonment_30m', enabled: true, config: parseCartRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'checkout_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
   { key: 'shipping_notifications', enabled: true, config: { sendWhen: ['in_transit', 'out_for_delivery', 'delivered'] } },
@@ -1265,6 +1316,27 @@ const ensureAutomationRules = async (shopDomain: string) => {
           updated_at = NOW()
       WHERE shop_domain = ${shopDomain}
         AND rule_key = 'cart_abandonment_30m'
+    `;
+  }
+
+  const browseRows = await sql`
+    SELECT config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'browse_abandonment_15m'
+    LIMIT 1
+  `;
+
+  const browseConfig = (browseRows[0]?.config ?? {}) as Record<string, unknown>;
+  const hasBrowseSteps = Boolean((browseConfig.steps as Record<string, unknown> | undefined));
+  if (!hasBrowseSteps) {
+    const normalized = parseBrowseRuleConfig(browseConfig);
+    await sql`
+      UPDATE automation_rules
+      SET config = ${JSON.stringify(normalized)}::jsonb,
+          updated_at = NOW()
+      WHERE shop_domain = ${shopDomain}
+        AND rule_key = 'browse_abandonment_15m'
     `;
   }
 };
@@ -2167,17 +2239,43 @@ export const recordSubscriberActivity = async (input: {
   };
 
   if (input.eventType === 'product_view') {
-    await queueRule(
-      'browse_abandonment_15m',
-      15,
-      `browse15:${input.shopDomain}:${input.externalId}:${input.productId ?? input.pageUrl ?? 'unknown'}`,
-      {
-        title: 'Still thinking about it?',
-        body: 'The item you viewed is still available. Come back before it sells out.',
-        targetUrl: input.pageUrl ?? null,
-        campaignLabel: 'browse_abandonment_15m',
-      },
-    );
+    const rule = await getRuleConfig(input.shopDomain, 'browse_abandonment_15m');
+    if (rule.enabled) {
+      const browseConfig = parseBrowseRuleConfig(rule.config);
+      const targets = await listAutomationTargets({ shopDomain: input.shopDomain, externalId: input.externalId });
+
+      for (const stepKey of Object.keys(browseConfig.steps) as BrowseStepKey[]) {
+        const step = browseConfig.steps[stepKey];
+        if (!step.enabled || targets.length === 0) {
+          continue;
+        }
+
+        const dueAt = new Date(Date.now() + step.delayMinutes * 60 * 1000);
+        await enqueueAutomationForTargets({
+          shopDomain: input.shopDomain,
+          ruleKey: 'browse_abandonment_15m',
+          targets,
+          dedupeKeyBase: `browse15:${input.shopDomain}:${input.externalId}:${input.productId ?? input.pageUrl ?? 'unknown'}:${stepKey}`,
+          dueAt,
+          payload: {
+            title: step.title,
+            body: step.body,
+            targetUrl: step.targetUrl ?? input.pageUrl ?? null,
+            iconUrl: step.iconUrl ?? null,
+            imageUrl: step.imageUrl ?? null,
+            campaignLabel: `browse_abandonment_15m:${stepKey}`,
+            metadata: {
+              stepKey,
+              actionButtons: step.actionButtons ?? [],
+            },
+            externalId: input.externalId,
+            productId: input.productId ?? null,
+            cartToken: input.cartToken ?? null,
+            triggeredAt,
+          },
+        });
+      }
+    }
   }
 
   if (input.eventType === 'add_to_cart') {

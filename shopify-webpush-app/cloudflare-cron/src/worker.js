@@ -27,6 +27,7 @@ const runCampaignShard = async (env, shardIndex, shardCount, maxCampaigns, maxBa
     method: 'GET',
     headers: {
       Authorization: `Bearer ${env.CRON_SECRET}`,
+      'x-automation-secret': env.CRON_SECRET,
       'x-worker-id': `cf-${shardIndex}`,
     },
   });
@@ -59,6 +60,7 @@ const runAutomationShard = async (env, shardIndex, shardCount, maxJobs) => {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${env.CRON_SECRET}`,
+      'x-automation-secret': env.CRON_SECRET,
       'x-worker-id': `cf-auto-${shardIndex}`,
     },
   });

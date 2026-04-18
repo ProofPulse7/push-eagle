@@ -126,7 +126,16 @@ const ensureZeroDelay = async () => {
         },
       },
     },
-    { ruleKey: 'browse_abandonment_15m', config: { delayMinutes: 0 } },
+    {
+      ruleKey: 'browse_abandonment_15m',
+      config: {
+        steps: {
+          'browse-reminder-1': { enabled: true, delayMinutes: 0 },
+          'browse-reminder-2': { enabled: true, delayMinutes: 0 },
+          'browse-reminder-3': { enabled: true, delayMinutes: 0 },
+        },
+      },
+    },
     {
       ruleKey: 'cart_abandonment_30m',
       config: {

@@ -22,11 +22,30 @@ const createCampaignSchema = z.object({
   scheduledAt: z.string().optional().nullable(),
 });
 
+const transformCampaign = (campaign: any) => ({
+  ...campaign,
+  deliveryCount: Number(campaign.delivery_count ?? 0),
+  clickCount: Number(campaign.click_count ?? 0),
+  revenueCents: Number(campaign.revenue_cents ?? 0),
+  targetUrl: campaign.target_url,
+  iconUrl: campaign.icon_url,
+  imageUrl: campaign.image_url,
+  windowsImageUrl: campaign.windows_image_url,
+  macosImageUrl: campaign.macos_image_url,
+  androidImageUrl: campaign.android_image_url,
+  actionButtons: campaign.action_buttons,
+  segmentId: campaign.segment_id,
+  createdAt: campaign.created_at,
+  scheduledAt: campaign.scheduled_at,
+  sentAt: campaign.sent_at,
+  shopDomain: campaign.shop_domain,
+});
+
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
     const campaigns = await listCampaigns(shopDomain);
-    return NextResponse.json({ ok: true, campaigns });
+    return NextResponse.json({ ok: true, campaigns: campaigns.map(transformCampaign) });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to list campaigns.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

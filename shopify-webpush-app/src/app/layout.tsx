@@ -18,6 +18,9 @@ export const metadata: Metadata = {
   title: 'Push Eagle',
   description: 'Shopify web push notifications, campaigns, automations, and analytics.',
   manifest: '/manifest.webmanifest',
+  other: {
+    'mobile-web-app-capable': 'yes',
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',

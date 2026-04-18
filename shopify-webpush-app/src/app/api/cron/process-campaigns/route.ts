@@ -11,8 +11,10 @@ const isAuthorized = (request: Request) => {
     return false;
   }
 
-  const authHeader = request.headers.get('authorization');
-  return authHeader === `Bearer ${env.CRON_SECRET}`;
+  const bearer = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+  const xSecret = request.headers.get('x-automation-secret') ?? '';
+  const querySecret = new URL(request.url).searchParams.get('secret') ?? '';
+  return bearer === env.CRON_SECRET || xSecret === env.CRON_SECRET || querySecret === env.CRON_SECRET;
 };
 
 const parsePositiveInt = (value: string | null, fallback: number, min: number, max: number) => {

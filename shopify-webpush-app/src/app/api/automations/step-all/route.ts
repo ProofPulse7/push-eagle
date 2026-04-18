@@ -23,7 +23,13 @@ const defaultConfigs = {
       'reminder-3': { enabled: true, delayMinutes: 0 },
     },
   },
-  browse_abandonment_15m: { delayMinutes: 15 },
+  browse_abandonment_15m: {
+    steps: {
+      'browse-reminder-1': { enabled: true, delayMinutes: 0 },
+      'browse-reminder-2': { enabled: true, delayMinutes: 0 },
+      'browse-reminder-3': { enabled: true, delayMinutes: 0 },
+    },
+  },
   cart_abandonment_30m: {
     steps: {
       'cart-reminder-1': { enabled: true, delayMinutes: 0 },

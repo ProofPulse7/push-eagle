@@ -14,7 +14,7 @@ type SaveStepInput = {
   delayLabel?: string | null;
 };
 
-type SupportedAutomationRuleKey = 'welcome_subscriber' | 'cart_abandonment_30m';
+type SupportedAutomationRuleKey = 'welcome_subscriber' | 'cart_abandonment_30m' | 'browse_abandonment_15m';
 
 const automationDefinitions: Record<SupportedAutomationRuleKey, {
   path: string;
@@ -27,6 +27,10 @@ const automationDefinitions: Record<SupportedAutomationRuleKey, {
   cart_abandonment_30m: {
     path: '/automations/abandoned-cart-recovery',
     allowedStepIds: new Set(['cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3']),
+  },
+  browse_abandonment_15m: {
+    path: '/automations/browse-abandonment',
+    allowedStepIds: new Set(['browse-reminder-1', 'browse-reminder-2', 'browse-reminder-3']),
   },
 };
 
