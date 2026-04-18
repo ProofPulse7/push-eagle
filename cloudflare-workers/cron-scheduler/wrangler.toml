@@ -1,4 +1,4 @@
-name = "push-eagle-cron"
+name = "push-eagle-cron-pinger"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
 

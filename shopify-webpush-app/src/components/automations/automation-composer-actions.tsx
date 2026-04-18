@@ -17,12 +17,14 @@ interface AutomationComposerActionsProps {
     getAutomationData: () => any; // Function to get current state
     setSaveStatus: (status: 'Unsaved' | 'Saving...' | 'Changes saved') => void;
     automationPath: string;
+    automationRuleKey?: 'welcome_subscriber' | 'cart_abandonment_30m';
 }
 
 export const AutomationComposerActions = ({
     getAutomationData,
     setSaveStatus,
-    automationPath
+    automationPath,
+    automationRuleKey = 'welcome_subscriber'
 }: AutomationComposerActionsProps) => {
     const { toast } = useToast();
     const router = useRouter();
@@ -79,7 +81,7 @@ export const AutomationComposerActions = ({
                 heroUrl: macHero.preview,
                 actionButtons,
             };
-            await saveAutomationStep(stepId, shopDomain, dataToSave);
+            await saveAutomationStep(automationRuleKey, stepId, shopDomain, dataToSave);
             toast({ title: "Automation Saved!", description: "Your changes have been saved successfully." });
             setSaveStatus('Changes saved');
             setTimeout(() => router.push(automationPath), 1000);

@@ -210,6 +210,12 @@ type WelcomeRuleConfig = {
   steps: Record<WelcomeStepKey, WelcomeStepConfig>;
 };
 
+type CartStepKey = 'cart-reminder-1' | 'cart-reminder-2' | 'cart-reminder-3';
+
+type CartRuleConfig = {
+  steps: Record<CartStepKey, WelcomeStepConfig>;
+};
+
 type IngestionJobType = 'pixel_event' | 'shopify_order_create';
 
 type PixelIngestionPayload = {
@@ -1048,8 +1054,52 @@ const DEFAULT_WELCOME_STEPS: Record<WelcomeStepKey, WelcomeStepConfig> = {
   },
 };
 
+const DEFAULT_CART_STEPS: Record<CartStepKey, WelcomeStepConfig> = {
+  'cart-reminder-1': {
+    enabled: true,
+    delayMinutes: 20,
+    title: 'You left something behind!',
+    body: "We've saved your cart for you. Buy them now before they go out of stock!",
+    targetUrl: '/cart',
+    iconUrl: null,
+    imageUrl: null,
+    actionButtons: [
+      { title: 'Checkout', link: '/cart' },
+      { title: 'Continue Shopping', link: '/collections/all' },
+    ],
+  },
+  'cart-reminder-2': {
+    enabled: true,
+    delayMinutes: 120,
+    title: 'Still thinking it over?',
+    body: 'Your cart is waiting for you. Complete your purchase now and get free shipping on all orders!',
+    targetUrl: '/cart',
+    iconUrl: null,
+    imageUrl: null,
+    actionButtons: [{ title: 'View Cart', link: '/cart' }],
+  },
+  'cart-reminder-3': {
+    enabled: false,
+    delayMinutes: 1440,
+    title: "Don't miss out!",
+    body: "The items in your cart are popular and might sell out soon. Grab them before they're gone!",
+    targetUrl: '/cart',
+    iconUrl: null,
+    imageUrl: null,
+    actionButtons: [{ title: 'Complete Purchase', link: '/cart' }],
+  },
+};
+
+const deepCloneStepDefaults = <T extends string>(defaults: Record<T, WelcomeStepConfig>): Record<T, WelcomeStepConfig> => {
+  return JSON.parse(JSON.stringify(defaults)) as Record<T, WelcomeStepConfig>;
+};
+
 const deepCloneWelcomeDefaults = (): Record<WelcomeStepKey, WelcomeStepConfig> => {
-  return JSON.parse(JSON.stringify(DEFAULT_WELCOME_STEPS)) as Record<WelcomeStepKey, WelcomeStepConfig>;
+  return deepCloneStepDefaults(DEFAULT_WELCOME_STEPS);
+};
+
+const deepCloneCartDefaults = (): Record<CartStepKey, WelcomeStepConfig> => {
+  return deepCloneStepDefaults(DEFAULT_CART_STEPS);
 };
 
 const toSafeDelayMinutes = (value: unknown, fallback: number) => {
@@ -1077,12 +1127,15 @@ const normalizeActionButtons = (value: unknown) => {
     .filter(Boolean) as Array<{ title: string; link: string }>;
 };
 
-const parseWelcomeRuleConfig = (config: unknown): WelcomeRuleConfig => {
-  const defaults = deepCloneWelcomeDefaults();
+const parseSteppedRuleConfig = <T extends string>(
+  config: unknown,
+  defaultsFactory: () => Record<T, WelcomeStepConfig>,
+): { steps: Record<T, WelcomeStepConfig> } => {
+  const defaults = defaultsFactory();
   const raw = (config ?? {}) as Record<string, unknown>;
   const rawSteps = (raw.steps ?? {}) as Record<string, unknown>;
 
-  for (const stepKey of Object.keys(defaults) as WelcomeStepKey[]) {
+  for (const stepKey of Object.keys(defaults) as T[]) {
     const rawStep = (rawSteps[stepKey] ?? {}) as Record<string, unknown>;
     const current = defaults[stepKey];
     defaults[stepKey] = {
@@ -1100,17 +1153,25 @@ const parseWelcomeRuleConfig = (config: unknown): WelcomeRuleConfig => {
   return { steps: defaults };
 };
 
-const mergeRuleConfig = (ruleKey: AutomationRuleKey, existingConfig: unknown, patchConfig: unknown) => {
-  if (ruleKey !== 'welcome_subscriber') {
-    return { ...(existingConfig as Record<string, unknown>), ...(patchConfig as Record<string, unknown>) };
-  }
+const parseWelcomeRuleConfig = (config: unknown): WelcomeRuleConfig => {
+  return parseSteppedRuleConfig(config, deepCloneWelcomeDefaults);
+};
 
-  const existing = parseWelcomeRuleConfig(existingConfig);
+const parseCartRuleConfig = (config: unknown): CartRuleConfig => {
+  return parseSteppedRuleConfig(config, deepCloneCartDefaults);
+};
+
+const mergeSteppedRuleConfig = <T extends string>(
+  existingConfig: unknown,
+  patchConfig: unknown,
+  defaultsFactory: () => Record<T, WelcomeStepConfig>,
+) => {
+  const existing = parseSteppedRuleConfig(existingConfig, defaultsFactory);
   const rawPatch = (patchConfig ?? {}) as Record<string, unknown>;
   const patchSteps = (rawPatch.steps ?? {}) as Record<string, unknown>;
-  const mergedSteps = deepCloneWelcomeDefaults();
+  const mergedSteps = defaultsFactory();
 
-  for (const stepKey of Object.keys(mergedSteps) as WelcomeStepKey[]) {
+  for (const stepKey of Object.keys(mergedSteps) as T[]) {
     const current = existing.steps[stepKey];
     const patchStep = (patchSteps[stepKey] ?? {}) as Record<string, unknown>;
     mergedSteps[stepKey] = {
@@ -1128,10 +1189,22 @@ const mergeRuleConfig = (ruleKey: AutomationRuleKey, existingConfig: unknown, pa
   return { steps: mergedSteps };
 };
 
+const mergeRuleConfig = (ruleKey: AutomationRuleKey, existingConfig: unknown, patchConfig: unknown) => {
+  if (ruleKey === 'welcome_subscriber') {
+    return mergeSteppedRuleConfig(existingConfig, patchConfig, deepCloneWelcomeDefaults);
+  }
+
+  if (ruleKey === 'cart_abandonment_30m') {
+    return mergeSteppedRuleConfig(existingConfig, patchConfig, deepCloneCartDefaults);
+  }
+
+  return { ...(existingConfig as Record<string, unknown>), ...(patchConfig as Record<string, unknown>) };
+};
+
 const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean; config: Record<string, unknown> }> = [
   { key: 'welcome_subscriber', enabled: true, config: parseWelcomeRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'browse_abandonment_15m', enabled: true, config: { delayMinutes: 15 } },
-  { key: 'cart_abandonment_30m', enabled: true, config: { delayMinutes: 30 } },
+  { key: 'cart_abandonment_30m', enabled: true, config: parseCartRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'checkout_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
   { key: 'shipping_notifications', enabled: true, config: { sendWhen: ['in_transit', 'out_for_delivery', 'delivered'] } },
   { key: 'back_in_stock', enabled: true, config: {} },
@@ -1171,6 +1244,27 @@ const ensureAutomationRules = async (shopDomain: string) => {
           updated_at = NOW()
       WHERE shop_domain = ${shopDomain}
         AND rule_key = 'welcome_subscriber'
+    `;
+  }
+
+  const cartRows = await sql`
+    SELECT config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'cart_abandonment_30m'
+    LIMIT 1
+  `;
+
+  const cartConfig = (cartRows[0]?.config ?? {}) as Record<string, unknown>;
+  const hasCartSteps = Boolean((cartConfig.steps as Record<string, unknown> | undefined));
+  if (!hasCartSteps) {
+    const normalized = parseCartRuleConfig(cartConfig);
+    await sql`
+      UPDATE automation_rules
+      SET config = ${JSON.stringify(normalized)}::jsonb,
+          updated_at = NOW()
+      WHERE shop_domain = ${shopDomain}
+        AND rule_key = 'cart_abandonment_30m'
     `;
   }
 };
@@ -2087,17 +2181,43 @@ export const recordSubscriberActivity = async (input: {
   }
 
   if (input.eventType === 'add_to_cart') {
-    await queueRule(
-      'cart_abandonment_30m',
-      30,
-      `cart30:${input.shopDomain}:${input.externalId}:${input.cartToken ?? input.productId ?? input.pageUrl ?? 'unknown'}`,
-      {
-        title: 'Your cart is waiting',
-        body: 'You left something behind. Complete your purchase before stock runs out.',
-        targetUrl: input.pageUrl ?? '/cart',
-        campaignLabel: 'cart_abandonment_30m',
-      },
-    );
+    const rule = await getRuleConfig(input.shopDomain, 'cart_abandonment_30m');
+    if (rule.enabled) {
+      const cartConfig = parseCartRuleConfig(rule.config);
+      const targets = await listAutomationTargets({ shopDomain: input.shopDomain, externalId: input.externalId });
+
+      for (const stepKey of Object.keys(cartConfig.steps) as CartStepKey[]) {
+        const step = cartConfig.steps[stepKey];
+        if (!step.enabled || targets.length === 0) {
+          continue;
+        }
+
+        const dueAt = new Date(Date.now() + step.delayMinutes * 60 * 1000);
+        await enqueueAutomationForTargets({
+          shopDomain: input.shopDomain,
+          ruleKey: 'cart_abandonment_30m',
+          targets,
+          dedupeKeyBase: `cart30:${input.shopDomain}:${input.externalId}:${input.cartToken ?? input.productId ?? input.pageUrl ?? 'unknown'}:${stepKey}`,
+          dueAt,
+          payload: {
+            title: step.title,
+            body: step.body,
+            targetUrl: step.targetUrl ?? input.pageUrl ?? '/cart',
+            iconUrl: step.iconUrl ?? null,
+            imageUrl: step.imageUrl ?? null,
+            campaignLabel: `cart_abandonment_30m:${stepKey}`,
+            metadata: {
+              stepKey,
+              actionButtons: step.actionButtons ?? [],
+            },
+            externalId: input.externalId,
+            productId: input.productId ?? null,
+            cartToken: input.cartToken ?? null,
+            triggeredAt,
+          },
+        });
+      }
+    }
   }
 
   if (input.eventType === 'checkout_start') {

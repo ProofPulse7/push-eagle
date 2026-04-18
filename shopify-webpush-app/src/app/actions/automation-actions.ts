@@ -14,6 +14,22 @@ type SaveStepInput = {
   delayLabel?: string | null;
 };
 
+type SupportedAutomationRuleKey = 'welcome_subscriber' | 'cart_abandonment_30m';
+
+const automationDefinitions: Record<SupportedAutomationRuleKey, {
+  path: string;
+  allowedStepIds: Set<string>;
+}> = {
+  welcome_subscriber: {
+    path: '/automations/welcome-notifications',
+    allowedStepIds: new Set(['reminder-1', 'reminder-2', 'reminder-3']),
+  },
+  cart_abandonment_30m: {
+    path: '/automations/abandoned-cart-recovery',
+    allowedStepIds: new Set(['cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3']),
+  },
+};
+
 const delayLabelToMinutes = (delayLabel: string | null | undefined) => {
   if (!delayLabel) {
     return undefined;
@@ -33,25 +49,25 @@ const delayLabelToMinutes = (delayLabel: string | null | undefined) => {
   return undefined;
 };
 
-const normalizeStepId = (stepId: string) => {
-  const allowed = new Set(['reminder-1', 'reminder-2', 'reminder-3']);
-  if (!allowed.has(stepId)) {
+const normalizeStepId = (ruleKey: SupportedAutomationRuleKey, stepId: string) => {
+  const definition = automationDefinitions[ruleKey];
+  if (!definition.allowedStepIds.has(stepId)) {
     throw new Error('Unsupported reminder step id.');
   }
-  return stepId as 'reminder-1' | 'reminder-2' | 'reminder-3';
+  return stepId;
 };
 
-export async function saveAutomationStep(stepId: string, shopDomain: string, data: SaveStepInput) {
-  const normalizedStepId = normalizeStepId(stepId);
+export async function saveAutomationStep(ruleKey: SupportedAutomationRuleKey, stepId: string, shopDomain: string, data: SaveStepInput) {
+  const normalizedStepId = normalizeStepId(ruleKey, stepId);
   const normalizedShop = String(shopDomain || '').trim().toLowerCase();
   if (!normalizedShop) {
     throw new Error('Missing shop domain while saving automation step.');
   }
 
   const rules = await listAutomationRules(normalizedShop);
-  const welcomeRule = rules.find((rule) => rule.ruleKey === 'welcome_subscriber');
+  const targetRule = rules.find((rule) => rule.ruleKey === ruleKey);
 
-  const existingSteps = (welcomeRule?.config?.steps ?? {}) as Record<string, Record<string, unknown>>;
+  const existingSteps = (targetRule?.config?.steps ?? {}) as Record<string, Record<string, unknown>>;
   const existingStep = (existingSteps[normalizedStepId] ?? {}) as Record<string, unknown>;
 
   const nextDelay = delayLabelToMinutes(data.delayLabel) ?? Number(existingStep.delayMinutes ?? 0);
@@ -72,8 +88,8 @@ export async function saveAutomationStep(stepId: string, shopDomain: string, dat
 
   await upsertAutomationRule(
     normalizedShop,
-    'welcome_subscriber',
-    welcomeRule?.enabled,
+    ruleKey,
+    targetRule?.enabled,
     {
       steps: {
         [normalizedStepId]: stepPatch,
@@ -81,8 +97,9 @@ export async function saveAutomationStep(stepId: string, shopDomain: string, dat
     },
   );
 
-  revalidatePath('/automations/welcome-notifications');
-  revalidatePath(`/automations/welcome-notifications/${normalizedStepId}/edit`);
+  const definition = automationDefinitions[ruleKey];
+  revalidatePath(definition.path);
+  revalidatePath(`${definition.path}/${normalizedStepId}/edit`);
 
   return { success: true, message: 'Automation step saved successfully.' };
 }

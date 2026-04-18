@@ -116,9 +116,27 @@ const stepAll = async () => {
 
 const ensureZeroDelay = async () => {
   const rules = [
-    { ruleKey: 'welcome_subscriber', config: { delayMinutes: 0 } },
+    {
+      ruleKey: 'welcome_subscriber',
+      config: {
+        steps: {
+          'reminder-1': { enabled: true, delayMinutes: 0 },
+          'reminder-2': { enabled: true, delayMinutes: 0 },
+          'reminder-3': { enabled: true, delayMinutes: 0 },
+        },
+      },
+    },
     { ruleKey: 'browse_abandonment_15m', config: { delayMinutes: 0 } },
-    { ruleKey: 'cart_abandonment_30m', config: { delayMinutes: 0 } },
+    {
+      ruleKey: 'cart_abandonment_30m',
+      config: {
+        steps: {
+          'cart-reminder-1': { enabled: true, delayMinutes: 0 },
+          'cart-reminder-2': { enabled: true, delayMinutes: 0 },
+          'cart-reminder-3': { enabled: true, delayMinutes: 0 },
+        },
+      },
+    },
     { ruleKey: 'shipping_notifications', config: { sendWhen: ['in_transit', 'out_for_delivery', 'delivered'] } },
     { ruleKey: 'back_in_stock', config: {} },
     { ruleKey: 'price_drop', config: {} },

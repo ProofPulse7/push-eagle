@@ -17,7 +17,13 @@ import { ScrollArea } from '../ui/scroll-area';
 import { AutomationComposerActions } from './automation-composer-actions';
 import { Check, Loader2 } from 'lucide-react';
 
-export function AutomationComposer() {
+export function AutomationComposer({
+    automationPath = '/automations/welcome-notifications',
+    automationRuleKey = 'welcome_subscriber',
+}: {
+    automationPath?: string;
+    automationRuleKey?: 'welcome_subscriber' | 'cart_abandonment_30m';
+}) {
     const { 
         title, setTitle, 
         message, setMessage, 
@@ -193,7 +199,8 @@ export function AutomationComposer() {
                     <AutomationComposerActions 
                         setSaveStatus={setSaveStatus}
                         getAutomationData={getAutomationData}
-                        automationPath="/automations/welcome-notifications"
+                        automationPath={automationPath}
+                        automationRuleKey={automationRuleKey}
                     />
                 </div>
             </div>

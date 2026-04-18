@@ -16,9 +16,21 @@ const bodySchema = z.object({
 });
 
 const defaultConfigs = {
-  welcome_subscriber: { delayMinutes: 0 },
+  welcome_subscriber: {
+    steps: {
+      'reminder-1': { enabled: true, delayMinutes: 0 },
+      'reminder-2': { enabled: true, delayMinutes: 0 },
+      'reminder-3': { enabled: true, delayMinutes: 0 },
+    },
+  },
   browse_abandonment_15m: { delayMinutes: 15 },
-  cart_abandonment_30m: { delayMinutes: 30 },
+  cart_abandonment_30m: {
+    steps: {
+      'cart-reminder-1': { enabled: true, delayMinutes: 0 },
+      'cart-reminder-2': { enabled: true, delayMinutes: 0 },
+      'cart-reminder-3': { enabled: true, delayMinutes: 0 },
+    },
+  },
   shipping_notifications: { sendWhen: ['in_transit', 'out_for_delivery', 'delivered'] },
   back_in_stock: {},
   price_drop: {},
