@@ -158,8 +158,14 @@ export default function ScheduleCampaignPage() {
 
     const router = useRouter();
     const { toast } = useToast();
-    const { shopDomain } = useSettings();
+    const { shopDomain: settingsShop } = useSettings();
+    const [queryShop, setQueryShop] = useState('');
+    const shopDomain = queryShop || settingsShop || '';
     const scheduledAt = buildScheduledAt(scheduledDate, scheduledTime);
+
+    useEffect(() => {
+        setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
+    }, []);
 
     useEffect(() => {
         if (!shopDomain) {

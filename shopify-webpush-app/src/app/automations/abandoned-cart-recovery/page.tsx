@@ -229,6 +229,7 @@ export default function AbandonedCartPage() {
   const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [showReminderStats, setShowReminderStats] = useState(true);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
+  const [ruleEnabled, setRuleEnabled] = useState(false);
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
@@ -244,6 +245,7 @@ export default function AbandonedCartPage() {
         const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'cart_abandonment_30m');
         if (rule) {
           setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+          setRuleEnabled(Boolean(rule.enabled));
         }
       })
       .catch(() => undefined);
@@ -281,7 +283,7 @@ export default function AbandonedCartPage() {
   const saveCartConfig = async (updatedNotifications: FlowNotification[]) => {
     if (!shopDomain) return;
 
-    const enabled = updatedNotifications.some((item) => item.status === 'Active');
+    const enabled = ruleEnabled && updatedNotifications.some((item) => item.status === 'Active');
 
     await fetch('/api/automations/rules', {
       method: 'POST',
@@ -321,7 +323,7 @@ export default function AbandonedCartPage() {
     }
   };
 
-  const isFlowActive = notifications.some((item) => item.status === 'Active');
+  const isFlowActive = ruleEnabled && notifications.some((item) => item.status === 'Active');
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">

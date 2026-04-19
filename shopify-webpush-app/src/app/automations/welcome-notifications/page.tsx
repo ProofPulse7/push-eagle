@@ -173,6 +173,7 @@ export default function WelcomeNotificationsPage() {
   const [previewDevice, setPreviewDevice] = useState<'windows' | 'macos' | 'android' | 'ios'>('android');
   const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
+  const [ruleEnabled, setRuleEnabled] = useState(false);
   const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
 
   useEffect(() => {
@@ -189,6 +190,7 @@ export default function WelcomeNotificationsPage() {
         const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'welcome_subscriber');
         if (rule) {
           setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+          setRuleEnabled(Boolean(rule.enabled));
         }
       })
       .catch(() => undefined);
@@ -228,7 +230,7 @@ export default function WelcomeNotificationsPage() {
     if (!shopDomain) return;
 
     const config = { steps: buildStepsConfigFromNotifications(updatedNotifications) };
-    const enabled = updatedNotifications.some((item) => item.status === 'Active');
+    const enabled = ruleEnabled && updatedNotifications.some((item) => item.status === 'Active');
     await fetch('/api/automations/rules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -267,7 +269,7 @@ export default function WelcomeNotificationsPage() {
     }
   };
 
-  const isFlowActive = notifications.some((item) => item.status === 'Active');
+  const isFlowActive = ruleEnabled && notifications.some((item) => item.status === 'Active');
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">

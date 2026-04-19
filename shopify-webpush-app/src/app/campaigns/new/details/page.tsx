@@ -53,7 +53,9 @@ const OptionCard = ({
 
 export default function CampaignDetailsPage() {
   const router = useRouter();
-  const { shopDomain } = useSettings();
+  const { shopDomain: settingsShopDomain } = useSettings();
+  const [queryShop, setQueryShop] = useState('');
+  const shopDomain = queryShop || settingsShopDomain || '';
   const {
     sendingOption,
     setSendingOption,
@@ -66,6 +68,10 @@ export default function CampaignDetailsPage() {
   } = useCampaignState();
 
   const [segments, setSegments] = useState<AudienceSegment[]>([{ id: 'all', name: 'All Subscribers', count: 0 }]);
+
+  useEffect(() => {
+    setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
+  }, []);
 
   useEffect(() => {
     if (!shopDomain) {
@@ -104,6 +110,10 @@ export default function CampaignDetailsPage() {
     () => segments.find((segment) => segment.id === segmentId) ?? segments[0],
     [segmentId, segments],
   );
+
+  const scheduleHref = queryShop
+    ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
+    : '/campaigns/new/schedule';
 
   const campaignType = flashSaleEnabled ? 'flash' : 'regular';
 
@@ -234,7 +244,7 @@ export default function CampaignDetailsPage() {
           <Button
             size="lg"
             className="h-12 min-w-[140px] rounded-xl bg-primary px-8 text-base font-semibold"
-            onClick={() => router.push('/campaigns/new/editor')}
+            onClick={() => router.push(scheduleHref)}
           >
             Continue
           </Button>
