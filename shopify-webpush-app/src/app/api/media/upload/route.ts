@@ -27,6 +27,8 @@ const parseDataUrl = (dataUrl: string) => {
 
 export async function POST(request: Request) {
   try {
+    const requestUrl = new URL(request.url);
+    const origin = requestUrl.origin.replace(/\/$/, '');
     const body = schema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
 
@@ -36,7 +38,13 @@ export async function POST(request: Request) {
     }
 
     const asset = await createMediaAsset(shopDomain, contentType, dataBase64);
-    return NextResponse.json({ ok: true, asset });
+    return NextResponse.json({
+      ok: true,
+      asset: {
+        id: asset.id,
+        url: `${origin}/api/media/${asset.id}`,
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to upload image asset.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

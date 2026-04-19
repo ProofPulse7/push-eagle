@@ -1001,23 +1001,17 @@ const buildAutomationTrackedUrl = (
     return null;
   }
 
-  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
-
   try {
+    void shopDomain;
+    void externalId;
     const target = new URL(targetUrl);
     target.searchParams.set('utm_source', 'push_eagle');
     target.searchParams.set('utm_medium', 'web_push');
     target.searchParams.set('utm_campaign', `automation_${ruleKey}`);
     target.searchParams.set('utm_content', ruleKey);
-
-    const trackerBase = new URL('/api/track/automation-click', trackingBase);
-    trackerBase.searchParams.set('r', ruleKey);
-    trackerBase.searchParams.set('s', shopDomain);
-    trackerBase.searchParams.set('u', target.toString());
-    if (externalId) {
-      trackerBase.searchParams.set('e', externalId);
-    }
-    return trackerBase.toString();
+    // For automation notifications, send users directly to the configured merchant URL.
+    // This avoids app-domain mismatches that can break click redirects in production.
+    return target.toString();
   } catch {
     return targetUrl;
   }
@@ -1828,22 +1822,47 @@ const listAutomationTargets = async (input: { shopDomain: string; externalId?: s
     return [] as Array<{ tokenId: number; subscriberId: number | null; externalId: string | null }>;
   }
 
+  // Keep only the most recently seen active token per subscriber to prevent duplicate sends.
   const rows = input.subscriberId
     ? await sql`
-      SELECT t.id AS token_id, s.id AS subscriber_id, s.external_id
-      FROM subscriber_tokens t
-      JOIN subscribers s ON s.id = t.subscriber_id
-      WHERE t.shop_domain = ${input.shopDomain}
-        AND s.id = ${input.subscriberId}
-        AND t.status = 'active'
+      WITH ranked AS (
+        SELECT
+          t.id AS token_id,
+          s.id AS subscriber_id,
+          s.external_id,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.id
+            ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+          ) AS rn
+        FROM subscriber_tokens t
+        JOIN subscribers s ON s.id = t.subscriber_id
+        WHERE t.shop_domain = ${input.shopDomain}
+          AND s.id = ${input.subscriberId}
+          AND t.status = 'active'
+      )
+      SELECT token_id, subscriber_id, external_id
+      FROM ranked
+      WHERE rn = 1
     `
     : await sql`
-      SELECT t.id AS token_id, s.id AS subscriber_id, s.external_id
-      FROM subscriber_tokens t
-      JOIN subscribers s ON s.id = t.subscriber_id
-      WHERE t.shop_domain = ${input.shopDomain}
-        AND s.external_id = ${input.externalId ?? ''}
-        AND t.status = 'active'
+      WITH ranked AS (
+        SELECT
+          t.id AS token_id,
+          s.id AS subscriber_id,
+          s.external_id,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.id
+            ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+          ) AS rn
+        FROM subscriber_tokens t
+        JOIN subscribers s ON s.id = t.subscriber_id
+        WHERE t.shop_domain = ${input.shopDomain}
+          AND s.external_id = ${input.externalId ?? ''}
+          AND t.status = 'active'
+      )
+      SELECT token_id, subscriber_id, external_id
+      FROM ranked
+      WHERE rn = 1
     `;
 
   return rows.map((row) => ({
@@ -2639,6 +2658,29 @@ export const processAutomationJob = async (jobId: string) => {
           WHERE id = ${jobId}
         `;
         return { processed: false, error: 'Welcome reminder already delivered to token for this step.' };
+      }
+
+      if (claim.subscriber_id) {
+        const subscriberDeliveryRows = await sql`
+          SELECT d.automation_job_id
+          FROM automation_deliveries d
+          JOIN automation_jobs j ON j.id = d.automation_job_id
+          WHERE d.shop_domain = ${claim.shop_domain}
+            AND d.rule_key = 'welcome_subscriber'
+            AND d.subscriber_id = ${claim.subscriber_id}
+            AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+          ORDER BY d.delivered_at DESC
+          LIMIT 1
+        `;
+
+        if (subscriberDeliveryRows[0]?.automation_job_id) {
+          await sql`
+            UPDATE automation_jobs
+            SET status = 'skipped', error_message = 'Welcome reminder already delivered to subscriber for this step.', updated_at = NOW()
+            WHERE id = ${jobId}
+          `;
+          return { processed: false, error: 'Welcome reminder already delivered to subscriber for this step.' };
+        }
       }
     }
 

@@ -52,6 +52,40 @@ const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
     reader.readAsDataURL(blob);
 });
 
+const normalizeAutomationLink = (value: string | null | undefined) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+        return '';
+    }
+
+    try {
+        const parsed = new URL(raw);
+        if (parsed.pathname === '/api/track/automation-click') {
+            const unwrapped = parsed.searchParams.get('u');
+            if (unwrapped) {
+                return unwrapped;
+            }
+        }
+    } catch {
+        return raw;
+    }
+
+    return raw;
+};
+
+const normalizeMediaHost = (value: string) => {
+    try {
+        const parsed = new URL(value);
+        if (parsed.pathname.startsWith('/api/media/')) {
+            return `${window.location.origin}${parsed.pathname}${parsed.search}`;
+        }
+    } catch {
+        return value;
+    }
+
+    return value;
+};
+
 const resolveAutomationMediaUrl = async (sourceUrl: string | null | undefined, shopDomain: string): Promise<string | null> => {
     const value = String(sourceUrl ?? '').trim();
     if (!value) {
@@ -59,7 +93,7 @@ const resolveAutomationMediaUrl = async (sourceUrl: string | null | undefined, s
     }
 
     if (value.startsWith('http://') || value.startsWith('https://')) {
-        return value;
+        return normalizeMediaHost(value);
     }
 
     let dataUrl = value;
@@ -150,7 +184,7 @@ export const AutomationComposerActions = ({
             const stepPatch = {
                 title,
                 body: message,
-                targetUrl: primaryLink,
+                targetUrl: normalizeAutomationLink(primaryLink),
                 iconUrl: logoUrl,
                 imageUrl: macHeroUrl,
                 windowsImageUrl: windowsHeroUrl,

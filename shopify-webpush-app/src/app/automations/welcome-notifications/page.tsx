@@ -22,6 +22,7 @@ import { useSettings } from '@/context/settings-context';
 type NotificationPreviewData = {
   title: string;
   message: string;
+  targetUrl?: string;
   iconUrl: string;
   heroUrl: string | null;
   windowsImageUrl?: string | null;
@@ -99,6 +100,7 @@ type WelcomeRuleStepConfig = {
   delayMinutes?: number;
   title?: string;
   body?: string;
+  targetUrl?: string | null;
   iconUrl?: string | null;
   imageUrl?: string | null;
   windowsImageUrl?: string | null;
@@ -220,6 +222,7 @@ const buildStepsConfigFromNotifications = (notifications: FlowNotification[]) =>
         delayMinutes: delayLabelToMinutes(notification.delay),
         title: notification.notification.title,
         body: notification.notification.message,
+        targetUrl: notification.notification.targetUrl ?? null,
         iconUrl: notification.notification.iconUrl ?? null,
         imageUrl: notification.notification.heroUrl ?? null,
         windowsImageUrl: notification.notification.windowsImageUrl ?? null,
@@ -302,6 +305,7 @@ export default function WelcomeNotificationsPage() {
             ...item.notification,
             title: step.title ?? item.notification.title,
             message: step.body ?? item.notification.message,
+            targetUrl: step.targetUrl ?? item.notification.targetUrl,
             iconUrl: step.iconUrl ?? item.notification.iconUrl,
             heroUrl: step.imageUrl ?? item.notification.heroUrl,
             windowsImageUrl: step.windowsImageUrl ?? item.notification.windowsImageUrl ?? item.notification.heroUrl,
