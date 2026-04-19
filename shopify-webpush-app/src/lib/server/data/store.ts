@@ -942,6 +942,8 @@ const buildTrackedUrl = (
     return null;
   }
 
+  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
+
   try {
     const target = new URL(targetUrl);
     target.searchParams.set('utm_source', 'push_eagle');
@@ -951,7 +953,7 @@ const buildTrackedUrl = (
       target.searchParams.set('utm_content', contentLabel);
     }
 
-    const trackerBase = new URL('/api/track/click', env.NEXT_PUBLIC_APP_URL);
+    const trackerBase = new URL('/api/track/click', trackingBase);
     trackerBase.searchParams.set('c', campaignId);
     trackerBase.searchParams.set('s', shopDomain);
     trackerBase.searchParams.set('u', target.toString());
@@ -974,6 +976,8 @@ const buildAutomationTrackedUrl = (
     return null;
   }
 
+  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
+
   try {
     const target = new URL(targetUrl);
     target.searchParams.set('utm_source', 'push_eagle');
@@ -981,7 +985,7 @@ const buildAutomationTrackedUrl = (
     target.searchParams.set('utm_campaign', `automation_${ruleKey}`);
     target.searchParams.set('utm_content', ruleKey);
 
-    const trackerBase = new URL('/api/track/automation-click', env.NEXT_PUBLIC_APP_URL);
+    const trackerBase = new URL('/api/track/automation-click', trackingBase);
     trackerBase.searchParams.set('r', ruleKey);
     trackerBase.searchParams.set('s', shopDomain);
     trackerBase.searchParams.set('u', target.toString());
@@ -992,6 +996,58 @@ const buildAutomationTrackedUrl = (
   } catch {
     return targetUrl;
   }
+};
+
+const toAbsoluteStorefrontUrl = (candidate: string | null | undefined, fallbackShopDomain: string) => {
+  const raw = String(candidate ?? '').trim();
+  if (!raw) {
+    return `https://${fallbackShopDomain}`;
+  }
+
+  try {
+    return new URL(raw).toString();
+  } catch {
+    const normalizedHost = raw.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+    if (!normalizedHost) {
+      return `https://${fallbackShopDomain}`;
+    }
+    return `https://${normalizedHost}`;
+  }
+};
+
+const resolveAutomationDestination = async (shopDomain: string, payload: AutomationJobPayload) => {
+  const sql = getNeonSql();
+  const rows = await sql`
+    SELECT m.primary_domain, m.myshopify_domain, s.brand_logo_url, s.opt_in_logo_url
+    FROM merchants m
+    LEFT JOIN merchant_settings s ON s.shop_domain = m.shop_domain
+    WHERE m.shop_domain = ${shopDomain}
+    LIMIT 1
+  `;
+
+  const storeBase = toAbsoluteStorefrontUrl(
+    rows[0]?.primary_domain ?? rows[0]?.myshopify_domain ?? shopDomain,
+    shopDomain,
+  );
+
+  let targetUrl = payload.targetUrl ?? null;
+  if (!targetUrl) {
+    targetUrl = storeBase;
+  } else {
+    try {
+      targetUrl = new URL(targetUrl).toString();
+    } catch {
+      targetUrl = new URL(targetUrl, storeBase).toString();
+    }
+  }
+
+  const fallbackLogo = rows[0]?.brand_logo_url ?? rows[0]?.opt_in_logo_url ?? null;
+  const iconUrl = payload.iconUrl ?? (fallbackLogo ? String(fallbackLogo) : null);
+
+  return {
+    targetUrl,
+    iconUrl,
+  };
 };
 
 const ensureMerchant = async (shopDomain: string) => {
@@ -2074,9 +2130,31 @@ export const processAutomationJob = async (jobId: string) => {
     WHERE id = ${claim.token_id ?? 0}
     LIMIT 1
   `;
-  const token = String(tokenRows[0]?.fcm_token ?? '');
-  const tokenType = String(tokenRows[0]?.token_type ?? 'fcm');
-  const tokenStatus = String(tokenRows[0]?.status ?? '');
+  let activeTokenRow = tokenRows[0];
+  let token = String(activeTokenRow?.fcm_token ?? '');
+  let tokenType = String(activeTokenRow?.token_type ?? 'fcm');
+  let tokenStatus = String(activeTokenRow?.status ?? '');
+  let deliveryTokenId = claim.token_id ?? null;
+
+  if ((!token || tokenStatus !== 'active') && claim.subscriber_id) {
+    const fallbackTokenRows = await sql`
+      SELECT id, fcm_token, token_type, vapid_endpoint, vapid_p256dh, vapid_auth, status
+      FROM subscriber_tokens
+      WHERE shop_domain = ${claim.shop_domain}
+        AND subscriber_id = ${claim.subscriber_id}
+        AND status = 'active'
+      ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC
+      LIMIT 1
+    `;
+
+    if (fallbackTokenRows[0]) {
+      activeTokenRow = fallbackTokenRows[0];
+      token = String(activeTokenRow?.fcm_token ?? '');
+      tokenType = String(activeTokenRow?.token_type ?? 'fcm');
+      tokenStatus = String(activeTokenRow?.status ?? '');
+      deliveryTokenId = Number(fallbackTokenRows[0]?.id ?? 0) || deliveryTokenId;
+    }
+  }
 
   if (!token || tokenStatus !== 'active') {
     await sql`
@@ -2160,6 +2238,49 @@ export const processAutomationJob = async (jobId: string) => {
           `;
           return { processed: false, error: 'Duplicate welcome reminder job suppressed.' };
         }
+
+        const existingDeliveryRows = await sql`
+          SELECT d.automation_job_id
+          FROM automation_deliveries d
+          JOIN automation_jobs j ON j.id = d.automation_job_id
+          WHERE d.shop_domain = ${claim.shop_domain}
+            AND d.rule_key = 'welcome_subscriber'
+            AND d.external_id = ${payloadExternalId}
+            AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+          ORDER BY d.delivered_at DESC
+          LIMIT 1
+        `;
+
+        const existingDeliveryJobId = existingDeliveryRows[0]?.automation_job_id == null ? '' : String(existingDeliveryRows[0].automation_job_id);
+        if (existingDeliveryJobId && existingDeliveryJobId !== claim.id) {
+          await sql`
+            UPDATE automation_jobs
+            SET status = 'skipped', error_message = 'Welcome reminder already delivered for this step.', updated_at = NOW()
+            WHERE id = ${jobId}
+          `;
+          return { processed: false, error: 'Welcome reminder already delivered for this step.' };
+        }
+      }
+
+      const tokenDeliveryRows = await sql`
+        SELECT d.automation_job_id
+        FROM automation_deliveries d
+        JOIN automation_jobs j ON j.id = d.automation_job_id
+        WHERE d.shop_domain = ${claim.shop_domain}
+          AND d.rule_key = 'welcome_subscriber'
+          AND d.token_id = ${deliveryTokenId ?? 0}
+          AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+        ORDER BY d.delivered_at DESC
+        LIMIT 1
+      `;
+
+      if (tokenDeliveryRows[0]?.automation_job_id) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Welcome reminder already delivered to token for this step.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        return { processed: false, error: 'Welcome reminder already delivered to token for this step.' };
       }
     }
 
@@ -2229,6 +2350,13 @@ export const processAutomationJob = async (jobId: string) => {
       return { processed: false, error: skipReason };
     }
 
+    const destination = await resolveAutomationDestination(claim.shop_domain, payload);
+    payload = {
+      ...payload,
+      targetUrl: destination.targetUrl,
+      iconUrl: destination.iconUrl,
+    };
+
     const trackedTargetUrl = payload.ruleKey
       ? buildAutomationTrackedUrl(payload.targetUrl ?? null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
       : payload.targetUrl ?? null;
@@ -2237,9 +2365,9 @@ export const processAutomationJob = async (jobId: string) => {
 
     if (tokenType === 'vapid') {
       // VAPID send for Firefox / Safari
-      const vapidEndpoint = String(tokenRows[0]?.vapid_endpoint ?? '');
-      const vapidP256dh = String(tokenRows[0]?.vapid_p256dh ?? '');
-      const vapidAuth = String(tokenRows[0]?.vapid_auth ?? '');
+      const vapidEndpoint = String(activeTokenRow?.vapid_endpoint ?? '');
+      const vapidP256dh = String(activeTokenRow?.vapid_p256dh ?? '');
+      const vapidAuth = String(activeTokenRow?.vapid_auth ?? '');
       if (!vapidEndpoint || !vapidP256dh || !vapidAuth) {
         throw new Error('Incomplete VAPID subscription data.');
       }
@@ -2302,7 +2430,7 @@ export const processAutomationJob = async (jobId: string) => {
         ${payload.ruleKey ?? claim.rule_key},
         ${claim.shop_domain},
         ${claim.subscriber_id ?? null},
-        ${claim.token_id ?? null},
+        ${deliveryTokenId},
         ${payload.externalId ?? null},
         ${payload.targetUrl ?? null},
         ${fcmMessageId}
