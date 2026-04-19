@@ -111,6 +111,11 @@ type WelcomeDiagnosticsPayload = {
   ok?: boolean;
   shopDomain?: string;
   checkedAt?: string;
+  processing?: {
+    claimed?: number;
+    sent?: number;
+    failed?: number;
+  };
   summary?: {
     reminder2?: {
       pending?: number;
@@ -134,6 +139,13 @@ type WelcomeDiagnosticsPayload = {
     };
     staleProcessing?: number;
   };
+  reminderMedia?: Record<string, {
+    icon?: { present?: boolean; scheme?: string; normalized?: string | null };
+    image?: { present?: boolean; scheme?: string; normalized?: string | null };
+    windowsImage?: { present?: boolean; scheme?: string; normalized?: string | null };
+    macosImage?: { present?: boolean; scheme?: string; normalized?: string | null };
+    androidImage?: { present?: boolean; scheme?: string; normalized?: string | null };
+  }>;
   inferredIssues?: string[];
   recentJobs?: Array<{
     id: string;
@@ -343,6 +355,7 @@ export default function WelcomeNotificationsPage() {
     const reminder2 = diagnosticsPayload.summary?.reminder2;
     const reminder3 = diagnosticsPayload.summary?.reminder3;
     const issues = diagnosticsPayload.inferredIssues ?? [];
+    const media = diagnosticsPayload.reminderMedia ?? {};
     const recentJobs = diagnosticsPayload.recentJobs ?? [];
 
     const recentText = recentJobs
@@ -365,9 +378,21 @@ export default function WelcomeNotificationsPage() {
     return [
       `shop=${diagnosticsPayload.shopDomain ?? shopDomain}`,
       `checkedAt=${diagnosticsPayload.checkedAt ?? 'n/a'}`,
+      `processing claimed=${diagnosticsPayload.processing?.claimed ?? 0} sent=${diagnosticsPayload.processing?.sent ?? 0} failed=${diagnosticsPayload.processing?.failed ?? 0}`,
       `reminder-2 pending=${reminder2?.pending ?? 0} dueNow=${reminder2?.dueNow ?? 0} processing=${reminder2?.processing ?? 0} sent=${reminder2?.sent ?? 0} delivered=${reminder2?.delivered ?? 0} failed=${reminder2?.failed ?? 0} skipped=${reminder2?.skipped ?? 0} lastDeliveredAt=${reminder2?.lastDeliveredAt ?? 'null'}`,
       `reminder-3 pending=${reminder3?.pending ?? 0} dueNow=${reminder3?.dueNow ?? 0} processing=${reminder3?.processing ?? 0} sent=${reminder3?.sent ?? 0} delivered=${reminder3?.delivered ?? 0} failed=${reminder3?.failed ?? 0} skipped=${reminder3?.skipped ?? 0} lastDeliveredAt=${reminder3?.lastDeliveredAt ?? 'null'}`,
       `staleProcessing=${diagnosticsPayload.summary?.staleProcessing ?? 0}`,
+      'configured media:',
+      ...(['reminder-1', 'reminder-2', 'reminder-3'] as const).map((stepKey) => {
+        const item = media[stepKey] ?? {};
+        return [
+          `${stepKey}.icon present=${item.icon?.present ? 'yes' : 'no'} scheme=${item.icon?.scheme ?? 'none'} normalized=${item.icon?.normalized ?? 'null'}`,
+          `${stepKey}.image present=${item.image?.present ? 'yes' : 'no'} scheme=${item.image?.scheme ?? 'none'} normalized=${item.image?.normalized ?? 'null'}`,
+          `${stepKey}.windowsImage present=${item.windowsImage?.present ? 'yes' : 'no'} scheme=${item.windowsImage?.scheme ?? 'none'} normalized=${item.windowsImage?.normalized ?? 'null'}`,
+          `${stepKey}.macosImage present=${item.macosImage?.present ? 'yes' : 'no'} scheme=${item.macosImage?.scheme ?? 'none'} normalized=${item.macosImage?.normalized ?? 'null'}`,
+          `${stepKey}.androidImage present=${item.androidImage?.present ? 'yes' : 'no'} scheme=${item.androidImage?.scheme ?? 'none'} normalized=${item.androidImage?.normalized ?? 'null'}`,
+        ].join(' | ');
+      }),
       'issues:',
       ...(issues.length > 0 ? issues.map((issue, index) => `${index + 1}. ${issue}`) : ['1. no inferred issues']),
       'recent jobs:',

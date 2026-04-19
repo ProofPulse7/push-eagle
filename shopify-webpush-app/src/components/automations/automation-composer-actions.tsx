@@ -6,7 +6,6 @@ import { useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { handleSendLivePreview } from '@/lib/notification-service';
-import { saveAutomationStep } from '@/app/actions/automation-actions';
 import { useSettings } from '@/context/settings-context';
 
 import { Button } from "@/components/ui/button";
@@ -19,6 +18,74 @@ interface AutomationComposerActionsProps {
     automationPath: string;
     automationRuleKey?: 'welcome_subscriber' | 'cart_abandonment_30m' | 'browse_abandonment_15m' | 'shipping_notifications' | 'back_in_stock' | 'price_drop';
 }
+
+const parseApiResponse = async (response: Response): Promise<{ json: any | null; text: string }> => {
+    const text = await response.text();
+    if (!text) {
+        return { json: null, text: '' };
+    }
+
+    try {
+        return { json: JSON.parse(text), text };
+    } catch {
+        return { json: null, text };
+    }
+};
+
+const buildResponseError = (fallback: string, payload: { json: any | null; text: string }) => {
+    const jsonError = payload.json && typeof payload.json === 'object' ? payload.json.error : null;
+    if (typeof jsonError === 'string' && jsonError.trim()) {
+        return jsonError;
+    }
+
+    if (payload.text) {
+        return `${fallback} ${payload.text.slice(0, 200)}`;
+    }
+
+    return fallback;
+};
+
+const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('Failed to read image blob.'));
+    reader.readAsDataURL(blob);
+});
+
+const resolveAutomationMediaUrl = async (sourceUrl: string | null | undefined, shopDomain: string): Promise<string | null> => {
+    const value = String(sourceUrl ?? '').trim();
+    if (!value) {
+        return null;
+    }
+
+    if (value.startsWith('http://') || value.startsWith('https://')) {
+        return value;
+    }
+
+    let dataUrl = value;
+    if (value.startsWith('blob:')) {
+        const response = await fetch(value);
+        const blob = await response.blob();
+        dataUrl = await blobToDataUrl(blob);
+    }
+
+    if (!dataUrl.startsWith('data:image/')) {
+        return null;
+    }
+
+    const uploadResponse = await fetch('/api/media/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopDomain, dataUrl }),
+    });
+
+    const uploadPayload = await parseApiResponse(uploadResponse);
+    if (!uploadResponse.ok || !uploadPayload.json?.ok || !uploadPayload.json?.asset?.url) {
+        throw new Error(buildResponseError('Failed to upload reminder image.', uploadPayload));
+    }
+
+    return String(uploadPayload.json.asset.url);
+};
 
 export const AutomationComposerActions = ({
     getAutomationData,
@@ -73,18 +140,44 @@ export const AutomationComposerActions = ({
         setIsSaving(true);
         setSaveStatus('Saving...');
         try {
-            const dataToSave = {
+            const [logoUrl, windowsHeroUrl, macHeroUrl, androidHeroUrl] = await Promise.all([
+                resolveAutomationMediaUrl(logo.preview, shopDomain),
+                resolveAutomationMediaUrl(windowsHero.preview, shopDomain),
+                resolveAutomationMediaUrl(macHero.preview, shopDomain),
+                resolveAutomationMediaUrl(androidHero.preview, shopDomain),
+            ]);
+
+            const stepPatch = {
                 title,
-                message,
-                primaryLink,
-                logoUrl: logo.preview,
-                heroUrl: macHero.preview,
-                windowsHeroUrl: windowsHero.preview,
-                macHeroUrl: macHero.preview,
-                androidHeroUrl: androidHero.preview,
+                body: message,
+                targetUrl: primaryLink,
+                iconUrl: logoUrl,
+                imageUrl: macHeroUrl,
+                windowsImageUrl: windowsHeroUrl,
+                macosImageUrl: macHeroUrl,
+                androidImageUrl: androidHeroUrl,
                 actionButtons,
             };
-            await saveAutomationStep(automationRuleKey, stepId, shopDomain, dataToSave);
+
+            const saveResponse = await fetch('/api/automations/rules', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    shopDomain,
+                    ruleKey: automationRuleKey,
+                    config: {
+                        steps: {
+                            [stepId]: stepPatch,
+                        },
+                    },
+                }),
+            });
+
+            const savePayload = await parseApiResponse(saveResponse);
+            if (!saveResponse.ok || !savePayload.json?.ok) {
+                throw new Error(buildResponseError('Failed to save reminder settings.', savePayload));
+            }
+
             toast({ title: "Automation Saved!", description: "Your changes have been saved successfully." });
             setSaveStatus('Changes saved');
             setTimeout(() => router.push(automationPath), 1000);

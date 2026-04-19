@@ -5805,6 +5805,22 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
   await ensureSchema();
   const sql = getNeonSql();
 
+  const ruleRows = await sql`
+    SELECT config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+    LIMIT 1
+  `;
+
+  const merchantRows = await sql`
+    SELECT m.primary_domain, m.myshopify_domain, s.brand_logo_url, s.opt_in_logo_url
+    FROM merchants m
+    LEFT JOIN merchant_settings s ON s.shop_domain = m.shop_domain
+    WHERE m.shop_domain = ${shopDomain}
+    LIMIT 1
+  `;
+
   const jobsByStepStatusRows = await sql`
     SELECT
       COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key,
@@ -5943,10 +5959,91 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
     inferredIssues.push('No reminder-3 jobs found; welcome step enqueue path may not be creating delayed jobs.');
   }
 
+  const welcomeConfig = parseWelcomeRuleConfig(ruleRows[0]?.config ?? null);
+  const storeBase = toAbsoluteStorefrontUrl(
+    merchantRows[0]?.primary_domain ?? merchantRows[0]?.myshopify_domain ?? shopDomain,
+    shopDomain,
+  );
+
+  const mediaStatus = (value: string | null | undefined) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+      return {
+        present: false,
+        raw: null,
+        scheme: 'none',
+        normalized: null,
+      };
+    }
+
+    const normalized = toHttpUrlOrNull(raw, storeBase);
+    const scheme = raw.startsWith('https://')
+      ? 'https'
+      : raw.startsWith('http://')
+        ? 'http'
+        : raw.startsWith('data:')
+          ? 'data'
+          : raw.startsWith('blob:')
+            ? 'blob'
+            : 'relative-or-invalid';
+
+    return {
+      present: true,
+      raw,
+      scheme,
+      normalized,
+    };
+  };
+
+  const reminderMedia = {
+    'reminder-1': {
+      icon: mediaStatus(welcomeConfig.steps['reminder-1'].iconUrl ?? null),
+      image: mediaStatus(welcomeConfig.steps['reminder-1'].imageUrl ?? null),
+      windowsImage: mediaStatus(welcomeConfig.steps['reminder-1'].windowsImageUrl ?? null),
+      macosImage: mediaStatus(welcomeConfig.steps['reminder-1'].macosImageUrl ?? null),
+      androidImage: mediaStatus(welcomeConfig.steps['reminder-1'].androidImageUrl ?? null),
+    },
+    'reminder-2': {
+      icon: mediaStatus(welcomeConfig.steps['reminder-2'].iconUrl ?? null),
+      image: mediaStatus(welcomeConfig.steps['reminder-2'].imageUrl ?? null),
+      windowsImage: mediaStatus(welcomeConfig.steps['reminder-2'].windowsImageUrl ?? null),
+      macosImage: mediaStatus(welcomeConfig.steps['reminder-2'].macosImageUrl ?? null),
+      androidImage: mediaStatus(welcomeConfig.steps['reminder-2'].androidImageUrl ?? null),
+    },
+    'reminder-3': {
+      icon: mediaStatus(welcomeConfig.steps['reminder-3'].iconUrl ?? null),
+      image: mediaStatus(welcomeConfig.steps['reminder-3'].imageUrl ?? null),
+      windowsImage: mediaStatus(welcomeConfig.steps['reminder-3'].windowsImageUrl ?? null),
+      macosImage: mediaStatus(welcomeConfig.steps['reminder-3'].macosImageUrl ?? null),
+      androidImage: mediaStatus(welcomeConfig.steps['reminder-3'].androidImageUrl ?? null),
+    },
+  };
+
+  const invalidMediaIssues: string[] = [];
+  for (const stepKey of ['reminder-1', 'reminder-2', 'reminder-3'] as const) {
+    const stepMedia = reminderMedia[stepKey];
+    const entries = [
+      ['icon', stepMedia.icon],
+      ['image', stepMedia.image],
+      ['windowsImage', stepMedia.windowsImage],
+      ['macosImage', stepMedia.macosImage],
+      ['androidImage', stepMedia.androidImage],
+    ] as const;
+
+    for (const [field, item] of entries) {
+      if (item.present && !item.normalized) {
+        invalidMediaIssues.push(`${stepKey}.${field} uses unsupported URL scheme '${item.scheme}' and will be stripped before send.`);
+      }
+    }
+  }
+
+  inferredIssues.push(...invalidMediaIssues);
+
   return {
     shopDomain,
     checkedAt: new Date().toISOString(),
     summary,
+    reminderMedia,
     inferredIssues,
     recentJobs: (recentRows as Array<Record<string, unknown>>).map((row) => ({
       id: String(row.id ?? ''),
