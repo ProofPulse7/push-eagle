@@ -14,6 +14,7 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
+import { useCachedJson } from '@/hooks/use-cached-json';
 import { formatCurrency } from '@/lib/utils';
 
 type CartRuleStepConfig = {
@@ -231,59 +232,66 @@ export default function AbandonedCartPage() {
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
   const [ruleEnabled, setRuleEnabled] = useState(false);
 
+  const overviewUrl = shopDomain ? `/api/automations/overview?shop=${encodeURIComponent(shopDomain)}` : '';
+  const rulesUrl = shopDomain ? `/api/automations/rules?shop=${encodeURIComponent(shopDomain)}` : '';
+
+  const { data: overviewPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; impressions?: number; clicks?: number; revenueCents?: number; enabled?: boolean }> }>({
+    cacheKey: `cart-overview:${shopDomain}`,
+    url: overviewUrl,
+    enabled: Boolean(shopDomain),
+  });
+
+  const { data: rulesPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; enabled?: boolean; config?: { steps?: Record<string, CartRuleStepConfig> } }> }>({
+    cacheKey: `cart-rules:${shopDomain}`,
+    url: rulesUrl,
+    enabled: Boolean(shopDomain),
+  });
+
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
   }, []);
 
   useEffect(() => {
-    if (!shopDomain) return;
+    if (!overviewPayload?.ok) return;
+    const rule = (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
+    if (!rule) return;
+    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+  }, [overviewPayload]);
 
-    fetch(`/api/automations/overview?shop=${encodeURIComponent(shopDomain)}`)
-      .then((res) => res.json())
-      .then((payload) => {
-        if (!payload?.ok) return;
-        const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'cart_abandonment_30m');
-        if (rule) {
-          setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
-          setRuleEnabled(Boolean(rule.enabled));
-        }
-      })
-      .catch(() => undefined);
+  useEffect(() => {
+    if (!rulesPayload?.ok) return;
+    const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
+    if (!rule) return;
 
-    fetch(`/api/automations/rules?shop=${encodeURIComponent(shopDomain)}`)
-      .then((res) => res.json())
-      .then((payload) => {
-        if (!payload?.ok) return;
-        const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'cart_abandonment_30m');
-        if (!rule?.config?.steps) return;
+    setRuleEnabled(Boolean(rule.enabled));
 
-        const steps = rule.config.steps as Record<string, CartRuleStepConfig>;
-        setNotifications((current) =>
-          current.map((item) => {
-            const step = steps[item.id] ?? {};
-            return {
-              ...item,
-              delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
-              status: step.enabled ? 'Active' : 'Inactive',
-              notification: {
-                ...item.notification,
-                title: step.title ?? item.notification.title,
-                message: step.body ?? item.notification.message,
-                iconUrl: step.iconUrl ?? item.notification.iconUrl,
-                heroUrl: step.imageUrl ?? item.notification.heroUrl,
-                actionButtons: step.actionButtons ?? item.notification.actionButtons,
-              },
-            };
-          }),
-        );
-      })
-      .catch(() => undefined);
-  }, [shopDomain]);
+    const steps = rule.config?.steps;
+    if (!steps) return;
+
+    setNotifications((current) =>
+      current.map((item) => {
+        const step = steps[item.id] ?? {};
+        return {
+          ...item,
+          delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
+          status: step.enabled ? 'Active' : 'Inactive',
+          notification: {
+            ...item.notification,
+            title: step.title ?? item.notification.title,
+            message: step.body ?? item.notification.message,
+            iconUrl: step.iconUrl ?? item.notification.iconUrl,
+            heroUrl: step.imageUrl ?? item.notification.heroUrl,
+            actionButtons: step.actionButtons ?? item.notification.actionButtons,
+          },
+        };
+      }),
+    );
+  }, [rulesPayload]);
 
   const saveCartConfig = async (updatedNotifications: FlowNotification[]) => {
     if (!shopDomain) return;
 
-    const enabled = ruleEnabled && updatedNotifications.some((item) => item.status === 'Active');
+    const enabled = updatedNotifications.some((item) => item.status === 'Active');
 
     await fetch('/api/automations/rules', {
       method: 'POST',
