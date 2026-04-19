@@ -2072,6 +2072,69 @@ export const processAutomationJob = async (jobId: string) => {
 
   try {
     const payload = claim.payload ?? { title: 'Notification', body: '' };
+
+    const ruleRows = await sql`
+      SELECT enabled, config
+      FROM automation_rules
+      WHERE shop_domain = ${claim.shop_domain}
+        AND rule_key = ${claim.rule_key}
+      LIMIT 1
+    `;
+
+    if (!Boolean(ruleRows[0]?.enabled)) {
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'skipped', error_message = 'Automation rule is disabled.', updated_at = NOW()
+        WHERE id = ${jobId}
+      `;
+      return { processed: false, error: 'Automation rule is disabled.' };
+    }
+
+    const payloadMetadata = (payload.metadata ?? {}) as Record<string, unknown>;
+    const payloadStepKey = payloadMetadata.stepKey == null ? '' : String(payloadMetadata.stepKey);
+
+    if (claim.rule_key === 'welcome_subscriber' && payloadStepKey) {
+      const welcomeConfig = parseWelcomeRuleConfig(ruleRows[0]?.config ?? null);
+      const step = welcomeConfig.steps[payloadStepKey as WelcomeStepKey];
+
+      if (!step?.enabled) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Welcome reminder step is disabled.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        return { processed: false, error: 'Welcome reminder step is disabled.' };
+      }
+    }
+
+    if (claim.rule_key === 'cart_abandonment_30m' && payloadStepKey) {
+      const cartConfig = parseCartRuleConfig(ruleRows[0]?.config ?? null);
+      const step = cartConfig.steps[payloadStepKey as CartStepKey];
+
+      if (!step?.enabled) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Cart reminder step is disabled.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        return { processed: false, error: 'Cart reminder step is disabled.' };
+      }
+    }
+
+    if (claim.rule_key === 'browse_abandonment_15m' && payloadStepKey) {
+      const browseConfig = parseBrowseRuleConfig(ruleRows[0]?.config ?? null);
+      const step = browseConfig.steps[payloadStepKey as BrowseStepKey];
+
+      if (!step?.enabled) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Browse reminder step is disabled.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        return { processed: false, error: 'Browse reminder step is disabled.' };
+      }
+    }
+
     const skipReason = await getAutomationSkipReason(claim.shop_domain, payload);
     if (skipReason) {
       await sql`
@@ -3258,33 +3321,49 @@ export const resolveCampaignAudience = async (
   const sql = getNeonSql();
 
   if (!segmentId || segmentId === 'all') {
-    const rows = await sql`
-      SELECT
-        t.id AS token_id,
-        t.fcm_token,
-        t.token_type,
-        t.vapid_endpoint,
-        t.vapid_p256dh,
-        t.vapid_auth,
-        s.id AS subscriber_id,
-        s.external_id,
-        s.platform
-      FROM subscribers s
-      JOIN subscriber_tokens t ON t.subscriber_id = s.id
-      WHERE s.shop_domain = ${shopDomain}
-        AND t.shop_domain = ${shopDomain}
-        AND t.status = 'active'
-        AND (
-          ${excludeDeliveredCampaignId ?? null} IS NULL
-          OR NOT EXISTS (
+    const rows = excludeDeliveredCampaignId
+      ? await sql`
+        SELECT
+          t.id AS token_id,
+          t.fcm_token,
+          t.token_type,
+          t.vapid_endpoint,
+          t.vapid_p256dh,
+          t.vapid_auth,
+          s.id AS subscriber_id,
+          s.external_id,
+          s.platform
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id
+        WHERE s.shop_domain = ${shopDomain}
+          AND t.shop_domain = ${shopDomain}
+          AND t.status = 'active'
+          AND NOT EXISTS (
             SELECT 1
             FROM campaign_deliveries cd
-            WHERE cd.campaign_id = ${excludeDeliveredCampaignId ?? null}
+            WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
               AND cd.token_id = t.id
           )
-        )
-      ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
-    `;
+        ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+      `
+      : await sql`
+        SELECT
+          t.id AS token_id,
+          t.fcm_token,
+          t.token_type,
+          t.vapid_endpoint,
+          t.vapid_p256dh,
+          t.vapid_auth,
+          s.id AS subscriber_id,
+          s.external_id,
+          s.platform
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id
+        WHERE s.shop_domain = ${shopDomain}
+          AND t.shop_domain = ${shopDomain}
+          AND t.status = 'active'
+        ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+      `;
     return rows as Array<{
       token_id: string | number;
       fcm_token: string;
@@ -3312,33 +3391,49 @@ export const resolveCampaignAudience = async (
     return [];
   }
 
-  const rows = await sql`
-    SELECT
-      t.id AS token_id,
-      t.fcm_token,
-      t.token_type,
-      t.vapid_endpoint,
-      t.vapid_p256dh,
-      t.vapid_auth,
-      s.id AS subscriber_id,
-      s.external_id,
-      s.platform
-    FROM subscribers s
-    JOIN subscriber_tokens t ON t.subscriber_id = s.id
-    WHERE s.shop_domain = ${shopDomain}
-      AND t.shop_domain = ${shopDomain}
-      AND t.status = 'active'
-      AND (
-        ${excludeDeliveredCampaignId ?? null} IS NULL
-        OR NOT EXISTS (
+  const rows = excludeDeliveredCampaignId
+    ? await sql`
+      SELECT
+        t.id AS token_id,
+        t.fcm_token,
+        t.token_type,
+        t.vapid_endpoint,
+        t.vapid_p256dh,
+        t.vapid_auth,
+        s.id AS subscriber_id,
+        s.external_id,
+        s.platform
+      FROM subscribers s
+      JOIN subscriber_tokens t ON t.subscriber_id = s.id
+      WHERE s.shop_domain = ${shopDomain}
+        AND t.shop_domain = ${shopDomain}
+        AND t.status = 'active'
+        AND NOT EXISTS (
           SELECT 1
           FROM campaign_deliveries cd
-          WHERE cd.campaign_id = ${excludeDeliveredCampaignId ?? null}
+          WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
             AND cd.token_id = t.id
         )
-      )
-    ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
-  `;
+      ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+    `
+    : await sql`
+      SELECT
+        t.id AS token_id,
+        t.fcm_token,
+        t.token_type,
+        t.vapid_endpoint,
+        t.vapid_p256dh,
+        t.vapid_auth,
+        s.id AS subscriber_id,
+        s.external_id,
+        s.platform
+      FROM subscribers s
+      JOIN subscriber_tokens t ON t.subscriber_id = s.id
+      WHERE s.shop_domain = ${shopDomain}
+        AND t.shop_domain = ${shopDomain}
+        AND t.status = 'active'
+      ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+    `;
 
   return (rows as Array<{
     token_id: string | number;

@@ -1,7 +1,6 @@
 
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
@@ -100,7 +99,11 @@ export const ComposerActions = ({
     const handleContinue = () => {
         const isFormValid = onContinueClick();
         if (isFormValid) {
-            router.push('/campaigns/new/schedule');
+            const queryShop = new URLSearchParams(window.location.search).get('shop');
+            const detailsHref = queryShop
+                ? `/campaigns/new/details?shop=${encodeURIComponent(queryShop)}`
+                : '/campaigns/new/details';
+            router.push(detailsHref);
         }
     }
 

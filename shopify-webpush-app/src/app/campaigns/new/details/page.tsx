@@ -68,6 +68,8 @@ export default function CampaignDetailsPage() {
   } = useCampaignState();
 
   const [segments, setSegments] = useState<AudienceSegment[]>([{ id: 'all', name: 'All Subscribers', count: 0 }]);
+  const [loadingAudience, setLoadingAudience] = useState(false);
+  const [audienceError, setAudienceError] = useState<string | null>(null);
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
@@ -79,10 +81,18 @@ export default function CampaignDetailsPage() {
     }
 
     let active = true;
+    setLoadingAudience(true);
+    setAudienceError(null);
+
     fetch(`/api/campaigns/audience?shop=${encodeURIComponent(shopDomain)}`)
       .then((response) => response.json())
       .then((data) => {
-        if (!active || !data?.ok || !Array.isArray(data.segments)) {
+        if (!active) {
+          return;
+        }
+
+        if (!data?.ok || !Array.isArray(data.segments)) {
+          setAudienceError(typeof data?.error === 'string' ? data.error : 'Failed to load subscribers and segments for this store.');
           return;
         }
 
@@ -99,7 +109,16 @@ export default function CampaignDetailsPage() {
           }
         }
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (active) {
+          setAudienceError('Failed to load subscribers and segments for this store.');
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoadingAudience(false);
+        }
+      });
 
     return () => {
       active = false;
@@ -115,6 +134,10 @@ export default function CampaignDetailsPage() {
     ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
     : '/campaigns/new/schedule';
 
+  const editorHref = queryShop
+    ? `/campaigns/new/editor?shop=${encodeURIComponent(queryShop)}`
+    : '/campaigns/new/editor';
+
   const campaignType = flashSaleEnabled ? 'flash' : 'regular';
 
   return (
@@ -122,7 +145,7 @@ export default function CampaignDetailsPage() {
       <div className="mx-auto max-w-[980px]">
         <div className="mb-8 flex items-center gap-4">
           <Button variant="outline" size="icon" className="h-12 w-12 rounded-xl bg-white" asChild>
-            <Link href="/campaigns/new/editor">
+            <Link href={editorHref}>
               <ArrowLeft className="h-5 w-5" />
               <span className="sr-only">Back</span>
             </Link>
@@ -189,17 +212,19 @@ export default function CampaignDetailsPage() {
               <Select value={selectedSegment?.id ?? 'all'} onValueChange={setSegmentId}>
                 <SelectTrigger className="h-14 rounded-xl border-slate-200 bg-slate-50 text-base font-medium">
                   <SelectValue>
-                    {selectedSegment ? `${selectedSegment.name}(${selectedSegment.count.toLocaleString()} subscribers)` : 'Select segment'}
+                    {selectedSegment ? `${selectedSegment.name} (${selectedSegment.count.toLocaleString()} subscribers)` : 'Select segment'}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {segments.map((segment) => (
                     <SelectItem key={segment.id} value={segment.id}>
-                      {segment.name}({segment.count.toLocaleString()} subscribers)
+                      {segment.name} ({segment.count.toLocaleString()} subscribers)
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {loadingAudience ? <p className="text-sm text-muted-foreground">Loading subscribers and segments...</p> : null}
+              {audienceError ? <p className="text-sm text-destructive">{audienceError}</p> : null}
             </section>
 
             <Separator />
