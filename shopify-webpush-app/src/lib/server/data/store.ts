@@ -1780,7 +1780,7 @@ export const dispatchWelcomeJobNow = async (shopDomain: string, tokenId: number)
       AND rule_key = 'welcome_subscriber'
       AND token_id = ${tokenId}
       AND status = 'pending'
-      AND due_at <= NOW()
+      AND due_at <= NOW() + INTERVAL '5 seconds'
     ORDER BY due_at ASC, created_at ASC
     LIMIT 20
   `;
@@ -3755,7 +3755,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   if (Boolean(welcomeRuleRows[0]?.enabled)) {
     const welcomeConfig = parseWelcomeRuleConfig(welcomeRuleRows[0]?.config ?? null);
     const now = Date.now();
-    let hasImmediateWelcomeStep = false;
+    const immediateWelcomeJobIds: string[] = [];
 
     for (const stepKey of Object.keys(welcomeConfig.steps) as WelcomeStepKey[]) {
       const step = welcomeConfig.steps[stepKey];
@@ -3763,13 +3763,9 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
         continue;
       }
 
-      if (step.delayMinutes <= 0) {
-        hasImmediateWelcomeStep = true;
-      }
-
       const dueAt = new Date(now + step.delayMinutes * 60_000);
 
-      await enqueueAutomationJob({
+      const jobId = await enqueueAutomationJob({
         shopDomain: input.shopDomain,
         ruleKey: 'welcome_subscriber',
         tokenId,
@@ -3792,10 +3788,14 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
           triggeredAt: new Date().toISOString(),
         },
       });
+
+      if (step.delayMinutes <= 0 && jobId) {
+        immediateWelcomeJobIds.push(jobId);
+      }
     }
 
-    if (hasImmediateWelcomeStep) {
-      await dispatchWelcomeJobNow(input.shopDomain, tokenId);
+    if (immediateWelcomeJobIds.length > 0) {
+      await Promise.all(immediateWelcomeJobIds.map((jobId) => processAutomationJob(jobId)));
     }
   }
 
