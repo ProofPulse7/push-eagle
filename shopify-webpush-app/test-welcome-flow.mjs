@@ -5,7 +5,7 @@
  * Tests: token registration -> immediate welcome dispatch
  */
 
-const baseUrl = 'http://localhost:3001';
+const baseUrl = process.env.BASE_URL || 'http://localhost:3010';
 const testShop = 'test-shop.myshopify.com';
 
 async function testWelcomeFlow() {

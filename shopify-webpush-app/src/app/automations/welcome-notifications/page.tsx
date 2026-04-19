@@ -60,7 +60,7 @@ const flowData: {
     {
       id: 'reminder-2',
       title: 'Reminder 2',
-      delay: '2 hours',
+      delay: '3 minutes',
       status: 'Inactive',
       notification: {
         title: "We're glad to have you here!",
