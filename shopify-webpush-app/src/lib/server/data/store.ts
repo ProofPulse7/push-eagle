@@ -3757,13 +3757,17 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     const now = Date.now();
     const immediateWelcomeJobIds: string[] = [];
 
+    console.log(`[upsertSubscriberToken] Welcome config for ${input.shopDomain}:`, JSON.stringify(welcomeConfig));
+
     for (const stepKey of Object.keys(welcomeConfig.steps) as WelcomeStepKey[]) {
       const step = welcomeConfig.steps[stepKey];
       if (!step.enabled) {
         continue;
       }
 
+      console.log(`[upsertSubscriberToken] Step ${stepKey}: delayMinutes=${step.delayMinutes}`);
       const dueAt = new Date(now + step.delayMinutes * 60_000);
+      console.log(`[upsertSubscriberToken] Step ${stepKey}: dueAt=${dueAt.toISOString()} (now=${new Date(now).toISOString()})`);
 
       const jobId = await enqueueAutomationJob({
         shopDomain: input.shopDomain,
@@ -3795,7 +3799,9 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     }
 
     if (immediateWelcomeJobIds.length > 0) {
-      await Promise.all(immediateWelcomeJobIds.map((jobId) => processAutomationJob(jobId)));
+      console.log(`[upsertSubscriberToken] Processing ${immediateWelcomeJobIds.length} immediate welcome jobs for subscriber ${subscriberId}`);
+      const results = await Promise.all(immediateWelcomeJobIds.map((jobId) => processAutomationJob(jobId)));
+      console.log(`[upsertSubscriberToken] Immediate dispatch complete:`, results.map(r => ({ processed: r.processed, error: r.error })));
     }
   }
 

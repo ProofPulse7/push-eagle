@@ -166,10 +166,6 @@ export async function POST(request: Request) {
       deviceContext: body.deviceContext ?? null,
     });
 
-    if (saved.tokenId) {
-      dispatchWelcomeJobNow(shopDomain, saved.tokenId).catch(() => undefined);
-    }
-
     return NextResponse.json(
       {
         ok: true,
