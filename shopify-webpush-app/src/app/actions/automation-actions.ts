@@ -10,6 +10,9 @@ type SaveStepInput = {
   primaryLink?: string | null;
   logoUrl?: string | null;
   heroUrl?: string | null;
+  windowsHeroUrl?: string | null;
+  macHeroUrl?: string | null;
+  androidHeroUrl?: string | null;
   actionButtons?: Array<{ title: string; link: string }>;
   delayLabel?: string | null;
 };
@@ -84,9 +87,14 @@ export async function saveAutomationStep(ruleKey: SupportedAutomationRuleKey, st
     delayMinutes: Number.isFinite(nextDelay) ? nextDelay : 0,
     title: String(data.title ?? existingStep.title ?? ''),
     body: String(data.message ?? existingStep.body ?? ''),
-    targetUrl: data.primaryLink ?? (existingStep.targetUrl as string | null | undefined) ?? null,
+    targetUrl: data.primaryLink == null || String(data.primaryLink).trim() === ''
+      ? (existingStep.targetUrl as string | null | undefined) ?? null
+      : data.primaryLink,
     iconUrl: data.logoUrl ?? (existingStep.iconUrl as string | null | undefined) ?? null,
     imageUrl: data.heroUrl ?? (existingStep.imageUrl as string | null | undefined) ?? null,
+    windowsImageUrl: data.windowsHeroUrl ?? (existingStep.windowsImageUrl as string | null | undefined) ?? null,
+    macosImageUrl: data.macHeroUrl ?? (existingStep.macosImageUrl as string | null | undefined) ?? null,
+    androidImageUrl: data.androidHeroUrl ?? (existingStep.androidImageUrl as string | null | undefined) ?? null,
     actionButtons: nextActionButtons,
   };
 

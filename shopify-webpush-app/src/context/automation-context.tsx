@@ -11,6 +11,9 @@ type AutomationInitialState = {
         targetUrl?: string | null;
         iconUrl?: string | null;
         heroUrl?: string | null;
+        windowsHeroUrl?: string | null;
+        macHeroUrl?: string | null;
+        androidHeroUrl?: string | null;
         actionButtons?: ActionButton[];
     };
 };
@@ -50,29 +53,31 @@ export function AutomationStateProvider({ children }: { children: ReactNode }) {
     const [isInitialized, setIsInitialized] = useState(false);
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
-    const [primaryLink, setPrimaryLink] = useState('https://example.com');
+    const [primaryLink, setPrimaryLink] = useState('');
     const [actionButtons, setActionButtons] = useState<ActionButton[]>([]);
     const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null });
     const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null });
     const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null });
-    const { logo, setLogo } = useSettings();
+    const { storeUrl, shopDomain, logo, setLogo } = useSettings();
+
+    const fallbackStoreUrl = storeUrl || (shopDomain ? `https://${shopDomain}` : '');
 
     const initializeState = useCallback((initialState: AutomationInitialState) => {
         if (initialState?.notification) {
             setTitle(initialState.notification.title || '');
             setMessage(initialState.notification.message || '');
-            setPrimaryLink(initialState.notification.targetUrl || 'https://example.com');
+            setPrimaryLink(initialState.notification.targetUrl || fallbackStoreUrl);
             if (!logo.preview) {
                 setLogo({ file: null, preview: initialState.notification.iconUrl || null });
             }
-            const heroUrl = initialState.notification.heroUrl || null;
-            setWindowsHero({ file: null, preview: heroUrl });
-            setMacHero({ file: null, preview: heroUrl });
-            setAndroidHero({ file: null, preview: heroUrl });
+            const fallbackHeroUrl = initialState.notification.heroUrl || null;
+            setWindowsHero({ file: null, preview: initialState.notification.windowsHeroUrl || fallbackHeroUrl });
+            setMacHero({ file: null, preview: initialState.notification.macHeroUrl || fallbackHeroUrl });
+            setAndroidHero({ file: null, preview: initialState.notification.androidHeroUrl || fallbackHeroUrl });
             setActionButtons(initialState.notification.actionButtons || []);
             setIsInitialized(true);
         }
-    }, [logo.preview, setLogo]);
+    }, [logo.preview, setLogo, fallbackStoreUrl]);
 
     const value: AutomationContextType = {
         isInitialized,

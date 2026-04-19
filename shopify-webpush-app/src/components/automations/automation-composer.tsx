@@ -137,7 +137,9 @@ export function AutomationComposer({
       message,
       primaryLink,
       logo,
+            windowsHero,
       macHero,
+            androidHero,
       actionButtons
     });
 

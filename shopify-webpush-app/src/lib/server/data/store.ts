@@ -182,6 +182,9 @@ type AutomationJobPayload = {
   targetUrl?: string | null;
   iconUrl?: string | null;
   imageUrl?: string | null;
+  windowsImageUrl?: string | null;
+  macosImageUrl?: string | null;
+  androidImageUrl?: string | null;
   campaignLabel?: string | null;
   ruleKey?: AutomationRuleKey | null;
   externalId?: string | null;
@@ -203,6 +206,9 @@ type WelcomeStepConfig = {
   targetUrl?: string | null;
   iconUrl?: string | null;
   imageUrl?: string | null;
+  windowsImageUrl?: string | null;
+  macosImageUrl?: string | null;
+  androidImageUrl?: string | null;
   actionButtons?: Array<{ title: string; link: string }>;
 };
 
@@ -1053,6 +1059,9 @@ const resolveAutomationDestination = async (shopDomain: string, payload: Automat
   const iconUrl = toHttpUrlOrNull(payload.iconUrl ?? null, storeBase)
     ?? toHttpUrlOrNull(fallbackLogo ? String(fallbackLogo) : null, storeBase);
   const imageUrl = toHttpUrlOrNull(payload.imageUrl ?? null, storeBase);
+  const windowsImageUrl = toHttpUrlOrNull(payload.windowsImageUrl ?? null, storeBase);
+  const macosImageUrl = toHttpUrlOrNull(payload.macosImageUrl ?? null, storeBase);
+  const androidImageUrl = toHttpUrlOrNull(payload.androidImageUrl ?? null, storeBase);
 
   const rawActionButtons = Array.isArray((payload.metadata ?? {}).actionButtons)
     ? ((payload.metadata ?? {}).actionButtons as Array<Record<string, unknown>>)
@@ -1072,8 +1081,33 @@ const resolveAutomationDestination = async (shopDomain: string, payload: Automat
     targetUrl,
     iconUrl,
     imageUrl,
+    windowsImageUrl,
+    macosImageUrl,
+    androidImageUrl,
     actionButtons,
   };
+};
+
+const selectAutomationImageForDevice = (
+  payload: AutomationJobPayload,
+  platform: string | null | undefined,
+  browser: string | null | undefined,
+) => {
+  const device = `${String(platform ?? '').toLowerCase()} ${String(browser ?? '').toLowerCase()}`.trim();
+
+  if (device.includes('android')) {
+    return payload.androidImageUrl ?? payload.imageUrl ?? null;
+  }
+
+  if (device.includes('windows')) {
+    return payload.windowsImageUrl ?? payload.imageUrl ?? null;
+  }
+
+  if (device.includes('mac') || device.includes('osx') || device.includes('ios') || device.includes('safari')) {
+    return payload.macosImageUrl ?? payload.imageUrl ?? null;
+  }
+
+  return payload.imageUrl ?? null;
 };
 
 const ensureMerchant = async (shopDomain: string) => {
@@ -1115,6 +1149,9 @@ const DEFAULT_WELCOME_STEPS: Record<WelcomeStepKey, WelcomeStepConfig> = {
     targetUrl: null,
     iconUrl: null,
     imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
     actionButtons: [],
   },
   'reminder-2': {
@@ -1125,6 +1162,9 @@ const DEFAULT_WELCOME_STEPS: Record<WelcomeStepKey, WelcomeStepConfig> = {
     targetUrl: null,
     iconUrl: null,
     imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
     actionButtons: [{ title: 'Shop now', link: '/collections/all' }],
   },
   'reminder-3': {
@@ -1135,6 +1175,9 @@ const DEFAULT_WELCOME_STEPS: Record<WelcomeStepKey, WelcomeStepConfig> = {
     targetUrl: null,
     iconUrl: null,
     imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
     actionButtons: [
       { title: 'View products', link: '/collections/all' },
       { title: 'Special offers', link: '/collections/sale' },
@@ -1151,6 +1194,9 @@ const DEFAULT_CART_STEPS: Record<CartStepKey, WelcomeStepConfig> = {
     targetUrl: '/cart',
     iconUrl: null,
     imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
     actionButtons: [
       { title: 'Checkout', link: '/cart' },
       { title: 'Continue Shopping', link: '/collections/all' },
@@ -1164,6 +1210,9 @@ const DEFAULT_CART_STEPS: Record<CartStepKey, WelcomeStepConfig> = {
     targetUrl: '/cart',
     iconUrl: null,
     imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
     actionButtons: [{ title: 'View Cart', link: '/cart' }],
   },
   'cart-reminder-3': {
@@ -1174,6 +1223,9 @@ const DEFAULT_CART_STEPS: Record<CartStepKey, WelcomeStepConfig> = {
     targetUrl: '/cart',
     iconUrl: null,
     imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
     actionButtons: [{ title: 'Complete Purchase', link: '/cart' }],
   },
 };
@@ -1187,6 +1239,9 @@ const DEFAULT_BROWSE_STEPS: Record<BrowseStepKey, WelcomeStepConfig> = {
     targetUrl: null,
     iconUrl: null,
     imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
     actionButtons: [{ title: 'View Product', link: '/products' }],
   },
   'browse-reminder-2': {
@@ -1197,6 +1252,9 @@ const DEFAULT_BROWSE_STEPS: Record<BrowseStepKey, WelcomeStepConfig> = {
     targetUrl: null,
     iconUrl: null,
     imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
     actionButtons: [{ title: 'Shop Now', link: '/collections/all' }],
   },
   'browse-reminder-3': {
@@ -1207,6 +1265,9 @@ const DEFAULT_BROWSE_STEPS: Record<BrowseStepKey, WelcomeStepConfig> = {
     targetUrl: null,
     iconUrl: null,
     imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
     actionButtons: [{ title: 'View Product', link: '/products' }],
   },
 };
@@ -1271,6 +1332,9 @@ const parseSteppedRuleConfig = <T extends string>(
       targetUrl: rawStep.targetUrl == null ? current.targetUrl ?? null : String(rawStep.targetUrl),
       iconUrl: rawStep.iconUrl == null ? current.iconUrl ?? null : String(rawStep.iconUrl),
       imageUrl: rawStep.imageUrl == null ? current.imageUrl ?? null : String(rawStep.imageUrl),
+      windowsImageUrl: rawStep.windowsImageUrl == null ? current.windowsImageUrl ?? null : String(rawStep.windowsImageUrl),
+      macosImageUrl: rawStep.macosImageUrl == null ? current.macosImageUrl ?? null : String(rawStep.macosImageUrl),
+      androidImageUrl: rawStep.androidImageUrl == null ? current.androidImageUrl ?? null : String(rawStep.androidImageUrl),
       actionButtons: normalizeActionButtons(rawStep.actionButtons ?? current.actionButtons ?? []),
     };
   }
@@ -1311,6 +1375,9 @@ const mergeSteppedRuleConfig = <T extends string>(
       targetUrl: patchStep.targetUrl == null ? current.targetUrl ?? null : String(patchStep.targetUrl),
       iconUrl: patchStep.iconUrl == null ? current.iconUrl ?? null : String(patchStep.iconUrl),
       imageUrl: patchStep.imageUrl == null ? current.imageUrl ?? null : String(patchStep.imageUrl),
+      windowsImageUrl: patchStep.windowsImageUrl == null ? current.windowsImageUrl ?? null : String(patchStep.windowsImageUrl),
+      macosImageUrl: patchStep.macosImageUrl == null ? current.macosImageUrl ?? null : String(patchStep.macosImageUrl),
+      androidImageUrl: patchStep.androidImageUrl == null ? current.androidImageUrl ?? null : String(patchStep.androidImageUrl),
       actionButtons: patchStep.actionButtons == null ? normalizeActionButtons(current.actionButtons ?? []) : normalizeActionButtons(patchStep.actionButtons),
     };
   }
@@ -2251,6 +2318,29 @@ export const processAutomationJob = async (jobId: string) => {
 
   try {
     let payload = claim.payload ?? { title: 'Notification', body: '' };
+    let subscriberPlatform: string | null = null;
+    let subscriberBrowser: string | null = null;
+
+    if (claim.subscriber_id) {
+      const subscriberRows = await sql`
+        SELECT platform, browser
+        FROM subscribers
+        WHERE id = ${claim.subscriber_id}
+        LIMIT 1
+      `;
+      subscriberPlatform = subscriberRows[0]?.platform == null ? null : String(subscriberRows[0].platform);
+      subscriberBrowser = subscriberRows[0]?.browser == null ? null : String(subscriberRows[0].browser);
+    } else if (payload.externalId) {
+      const subscriberRows = await sql`
+        SELECT platform, browser
+        FROM subscribers
+        WHERE shop_domain = ${claim.shop_domain}
+          AND external_id = ${String(payload.externalId)}
+        LIMIT 1
+      `;
+      subscriberPlatform = subscriberRows[0]?.platform == null ? null : String(subscriberRows[0].platform);
+      subscriberBrowser = subscriberRows[0]?.browser == null ? null : String(subscriberRows[0].browser);
+    }
 
     const ruleRows = await sql`
       SELECT enabled, config
@@ -2292,6 +2382,9 @@ export const processAutomationJob = async (jobId: string) => {
         targetUrl: step.targetUrl ?? payload.targetUrl ?? null,
         iconUrl: step.iconUrl ?? payload.iconUrl ?? null,
         imageUrl: step.imageUrl ?? payload.imageUrl ?? null,
+        windowsImageUrl: step.windowsImageUrl ?? payload.windowsImageUrl ?? null,
+        macosImageUrl: step.macosImageUrl ?? payload.macosImageUrl ?? null,
+        androidImageUrl: step.androidImageUrl ?? payload.androidImageUrl ?? null,
         metadata: {
           ...(payload.metadata ?? {}),
           stepKey: payloadStepKey,
@@ -2388,6 +2481,9 @@ export const processAutomationJob = async (jobId: string) => {
         targetUrl: step.targetUrl ?? payload.targetUrl ?? null,
         iconUrl: step.iconUrl ?? payload.iconUrl ?? null,
         imageUrl: step.imageUrl ?? payload.imageUrl ?? null,
+        windowsImageUrl: step.windowsImageUrl ?? payload.windowsImageUrl ?? null,
+        macosImageUrl: step.macosImageUrl ?? payload.macosImageUrl ?? null,
+        androidImageUrl: step.androidImageUrl ?? payload.androidImageUrl ?? null,
         metadata: {
           ...(payload.metadata ?? {}),
           stepKey: payloadStepKey,
@@ -2416,6 +2512,9 @@ export const processAutomationJob = async (jobId: string) => {
         targetUrl: step.targetUrl ?? payload.targetUrl ?? null,
         iconUrl: step.iconUrl ?? payload.iconUrl ?? null,
         imageUrl: step.imageUrl ?? payload.imageUrl ?? null,
+        windowsImageUrl: step.windowsImageUrl ?? payload.windowsImageUrl ?? null,
+        macosImageUrl: step.macosImageUrl ?? payload.macosImageUrl ?? null,
+        androidImageUrl: step.androidImageUrl ?? payload.androidImageUrl ?? null,
         metadata: {
           ...(payload.metadata ?? {}),
           stepKey: payloadStepKey,
@@ -2439,7 +2538,16 @@ export const processAutomationJob = async (jobId: string) => {
       ...payload,
       targetUrl: destination.targetUrl,
       iconUrl: destination.iconUrl,
-      imageUrl: destination.imageUrl,
+      imageUrl: selectAutomationImageForDevice({
+        ...payload,
+        imageUrl: destination.imageUrl,
+        windowsImageUrl: destination.windowsImageUrl,
+        macosImageUrl: destination.macosImageUrl,
+        androidImageUrl: destination.androidImageUrl,
+      }, subscriberPlatform, subscriberBrowser),
+      windowsImageUrl: destination.windowsImageUrl,
+      macosImageUrl: destination.macosImageUrl,
+      androidImageUrl: destination.androidImageUrl,
       metadata: {
         ...(payload.metadata ?? {}),
         actionButtons: destination.actionButtons,
@@ -2627,6 +2735,9 @@ export const recordSubscriberActivity = async (input: {
             targetUrl: step.targetUrl ?? input.pageUrl ?? null,
             iconUrl: step.iconUrl ?? null,
             imageUrl: step.imageUrl ?? null,
+            windowsImageUrl: step.windowsImageUrl ?? null,
+            macosImageUrl: step.macosImageUrl ?? null,
+            androidImageUrl: step.androidImageUrl ?? null,
             campaignLabel: `browse_abandonment_15m:${stepKey}`,
             metadata: {
               stepKey,
@@ -2667,6 +2778,9 @@ export const recordSubscriberActivity = async (input: {
             targetUrl: step.targetUrl ?? input.pageUrl ?? '/cart',
             iconUrl: step.iconUrl ?? null,
             imageUrl: step.imageUrl ?? null,
+            windowsImageUrl: step.windowsImageUrl ?? null,
+            macosImageUrl: step.macosImageUrl ?? null,
+            androidImageUrl: step.androidImageUrl ?? null,
             campaignLabel: `cart_abandonment_30m:${stepKey}`,
             metadata: {
               stepKey,
@@ -4055,6 +4169,9 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
           targetUrl: step.targetUrl ?? null,
           iconUrl: step.iconUrl ?? null,
           imageUrl: step.imageUrl ?? null,
+          windowsImageUrl: step.windowsImageUrl ?? null,
+          macosImageUrl: step.macosImageUrl ?? null,
+          androidImageUrl: step.androidImageUrl ?? null,
           metadata: {
             stepKey,
             actionButtons: step.actionButtons ?? [],
