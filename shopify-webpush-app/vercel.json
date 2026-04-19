@@ -1,17 +1,3 @@
 {
-  "framework": "nextjs",
-  "crons": [
-    {
-      "path": "/api/cron/process-automations",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/cron/process-campaigns",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/cron/process-ingestion",
-      "schedule": "* * * * *"
-    }
-  ]
+  "framework": "nextjs"
 }
