@@ -6,10 +6,10 @@ compatibility_date = "2024-09-23"
 crons = ["* * * * *"]
 
 [vars]
-APP_URL = "https://push-eagle-dashboard.vercel.app"
-PROCESS_CAMPAIGNS_URL = "https://push-eagle-dashboard.vercel.app/api/cron/process-campaigns"
-PROCESS_AUTOMATIONS_URL = "https://push-eagle-dashboard.vercel.app/api/cron/process-automations"
-PROCESS_INGESTION_URL = "https://push-eagle-dashboard.vercel.app/api/cron/process-ingestion"
+APP_URL = "https://push-eagle.vercel.app"
+PROCESS_CAMPAIGNS_URL = "https://push-eagle.vercel.app/api/cron/process-campaigns"
+PROCESS_AUTOMATIONS_URL = "https://push-eagle.vercel.app/api/cron/process-automations"
+PROCESS_INGESTION_URL = "https://push-eagle.vercel.app/api/cron/process-ingestion"
 CAMPAIGN_SHARDS = "4"
 AUTOMATION_SHARDS = "6"
 INGESTION_SHARDS = "4"

@@ -2105,6 +2105,43 @@ export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIn
   }>;
 };
 
+export const processDueAutomationJobsForShop = async (shopDomain: string, limit = 50, maxConcurrent = 10) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const jobs = await sql`
+    SELECT id
+    FROM automation_jobs
+    WHERE shop_domain = ${shopDomain}
+      AND status = 'pending'
+      AND due_at <= NOW()
+    ORDER BY due_at ASC
+    LIMIT ${limit}
+  `;
+
+  const processed = [] as Array<{ jobId: string; processed: boolean; error?: string }>;
+
+  for (let index = 0; index < jobs.length; index += maxConcurrent) {
+    const chunk = jobs.slice(index, index + maxConcurrent);
+    const chunkResults = await Promise.all(
+      chunk.map(async (job) => {
+        const jobId = String(job.id);
+        const result = await processAutomationJob(jobId);
+        return { jobId, processed: Boolean(result.processed), error: result.error };
+      }),
+    );
+
+    processed.push(...chunkResults);
+  }
+
+  return {
+    dueJobs: jobs.length,
+    sentCount: processed.filter((item) => item.processed).length,
+    failedCount: processed.filter((item) => !item.processed && item.error).length,
+    processed,
+  };
+};
+
 export const processAutomationJob = async (jobId: string) => {
   await ensureSchema();
   const sql = getNeonSql();
@@ -3979,7 +4016,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
         ruleKey: 'welcome_subscriber',
         tokenId,
         subscriberId,
-        dedupeKey: `welcome:${input.shopDomain}:token:${tokenId}:${stepKey}`,
+        dedupeKey: `welcome:${input.shopDomain}:external:${input.externalId}:${stepKey}`,
         dueAt,
         payload: {
           title: step.title,

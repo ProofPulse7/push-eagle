@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { recordSubscriberActivity } from '@/lib/server/data/store';
+import { processDueAutomationJobsForShop, recordSubscriberActivity } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -40,6 +40,8 @@ export async function POST(request: Request) {
       cartToken: body.cartToken,
       metadata: body.metadata,
     });
+
+    void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
 
     return NextResponse.json({ ok: true, ...result }, { headers: corsHeaders });
   } catch (error) {

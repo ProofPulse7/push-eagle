@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { getWelcomeAutomationDiagnostics } from '@/lib/server/data/store';
+import { getWelcomeAutomationDiagnostics, processDueAutomationJobsForShop } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 const getRequestErrorMessage = (error: unknown) => {
@@ -15,11 +15,13 @@ const getRequestErrorMessage = (error: unknown) => {
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
+    const processing = await processDueAutomationJobsForShop(shopDomain, 50, 10);
     const diagnostics = await getWelcomeAutomationDiagnostics(shopDomain);
 
     console.log('[welcome-diagnostics]', {
       shopDomain,
       checkedAt: diagnostics.checkedAt,
+      processing,
       reminder2: diagnostics.summary.reminder2,
       reminder3: diagnostics.summary.reminder3,
       staleProcessing: diagnostics.summary.staleProcessing,
@@ -29,6 +31,7 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         ok: true,
+        processing,
         ...diagnostics,
       },
       {

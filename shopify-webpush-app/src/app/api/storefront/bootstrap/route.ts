@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
-import { getMerchantCapabilitySnapshot, getOptInSettings } from '@/lib/server/data/store';
+import { getMerchantCapabilitySnapshot, getOptInSettings, processDueAutomationJobsForShop } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getAnonymousExternalId, getCustomerExternalId } from '@/lib/server/storefront-identity';
 
@@ -60,6 +60,8 @@ export async function GET(request: Request) {
 
     const optIn = await getOptInSettings(shopDomain);
   const shopifyCapabilities = await getMerchantCapabilitySnapshot(shopDomain);
+
+    void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
 
     const existingCookieId = cookieStore.get(cookieName)?.value ?? null;
     const externalId = customerExternalId ?? existingCookieId ?? getAnonymousExternalId();
