@@ -78,6 +78,53 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
+    useEffect(() => {
+        const activeShop = shopDomain.trim().toLowerCase();
+        if (!activeShop) {
+            return;
+        }
+
+        let isMounted = true;
+
+        fetch(`/api/settings/overview?shop=${encodeURIComponent(activeShop)}`)
+            .then(async (res) => {
+                const data = await res.json();
+                if (!res.ok || !data?.ok || !isMounted) {
+                    return;
+                }
+
+                const nextStoreUrl = String(data.storeUrl ?? '').trim();
+                if (nextStoreUrl && nextStoreUrl !== storeUrl) {
+                    setStoreUrlState(nextStoreUrl);
+                    localStorage.setItem('storeUrl', nextStoreUrl);
+                } else if (!nextStoreUrl && !storeUrl) {
+                    const fallbackStoreUrl = `https://${activeShop}`;
+                    setStoreUrlState(fallbackStoreUrl);
+                    localStorage.setItem('storeUrl', fallbackStoreUrl);
+                }
+            })
+            .catch(() => undefined);
+
+        fetch(`/api/settings/branding?shop=${encodeURIComponent(activeShop)}`)
+            .then(async (res) => {
+                const data = await res.json();
+                if (!res.ok || !data?.ok || !isMounted) {
+                    return;
+                }
+
+                const nextLogoUrl = String(data.logoUrl ?? '').trim();
+                if (nextLogoUrl && nextLogoUrl !== logo.preview) {
+                    setLogoState({ file: null, preview: nextLogoUrl });
+                    localStorage.setItem('brandLogo', nextLogoUrl);
+                }
+            })
+            .catch(() => undefined);
+
+        return () => {
+            isMounted = false;
+        };
+    }, [shopDomain, storeUrl, logo.preview]);
+
     const setStoreUrl = (url: string) => {
         setStoreUrlState(url);
         localStorage.setItem('storeUrl', url);

@@ -10,28 +10,39 @@ import { useSettings } from '@/context/settings-context';
 type Notification = {
     title: string;
     message: string;
-    iconUrl: string;
+    iconUrl?: string | null;
     heroUrl?: string | null;
+    windowsImageUrl?: string | null;
+    macosImageUrl?: string | null;
+    androidImageUrl?: string | null;
     siteName: string;
     actionButtons?: { title: string; link: string }[];
 };
 
 export function InlineNotificationPreview({ notification, device }: { notification: Notification, device: string }) {
-    const { title, message, iconUrl, heroUrl, siteName, actionButtons } = notification;
-    const { storeUrl } = useSettings();
+    const { title, message, iconUrl, heroUrl, windowsImageUrl, macosImageUrl, androidImageUrl, actionButtons } = notification;
+    const { storeUrl, logo } = useSettings();
+    const effectiveIcon = iconUrl || logo.preview || null;
+    const effectiveHero = device === 'windows'
+        ? (windowsImageUrl || heroUrl || null)
+        : device === 'macos'
+            ? (macosImageUrl || heroUrl || null)
+            : device === 'android'
+                ? (androidImageUrl || heroUrl || null)
+                : (heroUrl || null);
 
     const renderPreview = () => {
         switch (device) {
             case 'windows':
-                return <WindowsPreview title={title} message={message} link={storeUrl} hero={heroUrl || null} actionButtons={actionButtons || []} showDeviceName={false} />;
+                return <WindowsPreview title={title} message={message} link={storeUrl} hero={effectiveHero} actionButtons={actionButtons || []} showDeviceName={false} />;
             case 'macos':
-                 return <MacOSPreview title={title} message={message} link={storeUrl} icon={iconUrl} hero={heroUrl || null} actionButtons={actionButtons || []} showDeviceName={false} />;
+                 return <MacOSPreview title={title} message={message} link={storeUrl} icon={effectiveIcon} hero={effectiveHero} actionButtons={actionButtons || []} showDeviceName={false} />;
             case 'android':
-                return <AndroidPreview title={title} message={message} link={storeUrl} icon={iconUrl} hero={heroUrl || null} actionButtons={actionButtons || []} showDeviceName={false} />;
+                return <AndroidPreview title={title} message={message} link={storeUrl} icon={effectiveIcon} hero={effectiveHero} actionButtons={actionButtons || []} showDeviceName={false} />;
             case 'ios':
-                return <IOSPreview title={title} message={message} link={storeUrl} icon={iconUrl} showDeviceName={false} />;
+                return <IOSPreview title={title} message={message} link={storeUrl} icon={effectiveIcon} showDeviceName={false} />;
             default:
-                return <AndroidPreview title={title} message={message} link={storeUrl} icon={iconUrl} hero={heroUrl || null} actionButtons={actionButtons || []} showDeviceName={false} />;
+                return <AndroidPreview title={title} message={message} link={storeUrl} icon={effectiveIcon} hero={effectiveHero} actionButtons={actionButtons || []} showDeviceName={false} />;
         }
     };
 

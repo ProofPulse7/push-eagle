@@ -22,7 +22,7 @@ export function AutomationComposer({
     automationRuleKey = 'welcome_subscriber',
 }: {
     automationPath?: string;
-    automationRuleKey?: 'welcome_subscriber' | 'cart_abandonment_30m' | 'browse_abandonment_15m';
+    automationRuleKey?: 'welcome_subscriber' | 'cart_abandonment_30m' | 'browse_abandonment_15m' | 'shipping_notifications' | 'back_in_stock' | 'price_drop';
 }) {
     const { 
         title, setTitle, 
@@ -46,15 +46,15 @@ export function AutomationComposer({
 
     const handleEditedImageSave = (dataUrl: string, type: string) => {
         if (type === 'windows') {
-            setWindowsHero({ file: null, preview: dataUrl });
+            setWindowsHero({ ...windowsHero, file: null, preview: dataUrl, originalPreview: windowsHero.originalPreview ?? windowsHero.preview });
             return;
         }
         if (type === 'mac') {
-            setMacHero({ file: null, preview: dataUrl });
+            setMacHero({ ...macHero, file: null, preview: dataUrl, originalPreview: macHero.originalPreview ?? macHero.preview });
             return;
         }
         if (type === 'android') {
-            setAndroidHero({ file: null, preview: dataUrl });
+            setAndroidHero({ ...androidHero, file: null, preview: dataUrl, originalPreview: androidHero.originalPreview ?? androidHero.preview });
             return;
         }
         if (type === 'logo') {
@@ -97,11 +97,11 @@ export function AutomationComposer({
         if (imageType === 'logo') {
             setLogo({ file, preview: previewUrl });
         } else {
-            const newImageValue = { file, preview: previewUrl };
+            const newImageValue = { file, preview: previewUrl, originalPreview: previewUrl };
             if (isFirstHeroUpload) {
-                setWindowsHero(newImageValue);
-                setMacHero(newImageValue);
-                setAndroidHero(newImageValue);
+                setWindowsHero({ ...newImageValue });
+                setMacHero({ ...newImageValue });
+                setAndroidHero({ ...newImageValue });
                 checkImageDimensions(file, 'windows');
                 checkImageDimensions(file, 'mac');
                 checkImageDimensions(file, 'android');

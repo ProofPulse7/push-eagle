@@ -228,6 +228,25 @@ type BrowseRuleConfig = {
   steps: Record<BrowseStepKey, WelcomeStepConfig>;
 };
 
+type ShippingStepKey = 'shipping-1';
+
+type ShippingRuleConfig = {
+  sendWhen: string[];
+  steps: Record<ShippingStepKey, WelcomeStepConfig>;
+};
+
+type BackInStockStepKey = 'stock-1';
+
+type BackInStockRuleConfig = {
+  steps: Record<BackInStockStepKey, WelcomeStepConfig>;
+};
+
+type PriceDropStepKey = 'price-1';
+
+type PriceDropRuleConfig = {
+  steps: Record<PriceDropStepKey, WelcomeStepConfig>;
+};
+
 type IngestionJobType = 'pixel_event' | 'shopify_order_create';
 
 type PixelIngestionPayload = {
@@ -1272,6 +1291,54 @@ const DEFAULT_BROWSE_STEPS: Record<BrowseStepKey, WelcomeStepConfig> = {
   },
 };
 
+const DEFAULT_SHIPPING_STEPS: Record<ShippingStepKey, WelcomeStepConfig> = {
+  'shipping-1': {
+    enabled: true,
+    delayMinutes: 0,
+    title: 'Your order is on the way',
+    body: 'There is a new fulfillment update for your order.',
+    targetUrl: '/',
+    iconUrl: null,
+    imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
+    actionButtons: [{ title: 'Track Package', link: '/' }],
+  },
+};
+
+const DEFAULT_BACK_IN_STOCK_STEPS: Record<BackInStockStepKey, WelcomeStepConfig> = {
+  'stock-1': {
+    enabled: true,
+    delayMinutes: 0,
+    title: 'Back in Stock Alert',
+    body: '{{product_name}} is now back in stock. Buy now before it runs out again.',
+    targetUrl: '/',
+    iconUrl: null,
+    imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
+    actionButtons: [{ title: 'Shop Now', link: '/' }],
+  },
+};
+
+const DEFAULT_PRICE_DROP_STEPS: Record<PriceDropStepKey, WelcomeStepConfig> = {
+  'price-1': {
+    enabled: true,
+    delayMinutes: 0,
+    title: 'Price Drop Alert',
+    body: '{{product_name}} price dropped from {{subscribed_price}} to {{current_price}}',
+    targetUrl: '/',
+    iconUrl: null,
+    imageUrl: null,
+    windowsImageUrl: null,
+    macosImageUrl: null,
+    androidImageUrl: null,
+    actionButtons: [{ title: 'View Item', link: '/' }],
+  },
+};
+
 const deepCloneStepDefaults = <T extends string>(defaults: Record<T, WelcomeStepConfig>): Record<T, WelcomeStepConfig> => {
   return JSON.parse(JSON.stringify(defaults)) as Record<T, WelcomeStepConfig>;
 };
@@ -1286,6 +1353,18 @@ const deepCloneCartDefaults = (): Record<CartStepKey, WelcomeStepConfig> => {
 
 const deepCloneBrowseDefaults = (): Record<BrowseStepKey, WelcomeStepConfig> => {
   return deepCloneStepDefaults(DEFAULT_BROWSE_STEPS);
+};
+
+const deepCloneShippingDefaults = (): Record<ShippingStepKey, WelcomeStepConfig> => {
+  return deepCloneStepDefaults(DEFAULT_SHIPPING_STEPS);
+};
+
+const deepCloneBackInStockDefaults = (): Record<BackInStockStepKey, WelcomeStepConfig> => {
+  return deepCloneStepDefaults(DEFAULT_BACK_IN_STOCK_STEPS);
+};
+
+const deepClonePriceDropDefaults = (): Record<PriceDropStepKey, WelcomeStepConfig> => {
+  return deepCloneStepDefaults(DEFAULT_PRICE_DROP_STEPS);
 };
 
 const toSafeDelayMinutes = (value: unknown, fallback: number) => {
@@ -1354,6 +1433,26 @@ const parseBrowseRuleConfig = (config: unknown): BrowseRuleConfig => {
   return parseSteppedRuleConfig(config, deepCloneBrowseDefaults);
 };
 
+const parseShippingRuleConfig = (config: unknown): ShippingRuleConfig => {
+  const raw = (config ?? {}) as Record<string, unknown>;
+  const sendWhen = Array.isArray(raw.sendWhen)
+    ? raw.sendWhen.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
+    : ['in_transit', 'out_for_delivery', 'delivered'];
+
+  return {
+    sendWhen,
+    ...parseSteppedRuleConfig(config, deepCloneShippingDefaults),
+  };
+};
+
+const parseBackInStockRuleConfig = (config: unknown): BackInStockRuleConfig => {
+  return parseSteppedRuleConfig(config, deepCloneBackInStockDefaults);
+};
+
+const parsePriceDropRuleConfig = (config: unknown): PriceDropRuleConfig => {
+  return parseSteppedRuleConfig(config, deepClonePriceDropDefaults);
+};
+
 const mergeSteppedRuleConfig = <T extends string>(
   existingConfig: unknown,
   patchConfig: unknown,
@@ -1398,6 +1497,25 @@ const mergeRuleConfig = (ruleKey: AutomationRuleKey, existingConfig: unknown, pa
     return mergeSteppedRuleConfig(existingConfig, patchConfig, deepCloneBrowseDefaults);
   }
 
+  if (ruleKey === 'shipping_notifications') {
+    const rawExisting = (existingConfig ?? {}) as Record<string, unknown>;
+    const rawPatch = (patchConfig ?? {}) as Record<string, unknown>;
+    return {
+      sendWhen: Array.isArray(rawPatch.sendWhen)
+        ? rawPatch.sendWhen.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
+        : parseShippingRuleConfig(rawExisting).sendWhen,
+      ...mergeSteppedRuleConfig(existingConfig, patchConfig, deepCloneShippingDefaults),
+    };
+  }
+
+  if (ruleKey === 'back_in_stock') {
+    return mergeSteppedRuleConfig(existingConfig, patchConfig, deepCloneBackInStockDefaults);
+  }
+
+  if (ruleKey === 'price_drop') {
+    return mergeSteppedRuleConfig(existingConfig, patchConfig, deepClonePriceDropDefaults);
+  }
+
   return { ...(existingConfig as Record<string, unknown>), ...(patchConfig as Record<string, unknown>) };
 };
 
@@ -1406,9 +1524,9 @@ const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean
   { key: 'browse_abandonment_15m', enabled: true, config: parseBrowseRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'cart_abandonment_30m', enabled: true, config: parseCartRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'checkout_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
-  { key: 'shipping_notifications', enabled: true, config: { sendWhen: ['in_transit', 'out_for_delivery', 'delivered'] } },
-  { key: 'back_in_stock', enabled: true, config: {} },
-  { key: 'price_drop', enabled: true, config: {} },
+  { key: 'shipping_notifications', enabled: true, config: parseShippingRuleConfig(null) as unknown as Record<string, unknown> },
+  { key: 'back_in_stock', enabled: true, config: parseBackInStockRuleConfig(null) as unknown as Record<string, unknown> },
+  { key: 'price_drop', enabled: true, config: parsePriceDropRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'win_back_7d', enabled: false, config: { delayDays: 7 } },
   { key: 'post_purchase_followup', enabled: false, config: { delayDays: 2 } },
 ];
@@ -1486,6 +1604,69 @@ const ensureAutomationRules = async (shopDomain: string) => {
           updated_at = NOW()
       WHERE shop_domain = ${shopDomain}
         AND rule_key = 'browse_abandonment_15m'
+    `;
+  }
+
+  const shippingRows = await sql`
+    SELECT config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'shipping_notifications'
+    LIMIT 1
+  `;
+
+  const shippingConfig = (shippingRows[0]?.config ?? {}) as Record<string, unknown>;
+  const hasShippingSteps = Boolean((shippingConfig.steps as Record<string, unknown> | undefined));
+  if (!hasShippingSteps) {
+    const normalized = parseShippingRuleConfig(shippingConfig);
+    await sql`
+      UPDATE automation_rules
+      SET config = ${JSON.stringify(normalized)}::jsonb,
+          updated_at = NOW()
+      WHERE shop_domain = ${shopDomain}
+        AND rule_key = 'shipping_notifications'
+    `;
+  }
+
+  const backInStockRows = await sql`
+    SELECT config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'back_in_stock'
+    LIMIT 1
+  `;
+
+  const backInStockConfig = (backInStockRows[0]?.config ?? {}) as Record<string, unknown>;
+  const hasBackInStockSteps = Boolean((backInStockConfig.steps as Record<string, unknown> | undefined));
+  if (!hasBackInStockSteps) {
+    const normalized = parseBackInStockRuleConfig(backInStockConfig);
+    await sql`
+      UPDATE automation_rules
+      SET config = ${JSON.stringify(normalized)}::jsonb,
+          updated_at = NOW()
+      WHERE shop_domain = ${shopDomain}
+        AND rule_key = 'back_in_stock'
+    `;
+  }
+
+  const priceDropRows = await sql`
+    SELECT config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'price_drop'
+    LIMIT 1
+  `;
+
+  const priceDropConfig = (priceDropRows[0]?.config ?? {}) as Record<string, unknown>;
+  const hasPriceDropSteps = Boolean((priceDropConfig.steps as Record<string, unknown> | undefined));
+  if (!hasPriceDropSteps) {
+    const normalized = parsePriceDropRuleConfig(priceDropConfig);
+    await sql`
+      UPDATE automation_rules
+      SET config = ${JSON.stringify(normalized)}::jsonb,
+          updated_at = NOW()
+      WHERE shop_domain = ${shopDomain}
+        AND rule_key = 'price_drop'
     `;
   }
 };
@@ -2523,6 +2704,102 @@ export const processAutomationJob = async (jobId: string) => {
       };
     }
 
+    if (claim.rule_key === 'shipping_notifications') {
+      const shippingConfig = parseShippingRuleConfig(ruleRows[0]?.config ?? null);
+      const stepKey = (payloadStepKey || 'shipping-1') as ShippingStepKey;
+      const step = shippingConfig.steps[stepKey];
+
+      if (!step?.enabled) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Shipping notification step is disabled.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        return { processed: false, error: 'Shipping notification step is disabled.' };
+      }
+
+      payload = {
+        ...payload,
+        title: step.title || payload.title,
+        body: step.body || payload.body,
+        targetUrl: step.targetUrl ?? payload.targetUrl ?? null,
+        iconUrl: step.iconUrl ?? payload.iconUrl ?? null,
+        imageUrl: step.imageUrl ?? payload.imageUrl ?? null,
+        windowsImageUrl: step.windowsImageUrl ?? payload.windowsImageUrl ?? null,
+        macosImageUrl: step.macosImageUrl ?? payload.macosImageUrl ?? null,
+        androidImageUrl: step.androidImageUrl ?? payload.androidImageUrl ?? null,
+        metadata: {
+          ...(payload.metadata ?? {}),
+          stepKey,
+          actionButtons: step.actionButtons ?? [],
+        },
+      };
+    }
+
+    if (claim.rule_key === 'back_in_stock') {
+      const backInStockConfig = parseBackInStockRuleConfig(ruleRows[0]?.config ?? null);
+      const stepKey = (payloadStepKey || 'stock-1') as BackInStockStepKey;
+      const step = backInStockConfig.steps[stepKey];
+
+      if (!step?.enabled) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Back-in-stock notification step is disabled.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        return { processed: false, error: 'Back-in-stock notification step is disabled.' };
+      }
+
+      payload = {
+        ...payload,
+        title: step.title || payload.title,
+        body: step.body || payload.body,
+        targetUrl: step.targetUrl ?? payload.targetUrl ?? null,
+        iconUrl: step.iconUrl ?? payload.iconUrl ?? null,
+        imageUrl: step.imageUrl ?? payload.imageUrl ?? null,
+        windowsImageUrl: step.windowsImageUrl ?? payload.windowsImageUrl ?? null,
+        macosImageUrl: step.macosImageUrl ?? payload.macosImageUrl ?? null,
+        androidImageUrl: step.androidImageUrl ?? payload.androidImageUrl ?? null,
+        metadata: {
+          ...(payload.metadata ?? {}),
+          stepKey,
+          actionButtons: step.actionButtons ?? [],
+        },
+      };
+    }
+
+    if (claim.rule_key === 'price_drop') {
+      const priceDropConfig = parsePriceDropRuleConfig(ruleRows[0]?.config ?? null);
+      const stepKey = (payloadStepKey || 'price-1') as PriceDropStepKey;
+      const step = priceDropConfig.steps[stepKey];
+
+      if (!step?.enabled) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Price-drop notification step is disabled.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        return { processed: false, error: 'Price-drop notification step is disabled.' };
+      }
+
+      payload = {
+        ...payload,
+        title: step.title || payload.title,
+        body: step.body || payload.body,
+        targetUrl: step.targetUrl ?? payload.targetUrl ?? null,
+        iconUrl: step.iconUrl ?? payload.iconUrl ?? null,
+        imageUrl: step.imageUrl ?? payload.imageUrl ?? null,
+        windowsImageUrl: step.windowsImageUrl ?? payload.windowsImageUrl ?? null,
+        macosImageUrl: step.macosImageUrl ?? payload.macosImageUrl ?? null,
+        androidImageUrl: step.androidImageUrl ?? payload.androidImageUrl ?? null,
+        metadata: {
+          ...(payload.metadata ?? {}),
+          stepKey,
+          actionButtons: step.actionButtons ?? [],
+        },
+      };
+    }
+
     const skipReason = await getAutomationSkipReason(claim.shop_domain, payload);
     if (skipReason) {
       await sql`
@@ -3411,6 +3688,7 @@ export const upsertShopifyProductVariants = async (input: UpsertShopifyProductVa
       productId: input.productId,
       triggeredAt: updatedAt.toISOString(),
       metadata: {
+        stepKey: 'price-1',
         variantIds: priceDropCandidates,
       },
     },
@@ -3474,6 +3752,7 @@ export const processInventoryLevelUpdate = async (input: ProcessInventoryLevelUp
         productId: candidate.productId,
         triggeredAt: updatedAt.toISOString(),
         metadata: {
+          stepKey: 'stock-1',
           variantId: candidate.variantId,
           inventoryItemId: input.inventoryItemId,
           available: input.available,
@@ -3583,6 +3862,7 @@ export const processFulfillmentUpdate = async (input: ProcessFulfillmentUpdateIn
       orderId: input.orderId,
       triggeredAt: updatedAt.toISOString(),
       metadata: {
+        stepKey: 'shipping-1',
         fulfillmentId: input.fulfillmentId,
         shipmentStatus: input.shipmentStatus ?? null,
         status: input.status ?? null,

@@ -23,20 +23,6 @@ import { useSettings } from '@/context/settings-context';
 const flowData = {
     title: "Price Drop",
     trigger: "When the price of a product is dropped",
-    notifications: [
-        {
-            id: 'price-1',
-            title: "Price Drop Alert",
-            notification: {
-                title: "Price Drop Alert!",
-                message: "Good news! The price of an item you liked has just dropped. Check it out now!",
-                iconUrl: "https://placehold.co/48x48.png",
-                heroUrl: "https://placehold.co/728x360.png",
-                siteName: "chrome.zahoorshop.com",
-                actionButtons: [{title: 'View Item', link: '#'}]
-            }
-        }
-    ]
 }
 
 export default function PriceDropPage() {
@@ -48,7 +34,7 @@ export default function PriceDropPage() {
     const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
     const [ruleEnabled, setRuleEnabled] = useState(false);
     const [saving, setSaving] = useState(false);
-    const notifications = flowData.notifications;
+    const [notifications, setNotifications] = useState([{ id: 'price-1', title: 'Price Drop Alert', notification: { title: 'Price Drop Alert!', message: 'Good news! The price of an item you liked has just dropped. Check it out now!', iconUrl: '', heroUrl: null, windowsImageUrl: null, macosImageUrl: null, androidImageUrl: null, siteName: '', actionButtons: [{ title: 'View Item', link: '/' }] } }]);
     const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
 
     useEffect(() => {
@@ -65,6 +51,26 @@ export default function PriceDropPage() {
                 if (rule) {
                     setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
                     setRuleEnabled(rule.enabled ?? false);
+                    const step = rule.config?.steps?.['price-1'];
+                    if (step) {
+                        setNotifications([
+                            {
+                                id: 'price-1',
+                                title: 'Price Drop Alert',
+                                notification: {
+                                    title: step.title ?? 'Price Drop Alert!',
+                                    message: step.body ?? 'Good news! The price of an item you liked has just dropped. Check it out now!',
+                                    iconUrl: step.iconUrl ?? '',
+                                    heroUrl: step.imageUrl ?? null,
+                                    windowsImageUrl: step.windowsImageUrl ?? null,
+                                    macosImageUrl: step.macosImageUrl ?? null,
+                                    androidImageUrl: step.androidImageUrl ?? null,
+                                    siteName: '',
+                                    actionButtons: step.actionButtons ?? [{ title: 'View Item', link: '/' }],
+                                },
+                            },
+                        ]);
+                    }
                 }
             })
             .catch(() => undefined);

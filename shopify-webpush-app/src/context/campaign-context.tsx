@@ -70,7 +70,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
     const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
     const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
-    const { logo, setLogo } = useSettings();
+    const { storeUrl, shopDomain, logo, setLogo } = useSettings();
     const [sendingOption, setSendingOption] = useState('now');
     const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
     const [scheduledTime, setScheduledTime] = useState('10:00 AM');
@@ -86,6 +86,17 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [flashSaleUrgencyText, setFlashSaleUrgencyText] = useState('⏰ Limited time offer!');
     // Recurring
     const [recurringPattern, setRecurringPattern] = useState('');
+
+    useEffect(() => {
+        if (primaryLink) {
+            return;
+        }
+
+        const fallbackStoreUrl = storeUrl || (shopDomain ? `https://${shopDomain}` : '');
+        if (fallbackStoreUrl) {
+            setPrimaryLink(fallbackStoreUrl);
+        }
+    }, [primaryLink, storeUrl, shopDomain]);
 
     const value: CampaignContextType = {
         title, setTitle,

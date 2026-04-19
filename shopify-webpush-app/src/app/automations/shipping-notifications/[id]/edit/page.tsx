@@ -1,28 +1,12 @@
 'use client';
 
-import React, { useEffect } from 'react';
-import { useParams } from 'next/navigation';
-import { useAutomationState } from '@/context/automation-context';
-import { ShippingNotificationComposer } from '@/components/automations/shipping-notification-composer';
-import { Skeleton } from '@/components/ui/skeleton';
+import React, { useEffect, useMemo } from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
 
-// Mock data, mirroring the structure from the flow page
-const flowData = {
-    notifications: [
-        {
-            id: 'shipping-1',
-            title: "Shipping Confirmation",
-            notification: {
-                title: "Your order {{order_name}} has been shipped",
-                message: "Click here to track your order",
-                iconUrl: "https://placehold.co/48x48.png",
-                heroUrl: null, // Shipping notifications usually don't have a hero image.
-                siteName: "chrome.zahoorshop.com",
-                actionButtons: [{title: 'Track Order', link: '#'}]
-            }
-        }
-    ]
-}
+import { AutomationComposer } from '@/components/automations/automation-composer';
+import { Skeleton } from '@/components/ui/skeleton';
+import { useAutomationState } from '@/context/automation-context';
+import { useSettings } from '@/context/settings-context';
 
 const ComposerSkeleton = () => (
     <div className="h-screen w-full grid grid-cols-1 lg:grid-cols-[minmax(0,_480px)_1fr]">
@@ -40,25 +24,73 @@ const ComposerSkeleton = () => (
     </div>
 )
 
-
 export default function EditShippingNotificationStepPage() {
     const params = useParams();
+    const searchParams = useSearchParams();
     const stepId = params.id as string;
+    const { shopDomain: settingsShop } = useSettings();
     const { initializeState, isInitialized } = useAutomationState();
 
-    const stepData = flowData.notifications.find(n => n.id === stepId);
+    const shopDomain = useMemo(() => {
+        return searchParams.get('shop') || settingsShop || '';
+    }, [searchParams, settingsShop]);
 
     useEffect(() => {
-        if (stepId && !isInitialized) {
-            if (stepData) {
-                initializeState(stepData);
-            }
+        if (!stepId || !shopDomain || isInitialized) {
+            return;
         }
-    }, [stepId, initializeState, isInitialized, stepData]);
+
+        fetch('/api/automations/rules?shop=' + encodeURIComponent(shopDomain))
+            .then((res) => res.json())
+            .then((payload) => {
+                if (!payload?.ok) {
+                    return;
+                }
+
+                const rule = (payload.rules ?? []).find((item: { ruleKey: string }) => item.ruleKey === 'shipping_notifications');
+                const step = (rule?.config?.steps?.[stepId] ?? null) as
+                    | {
+                            title?: string;
+                            body?: string;
+                            targetUrl?: string | null;
+                            iconUrl?: string | null;
+                            imageUrl?: string | null;
+                            windowsImageUrl?: string | null;
+                            macosImageUrl?: string | null;
+                            androidImageUrl?: string | null;
+                            actionButtons?: Array<{ title: string; link: string }>;
+                        }
+                    | null;
+
+                if (!step) {
+                    return;
+                }
+
+                initializeState({
+                    notification: {
+                        title: step.title ?? '',
+                        message: step.body ?? '',
+                        iconUrl: step.iconUrl ?? null,
+                        heroUrl: step.imageUrl ?? null,
+                        windowsHeroUrl: step.windowsImageUrl ?? null,
+                        macHeroUrl: step.macosImageUrl ?? null,
+                        androidHeroUrl: step.androidImageUrl ?? null,
+                        actionButtons: step.actionButtons ?? [],
+                        targetUrl: step.targetUrl ?? '',
+                    },
+                });
+            })
+            .catch(() => undefined);
+    }, [stepId, shopDomain, initializeState, isInitialized]);
 
     if (!isInitialized) {
         return <ComposerSkeleton />;
     }
 
-    return <ShippingNotificationComposer />;
+    return (
+        <AutomationComposer
+            automationPath="/automations/shipping-notifications"
+            automationRuleKey="shipping_notifications"
+        />
+    );
 }

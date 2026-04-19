@@ -1,9 +1,9 @@
 'use client';
-import React, { createContext, useState, useContext, ReactNode, useEffect, useCallback } from 'react';
+import React, { createContext, useState, useContext, ReactNode, useEffect, useCallback, useRef } from 'react';
 import { useSettings } from '@/context/settings-context';
 
 type ActionButton = { title: string; link: string };
-type ImageValue = { file: File | null; preview: string | null };
+type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
 type AutomationInitialState = {
     notification?: {
         title?: string;
@@ -50,14 +50,15 @@ export function useAutomationState() {
 }
 
 export function AutomationStateProvider({ children }: { children: ReactNode }) {
+    const blobUrlsRef = useRef<Set<string>>(new Set());
     const [isInitialized, setIsInitialized] = useState(false);
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
     const [primaryLink, setPrimaryLink] = useState('');
     const [actionButtons, setActionButtons] = useState<ActionButton[]>([]);
-    const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null });
-    const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null });
-    const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null });
+    const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
+    const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
+    const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
     const { storeUrl, shopDomain, logo, setLogo } = useSettings();
 
     const fallbackStoreUrl = storeUrl || (shopDomain ? `https://${shopDomain}` : '');
@@ -71,9 +72,12 @@ export function AutomationStateProvider({ children }: { children: ReactNode }) {
                 setLogo({ file: null, preview: initialState.notification.iconUrl || null });
             }
             const fallbackHeroUrl = initialState.notification.heroUrl || null;
-            setWindowsHero({ file: null, preview: initialState.notification.windowsHeroUrl || fallbackHeroUrl });
-            setMacHero({ file: null, preview: initialState.notification.macHeroUrl || fallbackHeroUrl });
-            setAndroidHero({ file: null, preview: initialState.notification.androidHeroUrl || fallbackHeroUrl });
+            const windowsHeroUrl = initialState.notification.windowsHeroUrl || fallbackHeroUrl;
+            const macHeroUrl = initialState.notification.macHeroUrl || fallbackHeroUrl;
+            const androidHeroUrl = initialState.notification.androidHeroUrl || fallbackHeroUrl;
+            setWindowsHero({ file: null, preview: windowsHeroUrl, originalPreview: windowsHeroUrl });
+            setMacHero({ file: null, preview: macHeroUrl, originalPreview: macHeroUrl });
+            setAndroidHero({ file: null, preview: androidHeroUrl, originalPreview: androidHeroUrl });
             setActionButtons(initialState.notification.actionButtons || []);
             setIsInitialized(true);
         }
@@ -93,13 +97,29 @@ export function AutomationStateProvider({ children }: { children: ReactNode }) {
     };
 
     useEffect(() => {
-        const allPreviews = [windowsHero.preview, macHero.preview, androidHero.preview, logo.preview];
+        const candidates = [
+            windowsHero.preview,
+            windowsHero.originalPreview,
+            macHero.preview,
+            macHero.originalPreview,
+            androidHero.preview,
+            androidHero.originalPreview,
+            logo.preview,
+        ];
+
+        candidates.forEach((url) => {
+            if (url && url.startsWith('blob:')) {
+                blobUrlsRef.current.add(url);
+            }
+        });
+    }, [windowsHero.preview, windowsHero.originalPreview, macHero.preview, macHero.originalPreview, androidHero.preview, androidHero.originalPreview, logo.preview]);
+
+    useEffect(() => {
         return () => {
-            allPreviews.forEach(p => {
-                if (p && p.startsWith('blob:')) URL.revokeObjectURL(p);
-            });
+            blobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+            blobUrlsRef.current.clear();
         };
-    }, [windowsHero.preview, macHero.preview, androidHero.preview, logo.preview]);
+    }, []);
 
     return (
         <AutomationContext.Provider value={value}>

@@ -23,20 +23,6 @@ import { useSettings } from '@/context/settings-context';
 const flowData = {
     title: "Back in Stock",
     trigger: "When a product is added back to your inventory",
-    notifications: [
-        {
-            id: 'stock-1',
-            title: "Restock Notification",
-            notification: {
-                title: "It's Back!",
-                message: "The item you wanted is back in stock. Grab it now before it's gone again!",
-                iconUrl: "https://placehold.co/48x48.png",
-                heroUrl: "https://placehold.co/728x360.png",
-                siteName: "chrome.zahoorshop.com",
-                actionButtons: [{title: 'Shop Now', link: '#'}]
-            }
-        }
-    ]
 }
 
 export default function BackInStockPage() {
@@ -45,7 +31,7 @@ export default function BackInStockPage() {
     const shopDomain = queryShop || settingsShop || '';
 
     const [previewDevice, setPreviewDevice] = useState<'windows' | 'macos' | 'android' | 'ios'>('android');
-    const notifications = flowData.notifications;
+    const [notifications, setNotifications] = useState([{ id: 'stock-1', title: 'Restock Notification', notification: { title: "It's Back!", message: "The item you wanted is back in stock. Grab it now before it's gone again!", iconUrl: '', heroUrl: null, windowsImageUrl: null, macosImageUrl: null, androidImageUrl: null, siteName: '', actionButtons: [{ title: 'Shop Now', link: '/' }] } }]);
     const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
     const [ruleEnabled, setRuleEnabled] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -65,6 +51,26 @@ export default function BackInStockPage() {
                 if (rule) {
                     setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
                     setRuleEnabled(rule.enabled ?? false);
+                    const step = rule.config?.steps?.['stock-1'];
+                    if (step) {
+                        setNotifications([
+                            {
+                                id: 'stock-1',
+                                title: 'Restock Notification',
+                                notification: {
+                                    title: step.title ?? "It's Back!",
+                                    message: step.body ?? 'The item you wanted is back in stock. Grab it now before it\'s gone again!',
+                                    iconUrl: step.iconUrl ?? '',
+                                    heroUrl: step.imageUrl ?? null,
+                                    windowsImageUrl: step.windowsImageUrl ?? null,
+                                    macosImageUrl: step.macosImageUrl ?? null,
+                                    androidImageUrl: step.androidImageUrl ?? null,
+                                    siteName: '',
+                                    actionButtons: step.actionButtons ?? [{ title: 'Shop Now', link: '/' }],
+                                },
+                            },
+                        ]);
+                    }
                 }
             })
             .catch(() => undefined);

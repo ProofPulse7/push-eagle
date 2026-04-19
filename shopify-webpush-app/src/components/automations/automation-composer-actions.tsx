@@ -17,7 +17,7 @@ interface AutomationComposerActionsProps {
     getAutomationData: () => any; // Function to get current state
     setSaveStatus: (status: 'Unsaved' | 'Saving...' | 'Changes saved') => void;
     automationPath: string;
-    automationRuleKey?: 'welcome_subscriber' | 'cart_abandonment_30m' | 'browse_abandonment_15m';
+    automationRuleKey?: 'welcome_subscriber' | 'cart_abandonment_30m' | 'browse_abandonment_15m' | 'shipping_notifications' | 'back_in_stock' | 'price_drop';
 }
 
 export const AutomationComposerActions = ({
