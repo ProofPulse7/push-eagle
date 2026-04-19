@@ -7,8 +7,10 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 const isAuthorized = (request: Request) => {
-  // Vercel Cron invokes routes with x-vercel-cron header but no custom auth headers.
-  if (request.headers.get('x-vercel-cron') === '1') {
+  // Vercel cron can arrive with varying header formats depending on platform/runtime.
+  const vercelCronHeader = (request.headers.get('x-vercel-cron') ?? '').trim().toLowerCase();
+  const userAgent = (request.headers.get('user-agent') ?? '').toLowerCase();
+  if (vercelCronHeader === '1' || vercelCronHeader === 'true' || userAgent.includes('vercel-cron')) {
     return true;
   }
 

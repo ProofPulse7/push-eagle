@@ -2016,6 +2016,14 @@ export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIn
   const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
   const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
 
+  // If a worker crashed mid-flight, move stale processing jobs back to pending.
+  await sql`
+    UPDATE automation_jobs
+    SET status = 'pending', updated_at = NOW()
+    WHERE status = 'processing'
+      AND updated_at < NOW() - INTERVAL '10 minutes'
+  `;
+
   const rows = await sql`
     SELECT j.id, j.shop_domain, j.rule_key, j.token_id, j.subscriber_id, j.payload, t.fcm_token
     FROM automation_jobs j
