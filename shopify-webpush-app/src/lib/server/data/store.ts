@@ -2156,6 +2156,27 @@ export const processAutomationJob = async (jobId: string) => {
     }
   }
 
+  if ((!token || tokenStatus !== 'active') && claim.payload?.externalId) {
+    const fallbackByExternalRows = await sql`
+      SELECT t.id, t.fcm_token, t.token_type, t.vapid_endpoint, t.vapid_p256dh, t.vapid_auth, t.status
+      FROM subscriber_tokens t
+      JOIN subscribers s ON s.id = t.subscriber_id
+      WHERE t.shop_domain = ${claim.shop_domain}
+        AND s.external_id = ${String(claim.payload.externalId)}
+        AND t.status = 'active'
+      ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC
+      LIMIT 1
+    `;
+
+    if (fallbackByExternalRows[0]) {
+      activeTokenRow = fallbackByExternalRows[0];
+      token = String(activeTokenRow?.fcm_token ?? '');
+      tokenType = String(activeTokenRow?.token_type ?? 'fcm');
+      tokenStatus = String(activeTokenRow?.status ?? '');
+      deliveryTokenId = Number(fallbackByExternalRows[0]?.id ?? 0) || deliveryTokenId;
+    }
+  }
+
   if (!token || tokenStatus !== 'active') {
     await sql`
       UPDATE automation_jobs
@@ -5312,6 +5333,171 @@ export const updateBrandingSettings = async (input: UpdateBrandingSettingsInput)
 
   return {
     logoUrl: input.logoUrl ?? null,
+  };
+};
+
+export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const jobsByStepStatusRows = await sql`
+    SELECT
+      COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key,
+      j.status,
+      COUNT(*)::INT AS total,
+      COUNT(*) FILTER (WHERE j.status = 'pending' AND j.due_at <= NOW())::INT AS due_now,
+      MAX(j.updated_at) AS last_updated_at
+    FROM automation_jobs j
+    WHERE j.shop_domain = ${shopDomain}
+      AND j.rule_key = 'welcome_subscriber'
+      AND COALESCE(j.payload -> 'metadata' ->> 'stepKey', '') IN ('reminder-1', 'reminder-2', 'reminder-3')
+    GROUP BY step_key, j.status
+    ORDER BY step_key ASC, j.status ASC
+  `;
+
+  const deliveryRows = await sql`
+    SELECT
+      COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key,
+      COUNT(*)::INT AS delivered,
+      MAX(d.delivered_at) AS last_delivered_at
+    FROM automation_deliveries d
+    JOIN automation_jobs j ON j.id = d.automation_job_id
+    WHERE d.shop_domain = ${shopDomain}
+      AND d.rule_key = 'welcome_subscriber'
+      AND COALESCE(j.payload -> 'metadata' ->> 'stepKey', '') IN ('reminder-1', 'reminder-2', 'reminder-3')
+    GROUP BY step_key
+    ORDER BY step_key ASC
+  `;
+
+  const staleProcessingRows = await sql`
+    SELECT COUNT(*)::INT AS stale_processing
+    FROM automation_jobs
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+      AND status = 'processing'
+      AND updated_at < NOW() - INTERVAL '10 minutes'
+      AND COALESCE(payload -> 'metadata' ->> 'stepKey', '') IN ('reminder-2', 'reminder-3')
+  `;
+
+  const recentRows = await sql`
+    SELECT
+      j.id,
+      COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key,
+      j.status,
+      j.attempts,
+      j.due_at,
+      j.sent_at,
+      j.updated_at,
+      j.error_message,
+      j.token_id,
+      j.subscriber_id,
+      j.payload ->> 'externalId' AS external_id,
+      t.status AS token_status,
+      t.last_seen_at
+    FROM automation_jobs j
+    LEFT JOIN subscriber_tokens t ON t.id = j.token_id
+    WHERE j.shop_domain = ${shopDomain}
+      AND j.rule_key = 'welcome_subscriber'
+      AND COALESCE(j.payload -> 'metadata' ->> 'stepKey', '') IN ('reminder-2', 'reminder-3')
+    ORDER BY j.created_at DESC
+    LIMIT 40
+  `;
+
+  const summary = {
+    reminder2: {
+      pending: 0,
+      dueNow: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      processing: 0,
+      delivered: 0,
+      lastDeliveredAt: null as string | null,
+    },
+    reminder3: {
+      pending: 0,
+      dueNow: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      processing: 0,
+      delivered: 0,
+      lastDeliveredAt: null as string | null,
+    },
+    staleProcessing: Number(staleProcessingRows[0]?.stale_processing ?? 0),
+  };
+
+  for (const row of jobsByStepStatusRows as Array<{ step_key: string; status: string; total: number; due_now: number }>) {
+    const stepKey = String(row.step_key);
+    const bucket = stepKey === 'reminder-2' ? summary.reminder2 : stepKey === 'reminder-3' ? summary.reminder3 : null;
+    if (!bucket) {
+      continue;
+    }
+
+    const status = String(row.status);
+    const total = Number(row.total ?? 0);
+    if (status === 'pending') {
+      bucket.pending += total;
+      bucket.dueNow += Number(row.due_now ?? 0);
+    } else if (status === 'sent') {
+      bucket.sent += total;
+    } else if (status === 'failed') {
+      bucket.failed += total;
+    } else if (status === 'skipped') {
+      bucket.skipped += total;
+    } else if (status === 'processing') {
+      bucket.processing += total;
+    }
+  }
+
+  for (const row of deliveryRows as Array<{ step_key: string; delivered: number; last_delivered_at: string | null }>) {
+    const stepKey = String(row.step_key);
+    const bucket = stepKey === 'reminder-2' ? summary.reminder2 : stepKey === 'reminder-3' ? summary.reminder3 : null;
+    if (!bucket) {
+      continue;
+    }
+
+    bucket.delivered = Number(row.delivered ?? 0);
+    bucket.lastDeliveredAt = row.last_delivered_at ? new Date(row.last_delivered_at).toISOString() : null;
+  }
+
+  const inferredIssues: string[] = [];
+  if (summary.reminder2.dueNow > 0 || summary.reminder3.dueNow > 0) {
+    inferredIssues.push('Due delayed welcome jobs exist; cron/processing path should pick them immediately.');
+  }
+  if (summary.reminder2.failed > 0 || summary.reminder3.failed > 0) {
+    inferredIssues.push('Some delayed jobs are failed; review recent error_message values and token_status.');
+  }
+  if (summary.staleProcessing > 0) {
+    inferredIssues.push('Stale processing jobs detected (>10m); worker interruption/backpressure likely occurred.');
+  }
+  if (summary.reminder2.sent === 0 && summary.reminder2.pending === 0 && summary.reminder2.failed === 0) {
+    inferredIssues.push('No reminder-2 jobs found; welcome step enqueue path may not be creating delayed jobs.');
+  }
+  if (summary.reminder3.sent === 0 && summary.reminder3.pending === 0 && summary.reminder3.failed === 0) {
+    inferredIssues.push('No reminder-3 jobs found; welcome step enqueue path may not be creating delayed jobs.');
+  }
+
+  return {
+    shopDomain,
+    checkedAt: new Date().toISOString(),
+    summary,
+    inferredIssues,
+    recentJobs: (recentRows as Array<Record<string, unknown>>).map((row) => ({
+      id: String(row.id ?? ''),
+      stepKey: String(row.step_key ?? ''),
+      status: String(row.status ?? ''),
+      attempts: Number(row.attempts ?? 0),
+      dueAt: row.due_at ? new Date(String(row.due_at)).toISOString() : null,
+      sentAt: row.sent_at ? new Date(String(row.sent_at)).toISOString() : null,
+      updatedAt: row.updated_at ? new Date(String(row.updated_at)).toISOString() : null,
+      errorMessage: row.error_message ? String(row.error_message) : null,
+      tokenId: row.token_id == null ? null : Number(row.token_id),
+      subscriberId: row.subscriber_id == null ? null : Number(row.subscriber_id),
+      externalId: row.external_id ? String(row.external_id) : null,
+      tokenStatus: row.token_status ? String(row.token_status) : null,
+      tokenLastSeenAt: row.last_seen_at ? new Date(String(row.last_seen_at)).toISOString() : null,
+    })),
   };
 };
 

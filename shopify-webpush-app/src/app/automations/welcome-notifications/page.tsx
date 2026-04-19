@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Fragment, useEffect, useState } from 'react';
+import React, { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, ChevronDown, TabletSmartphone, Zap } from 'lucide-react';
 
@@ -101,6 +101,51 @@ type WelcomeRuleStepConfig = {
   actionButtons?: Array<{ title: string; link: string }>;
 };
 
+type WelcomeDiagnosticsPayload = {
+  ok?: boolean;
+  shopDomain?: string;
+  checkedAt?: string;
+  summary?: {
+    reminder2?: {
+      pending?: number;
+      dueNow?: number;
+      sent?: number;
+      failed?: number;
+      skipped?: number;
+      processing?: number;
+      delivered?: number;
+      lastDeliveredAt?: string | null;
+    };
+    reminder3?: {
+      pending?: number;
+      dueNow?: number;
+      sent?: number;
+      failed?: number;
+      skipped?: number;
+      processing?: number;
+      delivered?: number;
+      lastDeliveredAt?: string | null;
+    };
+    staleProcessing?: number;
+  };
+  inferredIssues?: string[];
+  recentJobs?: Array<{
+    id: string;
+    stepKey: string;
+    status: string;
+    attempts: number;
+    dueAt: string | null;
+    sentAt: string | null;
+    updatedAt: string | null;
+    errorMessage: string | null;
+    tokenId: number | null;
+    subscriberId: number | null;
+    externalId: string | null;
+    tokenStatus: string | null;
+    tokenLastSeenAt: string | null;
+  }>;
+};
+
 const delayOptionsMinutes: Array<{ label: string; minutes: number }> = [
   { label: '0 minutes', minutes: 0 },
   { label: '3 minutes', minutes: 3 },
@@ -174,10 +219,12 @@ export default function WelcomeNotificationsPage() {
   const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
   const [ruleEnabled, setRuleEnabled] = useState(false);
+  const [copied, setCopied] = useState(false);
   const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
 
   const overviewUrl = shopDomain ? '/api/automations/overview?shop=' + encodeURIComponent(shopDomain) : '';
   const rulesUrl = shopDomain ? '/api/automations/rules?shop=' + encodeURIComponent(shopDomain) : '';
+  const diagnosticsUrl = shopDomain ? '/api/automations/welcome-diagnostics?shop=' + encodeURIComponent(shopDomain) : '';
 
   const { data: overviewPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; impressions?: number; clicks?: number; revenueCents?: number; enabled?: boolean }> }>({
     cacheKey: `welcome-overview:${shopDomain}`,
@@ -189,6 +236,13 @@ export default function WelcomeNotificationsPage() {
     cacheKey: `welcome-rules:${shopDomain}`,
     url: rulesUrl,
     enabled: Boolean(shopDomain),
+  });
+
+  const { data: diagnosticsPayload } = useCachedJson<WelcomeDiagnosticsPayload>({
+    cacheKey: `welcome-diagnostics:${shopDomain}`,
+    url: diagnosticsUrl,
+    enabled: Boolean(shopDomain),
+    refreshMs: 15_000,
   });
 
   useEffect(() => {
@@ -232,6 +286,22 @@ export default function WelcomeNotificationsPage() {
     );
   }, [rulesPayload]);
 
+  useEffect(() => {
+    if (!diagnosticsPayload?.ok) {
+      return;
+    }
+
+    // Temporary console diagnostics for delayed reminder debugging.
+    console.log('[welcome-diagnostics]', {
+      shopDomain,
+      checkedAt: diagnosticsPayload.checkedAt,
+      reminder2: diagnosticsPayload.summary?.reminder2,
+      reminder3: diagnosticsPayload.summary?.reminder3,
+      staleProcessing: diagnosticsPayload.summary?.staleProcessing,
+      issues: diagnosticsPayload.inferredIssues ?? [],
+    });
+  }, [diagnosticsPayload, shopDomain]);
+
   const saveWelcomeConfig = async (updatedNotifications: FlowNotification[]) => {
     if (!shopDomain) return;
 
@@ -247,6 +317,56 @@ export default function WelcomeNotificationsPage() {
         config,
       }),
     });
+  };
+
+  const diagnosticsReport = useMemo(() => {
+    if (!diagnosticsPayload?.ok) {
+      return 'Diagnostics unavailable. Check shop context and refresh this page.';
+    }
+
+    const reminder2 = diagnosticsPayload.summary?.reminder2;
+    const reminder3 = diagnosticsPayload.summary?.reminder3;
+    const issues = diagnosticsPayload.inferredIssues ?? [];
+    const recentJobs = diagnosticsPayload.recentJobs ?? [];
+
+    const recentText = recentJobs
+      .slice(0, 12)
+      .map((job) =>
+        [
+          `job=${job.id}`,
+          `step=${job.stepKey}`,
+          `status=${job.status}`,
+          `attempts=${job.attempts}`,
+          `dueAt=${job.dueAt ?? 'null'}`,
+          `sentAt=${job.sentAt ?? 'null'}`,
+          `updatedAt=${job.updatedAt ?? 'null'}`,
+          `tokenStatus=${job.tokenStatus ?? 'null'}`,
+          `error=${job.errorMessage ?? 'null'}`,
+        ].join(' | '),
+      )
+      .join('\n');
+
+    return [
+      `shop=${diagnosticsPayload.shopDomain ?? shopDomain}`,
+      `checkedAt=${diagnosticsPayload.checkedAt ?? 'n/a'}`,
+      `reminder-2 pending=${reminder2?.pending ?? 0} dueNow=${reminder2?.dueNow ?? 0} processing=${reminder2?.processing ?? 0} sent=${reminder2?.sent ?? 0} delivered=${reminder2?.delivered ?? 0} failed=${reminder2?.failed ?? 0} skipped=${reminder2?.skipped ?? 0} lastDeliveredAt=${reminder2?.lastDeliveredAt ?? 'null'}`,
+      `reminder-3 pending=${reminder3?.pending ?? 0} dueNow=${reminder3?.dueNow ?? 0} processing=${reminder3?.processing ?? 0} sent=${reminder3?.sent ?? 0} delivered=${reminder3?.delivered ?? 0} failed=${reminder3?.failed ?? 0} skipped=${reminder3?.skipped ?? 0} lastDeliveredAt=${reminder3?.lastDeliveredAt ?? 'null'}`,
+      `staleProcessing=${diagnosticsPayload.summary?.staleProcessing ?? 0}`,
+      'issues:',
+      ...(issues.length > 0 ? issues.map((issue, index) => `${index + 1}. ${issue}`) : ['1. no inferred issues']),
+      'recent jobs:',
+      recentText || 'none',
+    ].join('\n');
+  }, [diagnosticsPayload, shopDomain]);
+
+  const copyDiagnostics = async () => {
+    try {
+      await navigator.clipboard.writeText(diagnosticsReport);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // no-op
+    }
   };
 
   const handleStatusChange = async (id: string, checked: boolean) => {
@@ -292,6 +412,19 @@ export default function WelcomeNotificationsPage() {
 
         <div className="mb-4">
           <FlowStats stats={{ inQueue: 0, impressions: ruleStats.impressions, clicks: ruleStats.clicks }} />
+        </div>
+
+        <div className="mb-6 rounded-md border bg-background p-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Temporary Welcome Diagnostics (step-2/step-3)</h2>
+            <Button type="button" variant="outline" size="sm" onClick={copyDiagnostics}>
+              {copied ? 'Copied' : 'Copy full issue'}
+            </Button>
+          </div>
+          <p className="mb-2 text-xs text-muted-foreground">
+            This report is temporary for debugging delayed reminders. Copy and share it when reminder-2/reminder-3 do not send.
+          </p>
+          <pre className="max-h-80 overflow-auto rounded border bg-muted p-3 text-xs whitespace-pre-wrap">{diagnosticsReport}</pre>
         </div>
 
         <div className="mb-4">
