@@ -12,24 +12,27 @@ type LivePreviewPayload = {
     image?: string | null;
 };
 
+type NotificationOptionsWithImage = NotificationOptions & {
+    image?: string;
+};
+
 const showLocalPreview = async (payload: LivePreviewPayload) => {
     const registration = await navigator.serviceWorker.getRegistration();
+    const options: NotificationOptionsWithImage = {
+        body: payload.body,
+        icon: payload.icon ?? undefined,
+        image: payload.image ?? undefined,
+        data: {
+            url: payload.url ?? undefined,
+        },
+    };
 
     if (registration) {
-        await registration.showNotification(payload.title, {
-            body: payload.body,
-            icon: payload.icon ?? undefined,
-            data: {
-                url: payload.url ?? undefined,
-            },
-        });
+        await registration.showNotification(payload.title, options);
         return;
     }
 
-    new Notification(payload.title, {
-        body: payload.body,
-        icon: payload.icon ?? undefined,
-    });
+    new Notification(payload.title, options);
 };
 
 export async function handleSendLivePreview(payload: LivePreviewPayload) {

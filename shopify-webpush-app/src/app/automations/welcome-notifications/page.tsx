@@ -24,6 +24,9 @@ type NotificationPreviewData = {
   message: string;
   iconUrl: string;
   heroUrl: string | null;
+  windowsImageUrl?: string | null;
+  macosImageUrl?: string | null;
+  androidImageUrl?: string | null;
   siteName: string;
   actionButtons: Array<{ title: string; link: string }>;
 };
@@ -98,6 +101,9 @@ type WelcomeRuleStepConfig = {
   body?: string;
   iconUrl?: string | null;
   imageUrl?: string | null;
+  windowsImageUrl?: string | null;
+  macosImageUrl?: string | null;
+  androidImageUrl?: string | null;
   actionButtons?: Array<{ title: string; link: string }>;
 };
 
@@ -204,6 +210,9 @@ const buildStepsConfigFromNotifications = (notifications: FlowNotification[]) =>
         body: notification.notification.message,
         iconUrl: notification.notification.iconUrl ?? null,
         imageUrl: notification.notification.heroUrl ?? null,
+        windowsImageUrl: notification.notification.windowsImageUrl ?? null,
+        macosImageUrl: notification.notification.macosImageUrl ?? null,
+        androidImageUrl: notification.notification.androidImageUrl ?? null,
         actionButtons: notification.notification.actionButtons ?? [],
       },
     ]),
@@ -283,6 +292,9 @@ export default function WelcomeNotificationsPage() {
             message: step.body ?? item.notification.message,
             iconUrl: step.iconUrl ?? item.notification.iconUrl,
             heroUrl: step.imageUrl ?? item.notification.heroUrl,
+            windowsImageUrl: step.windowsImageUrl ?? item.notification.windowsImageUrl ?? item.notification.heroUrl,
+            macosImageUrl: step.macosImageUrl ?? item.notification.macosImageUrl ?? item.notification.heroUrl,
+            androidImageUrl: step.androidImageUrl ?? item.notification.androidImageUrl ?? item.notification.heroUrl,
             actionButtons: step.actionButtons ?? item.notification.actionButtons,
           },
         };

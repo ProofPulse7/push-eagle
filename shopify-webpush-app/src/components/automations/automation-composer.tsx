@@ -17,6 +17,13 @@ import { ScrollArea } from '../ui/scroll-area';
 import { AutomationComposerActions } from './automation-composer-actions';
 import { Check, Loader2 } from 'lucide-react';
 
+const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read image file.'));
+    reader.readAsDataURL(file);
+});
+
 export function AutomationComposer({
     automationPath = '/automations/welcome-notifications',
     automationRuleKey = 'welcome_subscriber',
@@ -47,14 +54,17 @@ export function AutomationComposer({
     const handleEditedImageSave = (dataUrl: string, type: string) => {
         if (type === 'windows') {
             setWindowsHero({ ...windowsHero, file: null, preview: dataUrl, originalPreview: windowsHero.originalPreview ?? windowsHero.preview });
+            setShowWindowsWarning(false);
             return;
         }
         if (type === 'mac') {
             setMacHero({ ...macHero, file: null, preview: dataUrl, originalPreview: macHero.originalPreview ?? macHero.preview });
+            setShowMacWarning(false);
             return;
         }
         if (type === 'android') {
             setAndroidHero({ ...androidHero, file: null, preview: dataUrl, originalPreview: androidHero.originalPreview ?? androidHero.preview });
+            setShowAndroidWarning(false);
             return;
         }
         if (type === 'logo') {
@@ -88,11 +98,11 @@ export function AutomationComposer({
         reader.readAsDataURL(file);
     };
 
-    const handleImageUpload = (file: File | undefined, imageType: 'windows' | 'mac' | 'android' | 'logo') => {
+    const handleImageUpload = async (file: File | undefined, imageType: 'windows' | 'mac' | 'android' | 'logo') => {
         if (!file) return;
 
-        const isFirstHeroUpload = !windowsHero.file && !macHero.file && !androidHero.file && imageType !== 'logo';
-        const previewUrl = URL.createObjectURL(file);
+        const isFirstHeroUpload = !windowsHero.preview && !macHero.preview && !androidHero.preview && imageType !== 'logo';
+        const previewUrl = await fileToDataUrl(file);
 
         if (imageType === 'logo') {
             setLogo({ file, preview: previewUrl });

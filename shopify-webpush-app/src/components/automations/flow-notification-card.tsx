@@ -20,6 +20,9 @@ export type NotificationStep = {
         message: string;
         iconUrl: string;
         heroUrl?: string | null;
+        windowsImageUrl?: string | null;
+        macosImageUrl?: string | null;
+        androidImageUrl?: string | null;
         siteName: string;
         actionButtons?: { title: string; link: string }[];
     };

@@ -38,7 +38,7 @@ export const AutomationComposerActions = ({
     const [isSaving, setIsSaving] = useState(false);
     
     const onSendPreview = async () => {
-        const { title, message, primaryLink, logo, macHero } = getAutomationData();
+        const { title, message, primaryLink, logo, windowsHero, macHero, androidHero } = getAutomationData();
         if (!title) {
             toast({ variant: "destructive", title: "Title is missing", description: "Please enter a title." });
             return;
@@ -50,7 +50,7 @@ export const AutomationComposerActions = ({
                 body: message,
                 url: primaryLink,
                 icon: logo.preview,
-                image: macHero.preview,
+                image: macHero.preview || windowsHero.preview || androidHero.preview || null,
             });
             toast({ title: "Preview Sent!", description: "Check your device." });
         } catch (error: any) {
@@ -61,7 +61,7 @@ export const AutomationComposerActions = ({
     };
 
     const onSave = async () => {
-        const { title, message, primaryLink, logo, macHero, actionButtons } = getAutomationData();
+        const { title, message, primaryLink, logo, windowsHero, macHero, androidHero, actionButtons } = getAutomationData();
         if (!title) {
             toast({ variant: "destructive", title: "Title is missing", description: "Cannot save without a title." });
             return;
@@ -79,6 +79,9 @@ export const AutomationComposerActions = ({
                 primaryLink,
                 logoUrl: logo.preview,
                 heroUrl: macHero.preview,
+                windowsHeroUrl: windowsHero.preview,
+                macHeroUrl: macHero.preview,
+                androidHeroUrl: androidHero.preview,
                 actionButtons,
             };
             await saveAutomationStep(automationRuleKey, stepId, shopDomain, dataToSave);
