@@ -3770,7 +3770,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
         ruleKey: 'welcome_subscriber',
         tokenId,
         subscriberId,
-        dedupeKey: `welcome:${input.shopDomain}:subscriber:${subscriberId}:${stepKey}`,
+        dedupeKey: `welcome:${input.shopDomain}:token:${tokenId}:${stepKey}`,
         dueAt,
         payload: {
           title: step.title,

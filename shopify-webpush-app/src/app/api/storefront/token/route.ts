@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { getRequestGeo } from '@/lib/server/request-geo';
-import { dispatchWelcomeJobNow, upsertSubscriberToken } from '@/lib/server/data/store';
+import { upsertSubscriberToken } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';

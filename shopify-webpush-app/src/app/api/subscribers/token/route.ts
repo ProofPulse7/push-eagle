@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { getRequestGeo } from '@/lib/server/request-geo';
-import { upsertSubscriberToken, dispatchWelcomeJobNow } from '@/lib/server/data/store';
+import { upsertSubscriberToken } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -74,11 +74,6 @@ export async function POST(request: Request) {
       city: body.city ?? requestGeo.city,
       userAgent,
     });
-
-    // Fire welcome notification immediately (don't await — non-blocking)
-    if (saved.tokenId) {
-      dispatchWelcomeJobNow(shopDomain, saved.tokenId).catch(() => undefined);
-    }
 
     return NextResponse.json({
       ok: true,
