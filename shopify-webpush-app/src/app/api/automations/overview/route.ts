@@ -17,7 +17,14 @@ export async function GET(request: Request) {
     const shopDomain = extractShopDomain(request);
     const overview = await getAutomationOverview(shopDomain);
 
-    return NextResponse.json({ ok: true, ...overview });
+    return NextResponse.json(
+      { ok: true, ...overview },
+      {
+        headers: {
+          'Cache-Control': 'private, max-age=10, stale-while-revalidate=30',
+        },
+      },
+    );
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: getRequestErrorMessage(error) },
