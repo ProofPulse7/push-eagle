@@ -2080,7 +2080,7 @@ export const processAutomationJob = async (jobId: string) => {
   }
 
   try {
-    const payload = claim.payload ?? { title: 'Notification', body: '' };
+    let payload = claim.payload ?? { title: 'Notification', body: '' };
 
     const ruleRows = await sql`
       SELECT enabled, config
@@ -2114,6 +2114,20 @@ export const processAutomationJob = async (jobId: string) => {
         `;
         return { processed: false, error: 'Welcome reminder step is disabled.' };
       }
+
+      payload = {
+        ...payload,
+        title: step.title,
+        body: step.body,
+        targetUrl: step.targetUrl ?? payload.targetUrl ?? null,
+        iconUrl: step.iconUrl ?? payload.iconUrl ?? null,
+        imageUrl: step.imageUrl ?? payload.imageUrl ?? null,
+        metadata: {
+          ...(payload.metadata ?? {}),
+          stepKey: payloadStepKey,
+          actionButtons: step.actionButtons ?? [],
+        },
+      };
     }
 
     if (claim.rule_key === 'cart_abandonment_30m' && payloadStepKey) {
@@ -2128,6 +2142,20 @@ export const processAutomationJob = async (jobId: string) => {
         `;
         return { processed: false, error: 'Cart reminder step is disabled.' };
       }
+
+      payload = {
+        ...payload,
+        title: step.title,
+        body: step.body,
+        targetUrl: step.targetUrl ?? payload.targetUrl ?? null,
+        iconUrl: step.iconUrl ?? payload.iconUrl ?? null,
+        imageUrl: step.imageUrl ?? payload.imageUrl ?? null,
+        metadata: {
+          ...(payload.metadata ?? {}),
+          stepKey: payloadStepKey,
+          actionButtons: step.actionButtons ?? [],
+        },
+      };
     }
 
     if (claim.rule_key === 'browse_abandonment_15m' && payloadStepKey) {
@@ -2142,6 +2170,20 @@ export const processAutomationJob = async (jobId: string) => {
         `;
         return { processed: false, error: 'Browse reminder step is disabled.' };
       }
+
+      payload = {
+        ...payload,
+        title: step.title,
+        body: step.body,
+        targetUrl: step.targetUrl ?? payload.targetUrl ?? null,
+        iconUrl: step.iconUrl ?? payload.iconUrl ?? null,
+        imageUrl: step.imageUrl ?? payload.imageUrl ?? null,
+        metadata: {
+          ...(payload.metadata ?? {}),
+          stepKey: payloadStepKey,
+          actionButtons: step.actionButtons ?? [],
+        },
+      };
     }
 
     const skipReason = await getAutomationSkipReason(claim.shop_domain, payload);
