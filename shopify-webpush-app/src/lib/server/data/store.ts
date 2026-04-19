@@ -2837,6 +2837,16 @@ export const processAutomationJob = async (jobId: string) => {
 
     let fcmMessageId: string;
 
+    const rawActionButtons = Array.isArray((payload.metadata ?? {}).actionButtons)
+      ? ((payload.metadata ?? {}).actionButtons as Array<Record<string, unknown>>)
+      : [];
+    const automationActions = rawActionButtons
+      .slice(0, 2)
+      .filter((btn) => btn?.title && btn?.link)
+      .map((btn, i) => ({ action: `btn_${i + 1}`, title: String(btn.title) }));
+    const automationButton1Url = rawActionButtons[0]?.link ? String(rawActionButtons[0].link) : '';
+    const automationButton2Url = rawActionButtons[1]?.link ? String(rawActionButtons[1].link) : '';
+
     if (tokenType === 'vapid') {
       // VAPID send for Firefox / Safari
       const vapidEndpoint = String(activeTokenRow?.vapid_endpoint ?? '');
@@ -2853,6 +2863,9 @@ export const processAutomationJob = async (jobId: string) => {
           icon: payload.iconUrl ?? null,
           image: payload.imageUrl ?? null,
           url: trackedTargetUrl ?? payload.targetUrl ?? null,
+          actions: automationActions,
+          button1Url: automationButton1Url || null,
+          button2Url: automationButton2Url || null,
         },
       );
     } else {
@@ -2870,12 +2883,15 @@ export const processAutomationJob = async (jobId: string) => {
           notification: {
             icon: payload.iconUrl ?? undefined,
             image: payload.imageUrl ?? undefined,
+            actions: automationActions.length > 0 ? automationActions : undefined,
           },
         },
         data: {
           source: 'automation',
           ruleKey: String(payload.ruleKey ?? ''),
           url: trackedTargetUrl ?? payload.targetUrl ?? '',
+          button1Url: automationButton1Url,
+          button2Url: automationButton2Url,
         },
       };
 

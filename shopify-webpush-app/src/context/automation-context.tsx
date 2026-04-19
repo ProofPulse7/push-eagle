@@ -68,8 +68,10 @@ export function AutomationStateProvider({ children }: { children: ReactNode }) {
             setTitle(initialState.notification.title || '');
             setMessage(initialState.notification.message || '');
             setPrimaryLink(initialState.notification.targetUrl || fallbackStoreUrl);
-            if (!logo.preview) {
-                setLogo({ file: null, preview: initialState.notification.iconUrl || null });
+            // Always restore the step-specific icon if one was saved; fall back to settings logo only if absent
+            const stepIcon = initialState.notification.iconUrl || null;
+            if (stepIcon || !logo.preview) {
+                setLogo({ file: null, preview: stepIcon || logo.preview || null });
             }
             const fallbackHeroUrl = initialState.notification.heroUrl || null;
             const windowsHeroUrl = initialState.notification.windowsHeroUrl || fallbackHeroUrl;

@@ -35,6 +35,9 @@ type PushPayload = {
   image?: string | null;
   badge?: string | null;
   url?: string | null;
+  actions?: Array<{ action: string; title: string }>;
+  button1Url?: string | null;
+  button2Url?: string | null;
 };
 
 let vapidConfigured = false;
@@ -71,8 +74,13 @@ export const sendVapidPushNotification = async (
     image: payload.image ?? undefined,
     badge: payload.badge ?? '/badge-72.png',
     url: payload.url ?? '/',
-    // Data field mirrors what firebase-messaging-sw.js expects
-    data: { url: payload.url ?? '/' },
+    actions: Array.isArray(payload.actions) && payload.actions.length > 0 ? payload.actions : undefined,
+    // Data field mirrors what sw.js expects for click handling
+    data: {
+      url: payload.url ?? '/',
+      button1Url: payload.button1Url ?? '',
+      button2Url: payload.button2Url ?? '',
+    },
   });
 
   await webpush.sendNotification(subscription, notificationPayload, {
