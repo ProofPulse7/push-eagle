@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { getWelcomeAutomationDiagnostics, processDueAutomationJobsForShop } from '@/lib/server/data/store';
+import {
+  clearWelcomeAutomationHistory,
+  getWelcomeAutomationDiagnostics,
+  processDueAutomationJobsForShop,
+} from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 const getRequestErrorMessage = (error: unknown) => {
@@ -40,6 +44,24 @@ export async function GET(request: Request) {
         },
       },
     );
+  } catch (error) {
+    return NextResponse.json(
+      { ok: false, error: getRequestErrorMessage(error) },
+      { status: 400 },
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const shopDomain = extractShopDomain(request);
+    const cleared = await clearWelcomeAutomationHistory(shopDomain);
+
+    return NextResponse.json({
+      ok: true,
+      shopDomain,
+      ...cleared,
+    });
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: getRequestErrorMessage(error) },

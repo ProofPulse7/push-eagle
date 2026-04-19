@@ -220,11 +220,15 @@ export default function WelcomeNotificationsPage() {
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
   const [ruleEnabled, setRuleEnabled] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [diagnosticsNonce, setDiagnosticsNonce] = useState(0);
   const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
 
   const overviewUrl = shopDomain ? '/api/automations/overview?shop=' + encodeURIComponent(shopDomain) : '';
   const rulesUrl = shopDomain ? '/api/automations/rules?shop=' + encodeURIComponent(shopDomain) : '';
-  const diagnosticsUrl = shopDomain ? '/api/automations/welcome-diagnostics?shop=' + encodeURIComponent(shopDomain) : '';
+  const diagnosticsUrl = shopDomain
+    ? '/api/automations/welcome-diagnostics?shop=' + encodeURIComponent(shopDomain) + '&r=' + String(diagnosticsNonce)
+    : '';
 
   const { data: overviewPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; impressions?: number; clicks?: number; revenueCents?: number; enabled?: boolean }> }>({
     cacheKey: `welcome-overview:${shopDomain}`,
@@ -239,7 +243,7 @@ export default function WelcomeNotificationsPage() {
   });
 
   const { data: diagnosticsPayload } = useCachedJson<WelcomeDiagnosticsPayload>({
-    cacheKey: `welcome-diagnostics:${shopDomain}`,
+    cacheKey: `welcome-diagnostics:${shopDomain}:${diagnosticsNonce}`,
     url: diagnosticsUrl,
     enabled: Boolean(shopDomain),
     refreshMs: 15_000,
@@ -369,6 +373,24 @@ export default function WelcomeNotificationsPage() {
     }
   };
 
+  const clearOldResults = async () => {
+    if (!shopDomain || clearing) {
+      return;
+    }
+
+    setClearing(true);
+    try {
+      await fetch('/api/automations/welcome-diagnostics?shop=' + encodeURIComponent(shopDomain), {
+        method: 'POST',
+      });
+      setDiagnosticsNonce((value) => value + 1);
+    } catch {
+      // no-op
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const handleStatusChange = async (id: string, checked: boolean) => {
     const updatedNotifications: FlowNotification[] = notifications.map((item) =>
       item.id === id ? { ...item, status: (checked ? 'Active' : 'Inactive') as 'Active' | 'Inactive' } : item,
@@ -417,9 +439,14 @@ export default function WelcomeNotificationsPage() {
         <div className="mb-6 rounded-md border bg-background p-4">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold">Temporary Welcome Diagnostics (step-2/step-3)</h2>
-            <Button type="button" variant="outline" size="sm" onClick={copyDiagnostics}>
-              {copied ? 'Copied' : 'Copy full issue'}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={clearOldResults} disabled={clearing || !shopDomain}>
+                {clearing ? 'Clearing...' : 'Clear old results'}
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={copyDiagnostics}>
+                {copied ? 'Copied' : 'Copy full issue'}
+              </Button>
+            </div>
           </div>
           <p className="mb-2 text-xs text-muted-foreground">
             This report is temporary for debugging delayed reminders. Copy and share it when reminder-2/reminder-3 do not send.

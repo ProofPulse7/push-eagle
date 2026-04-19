@@ -1015,6 +1015,23 @@ const toAbsoluteStorefrontUrl = (candidate: string | null | undefined, fallbackS
   }
 };
 
+const toHttpUrlOrNull = (candidate: string | null | undefined, baseUrl?: string | null) => {
+  const raw = String(candidate ?? '').trim();
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = baseUrl ? new URL(raw, baseUrl) : new URL(raw);
+    if (!/^https?:$/i.test(parsed.protocol)) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
 const resolveAutomationDestination = async (shopDomain: string, payload: AutomationJobPayload) => {
   const sql = getNeonSql();
   const rows = await sql`
@@ -1030,23 +1047,32 @@ const resolveAutomationDestination = async (shopDomain: string, payload: Automat
     shopDomain,
   );
 
-  let targetUrl = payload.targetUrl ?? null;
-  if (!targetUrl) {
-    targetUrl = storeBase;
-  } else {
-    try {
-      targetUrl = new URL(targetUrl).toString();
-    } catch {
-      targetUrl = new URL(targetUrl, storeBase).toString();
-    }
-  }
+  const targetUrl = toHttpUrlOrNull(payload.targetUrl ?? null, storeBase) ?? storeBase;
 
   const fallbackLogo = rows[0]?.brand_logo_url ?? rows[0]?.opt_in_logo_url ?? null;
-  const iconUrl = payload.iconUrl ?? (fallbackLogo ? String(fallbackLogo) : null);
+  const iconUrl = toHttpUrlOrNull(payload.iconUrl ?? null, storeBase)
+    ?? toHttpUrlOrNull(fallbackLogo ? String(fallbackLogo) : null, storeBase);
+  const imageUrl = toHttpUrlOrNull(payload.imageUrl ?? null, storeBase);
+
+  const rawActionButtons = Array.isArray((payload.metadata ?? {}).actionButtons)
+    ? ((payload.metadata ?? {}).actionButtons as Array<Record<string, unknown>>)
+    : [];
+  const actionButtons = rawActionButtons
+    .map((button) => {
+      const title = String(button.title ?? '').trim();
+      const link = toHttpUrlOrNull(String(button.link ?? ''), storeBase);
+      if (!title || !link) {
+        return null;
+      }
+      return { title, link };
+    })
+    .filter((button): button is { title: string; link: string } => Boolean(button));
 
   return {
     targetUrl,
     iconUrl,
+    imageUrl,
+    actionButtons,
   };
 };
 
@@ -2413,6 +2439,11 @@ export const processAutomationJob = async (jobId: string) => {
       ...payload,
       targetUrl: destination.targetUrl,
       iconUrl: destination.iconUrl,
+      imageUrl: destination.imageUrl,
+      metadata: {
+        ...(payload.metadata ?? {}),
+        actionButtons: destination.actionButtons,
+      },
     };
 
     const trackedTargetUrl = payload.ruleKey
@@ -5535,6 +5566,39 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
       tokenStatus: row.token_status ? String(row.token_status) : null,
       tokenLastSeenAt: row.last_seen_at ? new Date(String(row.last_seen_at)).toISOString() : null,
     })),
+  };
+};
+
+export const clearWelcomeAutomationHistory = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const deliveryRows = await sql`
+    DELETE FROM automation_deliveries
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+    RETURNING id
+  `;
+
+  const clickRows = await sql`
+    DELETE FROM automation_clicks
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+    RETURNING id
+  `;
+
+  const jobRows = await sql`
+    DELETE FROM automation_jobs
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+    RETURNING id
+  `;
+
+  return {
+    clearedJobs: jobRows.length,
+    clearedDeliveries: deliveryRows.length,
+    clearedClicks: clickRows.length,
+    clearedAt: new Date().toISOString(),
   };
 };
 
