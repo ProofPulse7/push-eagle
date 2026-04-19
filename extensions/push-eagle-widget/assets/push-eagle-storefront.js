@@ -248,20 +248,41 @@
         detectedProductId = metadata.productId;
       }
 
-      await fetch(boot.activityEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          shopDomain: boot.shopDomain,
-          externalId: boot.externalId,
-          eventType: eventType,
-          pageUrl: url,
-          productId: detectedProductId || (productMatch ? productMatch[1] : null),
-          metadata: metadata || {}
-        })
-      });
+      var payload = {
+        shopDomain: boot.shopDomain,
+        externalId: boot.externalId,
+        eventType: eventType,
+        pageUrl: url,
+        productId: detectedProductId || (productMatch ? productMatch[1] : null),
+        metadata: metadata || {}
+      };
+      var endpoints = [boot.activityEndpoint];
+
+      if (boot.activityFallbackEndpoint && endpoints.indexOf(boot.activityFallbackEndpoint) === -1) {
+        endpoints.push(boot.activityFallbackEndpoint);
+      }
+
+      for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {
+        var endpoint = endpoints[endpointIndex];
+
+        try {
+          var response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          });
+
+          if (response.ok) {
+            break;
+          }
+        } catch (_endpointError) {
+          if (endpointIndex === endpoints.length - 1) {
+            throw _endpointError;
+          }
+        }
+      }
     } catch (_error) {
       // best effort only
     }
@@ -1162,8 +1183,10 @@
       shopDomain: config.shopDomain,
       externalId: getOrCreateAnonExternalId(config.shopDomain),
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
-      activityEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity' : '',
-      iosHomeScreenEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/ios-home-screen' : '',
+      activityEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity'),
+      activityFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity' : '',
+      iosHomeScreenEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen'),
+      iosHomeScreenFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/ios-home-screen' : '',
       optIn: defaultOptInSettings,
       firebase: fallbackFirebaseConfig
     };

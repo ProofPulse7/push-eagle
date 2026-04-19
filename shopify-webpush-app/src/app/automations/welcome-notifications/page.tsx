@@ -16,7 +16,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useSettings } from '@/context/settings-context';
 
 type NotificationPreviewData = {
@@ -269,8 +268,6 @@ export default function WelcomeNotificationsPage() {
     }
   };
 
-  const isFlowActive = ruleEnabled && notifications.some((item) => item.status === 'Active');
-
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">
       <div className="p-4 sm:p-6 md:p-8 flex flex-col">
@@ -313,12 +310,6 @@ export default function WelcomeNotificationsPage() {
         </div>
 
         <div className="max-w-md mx-auto w-full flex flex-col items-center">
-          {!isFlowActive && (
-            <Alert className="w-full mb-8">
-              <AlertTitle>This automation is inactive</AlertTitle>
-              <AlertDescription>Enable at least one reminder to start sending these notifications to new subscribers.</AlertDescription>
-            </Alert>
-          )}
           <div className="text-center">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
               <Zap className="h-6 w-6 text-primary" />

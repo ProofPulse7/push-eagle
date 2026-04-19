@@ -1737,6 +1737,15 @@ export const enqueueAutomationJob = async (input: {
   const jobId = randomUUID();
   const dueAt = input.dueAt ?? new Date();
 
+  if (input.dedupeKey) {
+    await sql`
+      DELETE FROM automation_jobs
+      WHERE shop_domain = ${input.shopDomain}
+        AND dedupe_key = ${input.dedupeKey}
+        AND status IN ('failed', 'skipped')
+    `;
+  }
+
   const rows = await sql`
     INSERT INTO automation_jobs (id, shop_domain, rule_key, token_id, subscriber_id, dedupe_key, payload, due_at)
     VALUES (

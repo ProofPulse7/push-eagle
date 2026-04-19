@@ -37,6 +37,9 @@ export async function OPTIONS(request: Request) {
 
 export async function GET(request: Request) {
   const origin = request.headers.get('origin');
+  const requestUrl = new URL(request.url);
+  const directAppOrigin = requestUrl.origin.replace(/\/$/, '');
+  const proxyBasePath = '/apps/push-eagle';
 
   try {
     const url = new URL(request.url);
@@ -66,9 +69,12 @@ export async function GET(request: Request) {
       shopDomain,
       externalId,
       tokenEndpoint: '/apps/push-eagle/token',
-      conversionEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/conversion`,
-      activityEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/activity`,
-      iosHomeScreenEndpoint: `${env.NEXT_PUBLIC_APP_URL}/api/storefront/ios-home-screen`,
+      conversionEndpoint: `${proxyBasePath}/conversion`,
+      conversionFallbackEndpoint: `${directAppOrigin}/api/storefront/conversion`,
+      activityEndpoint: `${proxyBasePath}/activity`,
+      activityFallbackEndpoint: `${directAppOrigin}/api/storefront/activity`,
+      iosHomeScreenEndpoint: `${proxyBasePath}/ios-home-screen`,
+      iosHomeScreenFallbackEndpoint: `${directAppOrigin}/api/storefront/ios-home-screen`,
       optIn,
       shopifyCapabilities,
       firebase: {
