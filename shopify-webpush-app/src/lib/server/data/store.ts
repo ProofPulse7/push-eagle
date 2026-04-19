@@ -2128,6 +2128,31 @@ export const processAutomationJob = async (jobId: string) => {
           actionButtons: step.actionButtons ?? [],
         },
       };
+
+      const payloadExternalId = payload.externalId == null ? '' : String(payload.externalId);
+      if (payloadExternalId) {
+        const canonicalWelcomeRows = await sql`
+          SELECT id
+          FROM automation_jobs
+          WHERE shop_domain = ${claim.shop_domain}
+            AND rule_key = 'welcome_subscriber'
+            AND payload ->> 'externalId' = ${payloadExternalId}
+            AND payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+            AND status IN ('pending', 'processing', 'sent')
+          ORDER BY created_at ASC
+          LIMIT 1
+        `;
+
+        const canonicalWelcomeJobId = canonicalWelcomeRows[0]?.id == null ? '' : String(canonicalWelcomeRows[0].id);
+        if (canonicalWelcomeJobId && canonicalWelcomeJobId !== claim.id) {
+          await sql`
+            UPDATE automation_jobs
+            SET status = 'skipped', error_message = 'Duplicate welcome reminder job suppressed.', updated_at = NOW()
+            WHERE id = ${jobId}
+          `;
+          return { processed: false, error: 'Duplicate welcome reminder job suppressed.' };
+        }
+      }
     }
 
     if (claim.rule_key === 'cart_abandonment_30m' && payloadStepKey) {
@@ -3739,10 +3764,11 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
       status = 'active',
       updated_at = NOW(),
       last_seen_at = NOW()
-    RETURNING id
+    RETURNING id, (xmax = 0) AS was_inserted
   `;
 
   const tokenId = Number(tokenRows[0]?.id);
+  const tokenWasInserted = Boolean(tokenRows[0]?.was_inserted);
 
   const welcomeRuleRows = await sql`
     SELECT enabled, config
@@ -3752,7 +3778,33 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     LIMIT 1
   `;
 
-  if (Boolean(welcomeRuleRows[0]?.enabled)) {
+  if (Boolean(welcomeRuleRows[0]?.enabled) && tokenWasInserted) {
+    const existingWelcomeJobRows = await sql`
+      SELECT id
+      FROM automation_jobs
+      WHERE shop_domain = ${input.shopDomain}
+        AND rule_key = 'welcome_subscriber'
+        AND payload ->> 'externalId' = ${input.externalId}
+        AND status IN ('pending', 'processing', 'sent')
+      LIMIT 1
+    `;
+
+    const existingWelcomeDeliveryRows = await sql`
+      SELECT id
+      FROM automation_deliveries
+      WHERE shop_domain = ${input.shopDomain}
+        AND rule_key = 'welcome_subscriber'
+        AND external_id = ${input.externalId}
+      LIMIT 1
+    `;
+
+    if (existingWelcomeJobRows.length > 0 || existingWelcomeDeliveryRows.length > 0) {
+      return {
+        subscriberId,
+        tokenId,
+      };
+    }
+
     const welcomeConfig = parseWelcomeRuleConfig(welcomeRuleRows[0]?.config ?? null);
     const now = Date.now();
     const immediateWelcomeJobIds: string[] = [];
