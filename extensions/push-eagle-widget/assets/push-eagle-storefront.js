@@ -97,6 +97,41 @@
     }
   }
 
+  function isSameOriginEndpoint(endpoint) {
+    try {
+      return new URL(endpoint, window.location.origin).origin === window.location.origin;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function getProxyBasePathFromBootstrapPath(bootstrapPath) {
+    var normalized = String(bootstrapPath || '').split('?')[0];
+    return normalized.replace(/\/bootstrap$/i, '') || '/apps/push-eagle';
+  }
+
+  function buildBootstrapPathCandidates(proxyBootstrapPath) {
+    var configured = String(proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH);
+    var normalized = configured.split('?')[0];
+    var candidates = [normalized];
+
+    var match = normalized.match(/^\/(a|apps|tools|community)\/([^/?#]+)\/bootstrap$/i);
+    if (!match) {
+      return candidates;
+    }
+
+    var subpath = match[2];
+    var prefixes = ['apps', 'a', 'tools', 'community'];
+    for (var i = 0; i < prefixes.length; i += 1) {
+      var candidate = '/' + prefixes[i] + '/' + subpath + '/bootstrap';
+      if (candidates.indexOf(candidate) === -1) {
+        candidates.push(candidate);
+      }
+    }
+
+    return candidates;
+  }
+
   function waitForActiveServiceWorker(registration, timeoutMs) {
     return new Promise(function (resolve, reject) {
       var timeout = Number(timeoutMs || 10000);
@@ -1145,22 +1180,44 @@
   }
 
   async function bootstrap(config) {
-    var bootstrapUrl = config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH;
-    var requestUrl = bootstrapUrl + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&') + '_pe_ts=' + String(Date.now());
+    var bootstrapPaths = buildBootstrapPathCandidates(config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH);
+    var existingExternalId = getOrCreateAnonExternalId(config.shopDomain);
     var cacheKey = getStorageKey(config.shopDomain, 'bootstrap_cache');
+    var data = null;
+    var resolvedProxyBootstrapPath = bootstrapPaths[0];
 
-    // Try the Shopify App Proxy path first (same-origin, with credentials)
-    var data = await tryBootstrapFetch(requestUrl, config.shopDomain, true);
+    for (var pathIndex = 0; pathIndex < bootstrapPaths.length; pathIndex += 1) {
+      var bootstrapUrl = bootstrapPaths[pathIndex];
+      var requestUrl = bootstrapUrl
+        + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&')
+        + '_pe_ts=' + String(Date.now())
+        + '&externalId=' + encodeURIComponent(existingExternalId);
+
+      data = await tryBootstrapFetch(requestUrl, config.shopDomain, true);
+      if (data && data.ok) {
+        resolvedProxyBootstrapPath = bootstrapUrl;
+        break;
+      }
+    }
 
     // If proxy failed (404 or non-JSON from Shopify), fall back to the direct app URL (cross-origin, no credentials)
     if (!data && config.appUrl) {
       var directUrl = config.appUrl.replace(/\/$/, '') + '/api/storefront/bootstrap'
         + '?shop=' + encodeURIComponent(config.shopDomain)
-        + '&_pe_ts=' + String(Date.now());
+        + '&_pe_ts=' + String(Date.now())
+        + '&externalId=' + encodeURIComponent(existingExternalId);
       data = await tryBootstrapFetch(directUrl, config.shopDomain, false);
     }
 
     if (data && data.ok) {
+      var resolvedProxyBasePath = getProxyBasePathFromBootstrapPath(resolvedProxyBootstrapPath);
+      data.tokenEndpoint = resolvedProxyBasePath + '/token';
+      data.activityEndpoint = resolvedProxyBasePath + '/activity';
+      data.iosHomeScreenEndpoint = resolvedProxyBasePath + '/ios-home-screen';
+      if (!data.externalId) {
+        data.externalId = existingExternalId;
+      }
+      safeLocalStorageSet(getStorageKey(config.shopDomain, 'external_id'), String(data.externalId));
       safeLocalStorageSet(cacheKey, JSON.stringify(data));
       return data;
     }
@@ -1181,7 +1238,7 @@
     return {
       ok: true,
       shopDomain: config.shopDomain,
-      externalId: getOrCreateAnonExternalId(config.shopDomain),
+      externalId: existingExternalId,
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
       activityEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity'),
       activityFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity' : '',
@@ -1470,7 +1527,7 @@
         try {
           var tokenResponse = await fetch(endpoint, {
             method: 'POST',
-            credentials: 'include',
+            credentials: isSameOriginEndpoint(endpoint) ? 'include' : 'omit',
             headers: {
               'Content-Type': 'application/json'
             },

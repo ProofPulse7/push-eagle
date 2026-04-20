@@ -60,6 +60,7 @@ const buildCorsHeaders = (origin: string | null) => ({
   'Access-Control-Allow-Origin': origin || appOrigin || '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Domain',
+  'Access-Control-Allow-Credentials': 'true',
   Vary: 'Origin',
 });
 
