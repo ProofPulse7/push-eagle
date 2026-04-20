@@ -21,57 +21,42 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-function parseActions(value) {
-  if (!value) {
-    return [];
+function buildPushEagleActions(payload) {
+  const notificationActions = Array.isArray(payload.notification?.actions)
+    ? payload.notification.actions
+    : [];
+
+  if (notificationActions.length > 0) {
+    return notificationActions.slice(0, 2).filter(function(action) {
+      return action && action.action && action.title;
+    });
   }
 
-  if (Array.isArray(value)) {
-    return value.filter(function(action) { return action && action.action && action.title; }).slice(0, 2);
+  const data = payload.data || {};
+  const fallbackActions = [];
+  if (data.action1Title && data.button1Url) {
+    fallbackActions.push({ action: 'btn_1', title: String(data.action1Title) });
   }
-
-  try {
-    var parsed = JSON.parse(value);
-    return Array.isArray(parsed)
-      ? parsed.filter(function(action) { return action && action.action && action.title; }).slice(0, 2)
-      : [];
-  } catch (_error) {
-    return [];
+  if (data.action2Title && data.button2Url) {
+    fallbackActions.push({ action: 'btn_2', title: String(data.action2Title) });
   }
-}
-
-function openOrFocus(targetUrl) {
-  return clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
-    for (var i = 0; i < clientList.length; i += 1) {
-      var client = clientList[i];
-      if (client.url === targetUrl && 'focus' in client) {
-        return client.focus();
-      }
-    }
-
-    if (clients.openWindow) {
-      return clients.openWindow(targetUrl);
-    }
-
-    return Promise.resolve();
-  });
+  return fallbackActions;
 }
 
 messaging.onBackgroundMessage(function(payload) {
-  const title = payload.data?.title || payload.notification?.title || 'Push Eagle';
-  const actions = parseActions(payload.data?.actionsJson || payload.notification?.actions);
-  const url = payload.data?.url || payload.fcmOptions?.link || '/';
+  const title = payload.notification?.title || 'Push Eagle';
+  const url = payload.fcmOptions?.link || payload.data?.url || '/';
   const button1Url = payload.data?.button1Url || url;
   const button2Url = payload.data?.button2Url || '';
   const options = {
-    body: payload.data?.body || payload.notification?.body,
-    icon: payload.data?.iconUrl || payload.notification?.icon,
-    image: payload.data?.imageUrl || payload.notification?.image,
-    actions: actions.length > 0 ? actions : undefined,
+    body: payload.notification?.body,
+    icon: payload.notification?.icon,
+    image: payload.notification?.image,
+    actions: buildPushEagleActions(payload),
     data: {
-      url: url,
-      button1Url: button1Url,
-      button2Url: button2Url
+      url,
+      button1Url,
+      button2Url
     }
   };
 
@@ -89,7 +74,7 @@ self.addEventListener('notificationclick', function(event) {
     target = data.button2Url || data.url || '/';
   }
 
-  event.waitUntil(openOrFocus(target));
+  event.waitUntil(clients.openWindow(target));
 });
 
 // Fallback for VAPID/browser-native push payloads (Firefox/Safari).
@@ -102,7 +87,6 @@ self.addEventListener('push', function(event) {
   }
 
   const title = payload.title || payload.notification?.title || 'Push Eagle';
-  const actions = parseActions((payload.data && payload.data.actionsJson) || payload.actions || (payload.notification && payload.notification.actions));
   const url = payload.url || payload.data?.url || '/';
   const button1Url = payload.data?.button1Url || url;
   const button2Url = payload.data?.button2Url || '';
@@ -110,11 +94,11 @@ self.addEventListener('push', function(event) {
     body: payload.body || payload.notification?.body,
     icon: payload.icon || payload.notification?.icon,
     image: payload.image || payload.notification?.image,
-    actions: actions.length > 0 ? actions : undefined,
+    actions: buildPushEagleActions(payload),
     data: {
-      url: url,
-      button1Url: button1Url,
-      button2Url: button2Url
+      url,
+      button1Url,
+      button2Url
     }
   };
 

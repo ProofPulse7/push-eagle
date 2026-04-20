@@ -80,6 +80,8 @@ export const sendVapidPushNotification = async (
       url: payload.url ?? '/',
       button1Url: payload.button1Url ?? '',
       button2Url: payload.button2Url ?? '',
+      action1Title: payload.actions?.[0]?.title ?? '',
+      action2Title: payload.actions?.[1]?.title ?? '',
     },
   });
 

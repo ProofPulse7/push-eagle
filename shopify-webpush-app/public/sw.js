@@ -1,3 +1,23 @@
+self.buildPushEagleActions = function (payload) {
+    var fromNotification = (payload.notification && Array.isArray(payload.notification.actions))
+        ? payload.notification.actions
+        : (Array.isArray(payload.actions) ? payload.actions : []);
+
+    if (fromNotification.length > 0) {
+        return fromNotification.slice(0, 2).filter(function (a) { return a && a.action && a.title; });
+    }
+
+    var data = payload.data || {};
+    var fallbackActions = [];
+    if (data.action1Title && data.button1Url) {
+        fallbackActions.push({ action: 'btn_1', title: String(data.action1Title) });
+    }
+    if (data.action2Title && data.button2Url) {
+        fallbackActions.push({ action: 'btn_2', title: String(data.action2Title) });
+    }
+    return fallbackActions;
+};
+
 self.addEventListener('push', function (event) {
     var payload = {};
 
@@ -19,12 +39,7 @@ self.addEventListener('push', function (event) {
     var button1Url = (payload.data && payload.data.button1Url) || url;
     var button2Url = (payload.data && payload.data.button2Url) || '';
 
-    var rawActions = (payload.notification && Array.isArray(payload.notification.actions))
-        ? payload.notification.actions
-        : (Array.isArray(payload.actions) ? payload.actions : []);
-    var actions = rawActions
-        .slice(0, 2)
-        .filter(function (a) { return a && a.action && a.title; });
+    var actions = self.buildPushEagleActions(payload);
 
     var options = {
         body: body,

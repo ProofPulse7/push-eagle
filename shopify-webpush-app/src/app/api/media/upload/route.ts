@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { createMediaAsset } from '@/lib/server/data/store';
+import { createMediaAsset, pruneOrphanedMediaAssets } from '@/lib/server/data/store';
 import { uploadImageToR2 } from '@/lib/server/media/r2';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -50,6 +50,8 @@ export async function POST(request: Request) {
       objectKey: uploaded.objectKey,
       publicUrl: uploaded.publicUrl,
     });
+
+    await pruneOrphanedMediaAssets(shopDomain, 60).catch(() => undefined);
 
     return NextResponse.json({
       ok: true,

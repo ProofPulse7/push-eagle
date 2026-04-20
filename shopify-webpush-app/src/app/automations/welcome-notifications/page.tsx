@@ -148,20 +148,12 @@ type WelcomeDiagnosticsPayload = {
     macosImage?: { present?: boolean; scheme?: string; normalized?: string | null };
     androidImage?: { present?: boolean; scheme?: string; normalized?: string | null };
   }>;
-  actionButtons?: Record<string, Array<{
-    index: number;
-    title: string;
-    rawLink: string;
-    normalizedLink: string | null;
-    valid: boolean;
-    stepKey: string;
-  }>>;
-  tokenSummary?: Array<{
-    tokenType: string;
-    status: string;
-    total: number;
+  stepConfig?: Record<string, {
+    enabled?: boolean;
+    targetUrl?: string | null;
+    actionButtons?: Array<{ title: string; link: string }>;
   }>;
-  vapidConfigured?: boolean;
+  recentErrorsByStep?: Record<string, string[]>;
   inferredIssues?: string[];
   recentJobs?: Array<{
     id: string;
@@ -177,6 +169,9 @@ type WelcomeDiagnosticsPayload = {
     externalId: string | null;
     tokenStatus: string | null;
     tokenLastSeenAt: string | null;
+    browser?: string | null;
+    platform?: string | null;
+    actionButtons?: Array<{ title: string; link: string }>;
   }>;
 };
 
@@ -374,9 +369,9 @@ export default function WelcomeNotificationsPage() {
     const reminder3 = diagnosticsPayload.summary?.reminder3;
     const issues = diagnosticsPayload.inferredIssues ?? [];
     const media = diagnosticsPayload.reminderMedia ?? {};
-    const actionButtons = diagnosticsPayload.actionButtons ?? {};
-    const tokenSummary = diagnosticsPayload.tokenSummary ?? [];
     const recentJobs = diagnosticsPayload.recentJobs ?? [];
+    const stepConfig = diagnosticsPayload.stepConfig ?? {};
+    const recentErrorsByStep = diagnosticsPayload.recentErrorsByStep ?? {};
 
     const recentText = recentJobs
       .slice(0, 12)
@@ -390,6 +385,9 @@ export default function WelcomeNotificationsPage() {
           `sentAt=${job.sentAt ?? 'null'}`,
           `updatedAt=${job.updatedAt ?? 'null'}`,
           `tokenStatus=${job.tokenStatus ?? 'null'}`,
+          `browser=${job.browser ?? 'null'}`,
+          `platform=${job.platform ?? 'null'}`,
+          `buttons=${(job.actionButtons ?? []).map((button) => `${button.title}->${button.link}`).join(',') || 'none'}`,
           `error=${job.errorMessage ?? 'null'}`,
         ].join(' | '),
       )
@@ -402,11 +400,8 @@ export default function WelcomeNotificationsPage() {
       `reminder-2 pending=${reminder2?.pending ?? 0} dueNow=${reminder2?.dueNow ?? 0} processing=${reminder2?.processing ?? 0} sent=${reminder2?.sent ?? 0} delivered=${reminder2?.delivered ?? 0} failed=${reminder2?.failed ?? 0} skipped=${reminder2?.skipped ?? 0} lastDeliveredAt=${reminder2?.lastDeliveredAt ?? 'null'}`,
       `reminder-3 pending=${reminder3?.pending ?? 0} dueNow=${reminder3?.dueNow ?? 0} processing=${reminder3?.processing ?? 0} sent=${reminder3?.sent ?? 0} delivered=${reminder3?.delivered ?? 0} failed=${reminder3?.failed ?? 0} skipped=${reminder3?.skipped ?? 0} lastDeliveredAt=${reminder3?.lastDeliveredAt ?? 'null'}`,
       `staleProcessing=${diagnosticsPayload.summary?.staleProcessing ?? 0}`,
-      `vapidConfigured=${diagnosticsPayload.vapidConfigured ? 'yes' : 'no'}`,
-      'token summary:',
-      ...(tokenSummary.length > 0
-        ? tokenSummary.map((item) => `tokenType=${item.tokenType} status=${item.status} total=${item.total}`)
-        : ['none']),
+      `reminder-2 config enabled=${stepConfig['reminder-2']?.enabled ? 'yes' : 'no'} targetUrl=${stepConfig['reminder-2']?.targetUrl ?? 'null'} buttons=${(stepConfig['reminder-2']?.actionButtons ?? []).map((button) => `${button.title}->${button.link}`).join(',') || 'none'}`,
+      `reminder-3 config enabled=${stepConfig['reminder-3']?.enabled ? 'yes' : 'no'} targetUrl=${stepConfig['reminder-3']?.targetUrl ?? 'null'} buttons=${(stepConfig['reminder-3']?.actionButtons ?? []).map((button) => `${button.title}->${button.link}`).join(',') || 'none'}`,
       'configured media:',
       ...(['reminder-1', 'reminder-2', 'reminder-3'] as const).map((stepKey) => {
         const item = media[stepKey] ?? {};
@@ -418,18 +413,11 @@ export default function WelcomeNotificationsPage() {
           `${stepKey}.androidImage present=${item.androidImage?.present ? 'yes' : 'no'} scheme=${item.androidImage?.scheme ?? 'none'} normalized=${item.androidImage?.normalized ?? 'null'}`,
         ].join(' | ');
       }),
-      'configured action buttons:',
-      ...(['reminder-1', 'reminder-2', 'reminder-3'] as const).map((stepKey) => {
-        const stepButtons = actionButtons[stepKey] ?? [];
-        if (stepButtons.length === 0) {
-          return `${stepKey}.buttons none`;
-        }
-        return stepButtons
-          .map((button) => `${stepKey}.button-${button.index} valid=${button.valid ? 'yes' : 'no'} title=${button.title || 'null'} rawLink=${button.rawLink || 'null'} normalizedLink=${button.normalizedLink ?? 'null'}`)
-          .join('\n');
-      }),
       'issues:',
       ...(issues.length > 0 ? issues.map((issue, index) => `${index + 1}. ${issue}`) : ['1. no inferred issues']),
+      'recent step errors:',
+      `reminder-2 errors=${(recentErrorsByStep['reminder-2'] ?? []).join(' || ') || 'none'}`,
+      `reminder-3 errors=${(recentErrorsByStep['reminder-3'] ?? []).join(' || ') || 'none'}`,
       'recent jobs:',
       recentText || 'none',
     ].join('\n');

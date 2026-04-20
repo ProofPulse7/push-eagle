@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { env } from '@/lib/config/env';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
-import { isVapidConfigured, sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
+import { sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
 import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
 import { deleteImageFromR2 } from '@/lib/server/media/r2';
 
@@ -1234,25 +1234,80 @@ const cleanupUnusedMediaAssets = async (shopDomain: string, removedUrls: string[
   }
 };
 
-const pruneUnusedMediaAssets = async (shopDomain: string, limit = 20) => {
+export const pruneOrphanedMediaAssets = async (shopDomain: string, olderThanMinutes = 60) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const safeOlderThanMinutes = Math.max(5, Math.min(Math.floor(olderThanMinutes), 60 * 24 * 30));
 
-  const rows = await sql`
-    SELECT id, public_url, object_key
-    FROM media_assets
-    WHERE shop_domain = ${shopDomain}
-      AND object_key IS NOT NULL
-      AND created_at < NOW() - INTERVAL '30 minutes'
-    ORDER BY created_at ASC
-    LIMIT ${Math.max(1, Math.min(limit, 100))}
+  const candidates = await sql`
+    SELECT m.id, m.public_url, m.object_key
+    FROM media_assets m
+    WHERE m.shop_domain = ${shopDomain}
+      AND m.object_key IS NOT NULL
+      AND m.created_at < NOW() - (${safeOlderThanMinutes} * INTERVAL '1 minute')
+      AND NOT EXISTS (
+        SELECT 1
+        FROM campaigns c
+        WHERE c.shop_domain = m.shop_domain
+          AND (
+            c.icon_url = m.public_url
+            OR c.image_url = m.public_url
+            OR c.windows_image_url = m.public_url
+            OR c.macos_image_url = m.public_url
+            OR c.android_image_url = m.public_url
+            OR c.icon_url LIKE ('%/api/media/' || m.id || '%')
+            OR c.image_url LIKE ('%/api/media/' || m.id || '%')
+            OR c.windows_image_url LIKE ('%/api/media/' || m.id || '%')
+            OR c.macos_image_url LIKE ('%/api/media/' || m.id || '%')
+            OR c.android_image_url LIKE ('%/api/media/' || m.id || '%')
+          )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM merchant_settings s
+        WHERE s.shop_domain = m.shop_domain
+          AND (
+            s.opt_in_logo_url = m.public_url
+            OR s.brand_logo_url = m.public_url
+            OR s.opt_in_logo_url LIKE ('%/api/media/' || m.id || '%')
+            OR s.brand_logo_url LIKE ('%/api/media/' || m.id || '%')
+          )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM automation_rules a
+        WHERE a.shop_domain = m.shop_domain
+          AND (
+            a.config::text LIKE ('%' || m.id || '%')
+            OR a.config::text LIKE ('%' || m.object_key || '%')
+            OR (m.public_url IS NOT NULL AND a.config::text LIKE ('%' || m.public_url || '%'))
+          )
+      )
+    ORDER BY m.created_at ASC
+    LIMIT 50
   `;
 
-  const candidates = (rows as Array<Record<string, unknown>>)
-    .map((row) => String(row.public_url ?? '').trim() || `/${String(row.object_key ?? '').trim()}`)
-    .filter(Boolean);
+  let deletedCount = 0;
+  for (const row of candidates as Array<{ id: string; public_url: string | null; object_key: string | null }>) {
+    if (!row.object_key) {
+      continue;
+    }
 
-  await cleanupUnusedMediaAssets(shopDomain, candidates);
+    try {
+      await deleteImageFromR2(String(row.object_key));
+    } catch {
+      // Ignore remote delete errors and still attempt to prune metadata.
+    }
+
+    await sql`
+      DELETE FROM media_assets
+      WHERE id = ${String(row.id)}
+        AND shop_domain = ${shopDomain}
+    `;
+    deletedCount += 1;
+  }
+
+  return { deletedCount };
 };
 
 const resolveAutomationDestination = async (shopDomain: string, payload: AutomationJobPayload) => {
@@ -3099,6 +3154,8 @@ export const processAutomationJob = async (jobId: string) => {
       .map((btn, i) => ({ action: `btn_${i + 1}`, title: String(btn.title) }));
     const automationButton1Url = rawActionButtons[0]?.link ? String(rawActionButtons[0].link) : '';
     const automationButton2Url = rawActionButtons[1]?.link ? String(rawActionButtons[1].link) : '';
+    const automationAction1Title = automationActions[0]?.title ?? '';
+    const automationAction2Title = automationActions[1]?.title ?? '';
 
     if (tokenType === 'vapid') {
       // VAPID send for Firefox / Safari
@@ -3126,22 +3183,27 @@ export const processAutomationJob = async (jobId: string) => {
       const messaging = getFirebaseAdminMessaging();
       const message = {
         token,
+        notification: {
+          title: payload.title,
+          body: payload.body,
+          imageUrl: payload.imageUrl ?? undefined,
+        },
         webpush: {
-          headers: {
-            Urgency: 'high',
+          fcmOptions: { link: trackedTargetUrl ?? undefined },
+          notification: {
+            icon: payload.iconUrl ?? undefined,
+            image: payload.imageUrl ?? undefined,
+            actions: automationActions.length > 0 ? automationActions : undefined,
           },
         },
         data: {
           source: 'automation',
           ruleKey: String(payload.ruleKey ?? ''),
-          title: String(payload.title ?? ''),
-          body: String(payload.body ?? ''),
-          iconUrl: String(payload.iconUrl ?? ''),
-          imageUrl: String(payload.imageUrl ?? ''),
           url: trackedTargetUrl ?? payload.targetUrl ?? '',
           button1Url: automationButton1Url,
           button2Url: automationButton2Url,
-          actionsJson: JSON.stringify(automationActions),
+          action1Title: automationAction1Title,
+          action2Title: automationAction2Title,
         },
       };
 
@@ -5486,23 +5548,29 @@ export const sendCampaign = async (
       if (fcmRecipients.length > 0) {
         const messages = fcmRecipients.map(({ item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, actions }) => ({
           token: item.fcm_token,
+          notification: {
+            title: campaign.title,
+            body: campaign.body,
+            imageUrl: platformImage ?? undefined,
+          },
           webpush: {
-            headers: {
-              Urgency: 'high',
+            fcmOptions: {
+              link: trackedUrl ?? undefined,
+            },
+            notification: {
+              icon: campaign.icon_url ?? undefined,
+              image: platformImage ?? undefined,
+              actions: actions.length > 0 ? actions : undefined,
             },
           },
           data: {
             campaignId,
             shopDomain,
-            title: String(campaign.title ?? ''),
-            body: String(campaign.body ?? ''),
-            iconUrl: String(campaign.icon_url ?? ''),
-            imageUrl: String(platformImage ?? ''),
             primaryUrl: trackedUrl ?? '',
-            url: trackedUrl ?? '',
             button1Url: firstButtonUrl ?? '',
             button2Url: secondButtonUrl ?? '',
-            actionsJson: JSON.stringify(actions),
+            action1Title: actions[0]?.title ?? '',
+            action2Title: actions[1]?.title ?? '',
           },
         }));
 
@@ -5685,8 +5753,6 @@ export const createMediaAsset = async (input: {
       ${input.publicUrl ?? null}
     )
   `;
-
-  await pruneUnusedMediaAssets(input.shopDomain, 10);
 
   return {
     id: assetId,
@@ -6173,29 +6239,22 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
       j.sent_at,
       j.updated_at,
       j.error_message,
+      j.payload -> 'metadata' -> 'actionButtons' AS action_buttons,
       j.token_id,
       j.subscriber_id,
       j.payload ->> 'externalId' AS external_id,
       t.status AS token_status,
-      t.last_seen_at
+      t.last_seen_at,
+      s.browser AS subscriber_browser,
+      s.platform AS subscriber_platform
     FROM automation_jobs j
     LEFT JOIN subscriber_tokens t ON t.id = j.token_id
+    LEFT JOIN subscribers s ON s.id = j.subscriber_id
     WHERE j.shop_domain = ${shopDomain}
       AND j.rule_key = 'welcome_subscriber'
       AND COALESCE(j.payload -> 'metadata' ->> 'stepKey', '') IN ('reminder-2', 'reminder-3')
     ORDER BY j.created_at DESC
     LIMIT 40
-  `;
-
-  const tokenSummaryRows = await sql`
-    SELECT
-      COALESCE(NULLIF(token_type, ''), 'fcm') AS token_type,
-      COALESCE(NULLIF(status, ''), 'unknown') AS status,
-      COUNT(*)::INT AS total
-    FROM subscriber_tokens
-    WHERE shop_domain = ${shopDomain}
-    GROUP BY 1, 2
-    ORDER BY 1 ASC, 2 ASC
   `;
 
   const summary = {
@@ -6353,54 +6412,47 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
 
   inferredIssues.push(...invalidMediaIssues);
 
-  const normalizeButtonStatus = (buttons: Array<{ title: string; link: string }> | undefined, stepKey: WelcomeStepKey) => {
-    const values = Array.isArray(buttons) ? buttons.slice(0, 2) : [];
-    return values.map((button, index) => ({
-      index: index + 1,
-      title: String(button?.title ?? '').trim(),
-      rawLink: String(button?.link ?? '').trim(),
-      normalizedLink: toHttpUrlOrNull(String(button?.link ?? '').trim(), storeBase),
-      valid: Boolean(String(button?.title ?? '').trim() && toHttpUrlOrNull(String(button?.link ?? '').trim(), storeBase)),
-      stepKey,
-    }));
+  const stepConfig = {
+    'reminder-2': {
+      enabled: Boolean(welcomeConfig.steps['reminder-2'].enabled),
+      targetUrl: welcomeConfig.steps['reminder-2'].targetUrl ?? null,
+      actionButtons: welcomeConfig.steps['reminder-2'].actionButtons ?? [],
+    },
+    'reminder-3': {
+      enabled: Boolean(welcomeConfig.steps['reminder-3'].enabled),
+      targetUrl: welcomeConfig.steps['reminder-3'].targetUrl ?? null,
+      actionButtons: welcomeConfig.steps['reminder-3'].actionButtons ?? [],
+    },
   };
 
-  const actionButtons = {
-    'reminder-1': normalizeButtonStatus(welcomeConfig.steps['reminder-1'].actionButtons, 'reminder-1'),
-    'reminder-2': normalizeButtonStatus(welcomeConfig.steps['reminder-2'].actionButtons, 'reminder-2'),
-    'reminder-3': normalizeButtonStatus(welcomeConfig.steps['reminder-3'].actionButtons, 'reminder-3'),
-  };
-
-  for (const stepKey of ['reminder-1', 'reminder-2', 'reminder-3'] as const) {
-    for (const button of actionButtons[stepKey]) {
-      if (!button.valid) {
-        inferredIssues.push(`${stepKey}.button-${button.index} is invalid and will be omitted from live notifications.`);
-      }
+  for (const stepKey of ['reminder-2', 'reminder-3'] as const) {
+    const buttons = stepConfig[stepKey].actionButtons;
+    if (buttons.length > 2) {
+      inferredIssues.push(`${stepKey} has more than 2 action buttons configured; only the first 2 can be rendered.`);
+    }
+    if (buttons.some((button) => !String(button.title ?? '').trim() || !String(button.link ?? '').trim())) {
+      inferredIssues.push(`${stepKey} has action buttons with missing title/link; incomplete buttons will be dropped before send.`);
     }
   }
 
-  const tokenSummary = (tokenSummaryRows as Array<Record<string, unknown>>).map((row) => ({
-    tokenType: String(row.token_type ?? 'fcm'),
-    status: String(row.status ?? 'unknown'),
-    total: Number(row.total ?? 0),
-  }));
-
-  if (tokenSummary.some((item) => item.tokenType === 'vapid') && !isVapidConfigured()) {
-    inferredIssues.push('VAPID subscriber tokens exist but VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY are not configured for sending.');
-  }
-
-  if ((actionButtons['reminder-2'].length > 0 || actionButtons['reminder-3'].length > 0) && tokenSummary.every((item) => item.total === 0)) {
-    inferredIssues.push('No subscriber tokens are stored yet, so welcome action buttons cannot be verified on live sends.');
-  }
+  const recentErrorsByStep = {
+    'reminder-2': (recentRows as Array<Record<string, unknown>>)
+      .filter((row) => String(row.step_key ?? '') === 'reminder-2' && row.error_message)
+      .slice(0, 5)
+      .map((row) => String(row.error_message)),
+    'reminder-3': (recentRows as Array<Record<string, unknown>>)
+      .filter((row) => String(row.step_key ?? '') === 'reminder-3' && row.error_message)
+      .slice(0, 5)
+      .map((row) => String(row.error_message)),
+  };
 
   return {
     shopDomain,
     checkedAt: new Date().toISOString(),
     summary,
+    stepConfig,
+    recentErrorsByStep,
     reminderMedia,
-    actionButtons,
-    tokenSummary,
-    vapidConfigured: isVapidConfigured(),
     inferredIssues,
     recentJobs: (recentRows as Array<Record<string, unknown>>).map((row) => ({
       id: String(row.id ?? ''),
@@ -6411,11 +6463,19 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
       sentAt: row.sent_at ? new Date(String(row.sent_at)).toISOString() : null,
       updatedAt: row.updated_at ? new Date(String(row.updated_at)).toISOString() : null,
       errorMessage: row.error_message ? String(row.error_message) : null,
+      actionButtons: Array.isArray(row.action_buttons)
+        ? (row.action_buttons as Array<Record<string, unknown>>).map((button) => ({
+            title: String(button.title ?? ''),
+            link: String(button.link ?? ''),
+          }))
+        : [],
       tokenId: row.token_id == null ? null : Number(row.token_id),
       subscriberId: row.subscriber_id == null ? null : Number(row.subscriber_id),
       externalId: row.external_id ? String(row.external_id) : null,
       tokenStatus: row.token_status ? String(row.token_status) : null,
       tokenLastSeenAt: row.last_seen_at ? new Date(String(row.last_seen_at)).toISOString() : null,
+      browser: row.subscriber_browser ? String(row.subscriber_browser) : null,
+      platform: row.subscriber_platform ? String(row.subscriber_platform) : null,
     })),
   };
 };
