@@ -6699,6 +6699,14 @@ export const getStorefrontDiagnostics = async (shopDomain: string) => {
     issues.push('No active subscriber tokens found for this shop. Real notifications cannot be delivered.');
   }
 
+  if (recentDiagnosticRows.length === 0) {
+    issues.push(
+      activeTokens > 0
+        ? 'No storefront diagnostic events were recorded. The live theme extension may still be serving an older push-eagle-storefront.js asset, or the storefront app proxy/embed is not executing on the store.'
+        : 'No storefront diagnostic events were recorded. The storefront prompt/app proxy may not be executing on the live store at all.',
+    );
+  }
+
   const diagnosticsInLastHour = (recentDiagnosticRows as Array<Record<string, unknown>>)
     .filter((row) => {
       const createdAtRaw = row.created_at ? new Date(String(row.created_at)).getTime() : 0;

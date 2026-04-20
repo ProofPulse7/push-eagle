@@ -1595,41 +1595,75 @@
 
       var tokenSaved = false;
       var tokenSaveReason = '';
+      var lastErrorDetails = [];
 
+      // Try to save token with multiple attempts and exponential backoff.
       for (var endpointIndex = 0; endpointIndex < tokenEndpoints.length; endpointIndex += 1) {
         var endpoint = tokenEndpoints[endpointIndex];
+        var retryCount = 0;
+        var maxRetries = 3;
+        var baseDelay = 300;
 
-        try {
-          var tokenResponse = await fetch(endpoint, {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(payload)
-          });
+        while (retryCount < maxRetries && !tokenSaved) {
+          try {
+            var tokenResponse = await fetch(endpoint, {
+              method: 'POST',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(payload)
+            });
 
-          if (tokenResponse.ok) {
-            tokenSaved = true;
+            if (tokenResponse.ok) {
+              tokenSaved = true;
+              break;
+            }
+
+            var responseError = '';
+            try {
+              var responseJson = await tokenResponse.json();
+              responseError = responseJson && responseJson.error ? String(responseJson.error) : '';
+            } catch (_jsonError) {
+              responseError = '';
+            }
+
+            tokenSaveReason = String(endpoint) + '|http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
+            lastErrorDetails.push(tokenSaveReason + ' (attempt ' + (retryCount + 1) + ')');
+
+            // Retry on transient errors (5xx, network issues, timeouts).
+            if (tokenResponse.status >= 500 || retryCount < maxRetries - 1) {
+              var delayMs = baseDelay * Math.pow(2, retryCount);
+              await delay(delayMs);
+              retryCount += 1;
+              continue;
+            }
+
+            break;
+          } catch (tokenSaveError) {
+            tokenSaveReason = String(endpoint) + '|network-error:' + (tokenSaveError && tokenSaveError.message ? String(tokenSaveError.message) : 'request failed');
+            lastErrorDetails.push(tokenSaveReason + ' (attempt ' + (retryCount + 1) + ')');
+
+            // Retry on network errors.
+            if (retryCount < maxRetries - 1) {
+              var delayMs = baseDelay * Math.pow(2, retryCount);
+              await delay(delayMs);
+              retryCount += 1;
+              continue;
+            }
+
             break;
           }
+        }
 
-          var responseError = '';
-          try {
-            var responseJson = await tokenResponse.json();
-            responseError = responseJson && responseJson.error ? String(responseJson.error) : '';
-          } catch (_jsonError) {
-            responseError = '';
-          }
-
-          tokenSaveReason = String(endpoint) + '|http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
-        } catch (tokenSaveError) {
-          tokenSaveReason = String(endpoint) + '|network-error:' + (tokenSaveError && tokenSaveError.message ? String(tokenSaveError.message) : 'request failed');
+        if (tokenSaved) {
+          break;
         }
       }
 
       if (!tokenSaved) {
-        return { ok: false, reason: 'token-save-failed', message: tokenSaveReason };
+        var fullMessage = lastErrorDetails.length > 0 ? lastErrorDetails.join(' | ') : tokenSaveReason;
+        return { ok: false, reason: 'token-save-failed', message: fullMessage };
       }
 
       markSubscribed(boot.shopDomain, token);
