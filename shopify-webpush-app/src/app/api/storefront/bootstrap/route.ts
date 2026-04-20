@@ -50,6 +50,10 @@ export async function GET(request: Request) {
     const signatureValid = verifyShopifyAppProxySignature(url.searchParams);
 
     const shopDomain = parseShopDomain(url.searchParams.get('shop'));
+    const requestedExternalIdRaw = String(url.searchParams.get('externalId') ?? '').trim();
+    const requestedExternalId = /^[a-z0-9:_-]{8,128}$/i.test(requestedExternalIdRaw)
+      ? requestedExternalIdRaw
+      : null;
     const cookieStore = await cookies();
     const cookieName = `pe_ext_${shopDomain.replace(/[^a-z0-9]/gi, '_')}`;
 
@@ -64,7 +68,9 @@ export async function GET(request: Request) {
     void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
 
     const existingCookieId = cookieStore.get(cookieName)?.value ?? null;
-    const externalId = customerExternalId ?? existingCookieId ?? getAnonymousExternalId();
+    // Honor a validated storefront-provided external id first to keep identity stable
+    // across proxy/direct bootstrap paths and avoid duplicate welcome sequences.
+    const externalId = customerExternalId ?? requestedExternalId ?? existingCookieId ?? getAnonymousExternalId();
 
     const response = NextResponse.json({
       ok: true,

@@ -2,9 +2,9 @@ name = "push-eagle-cron-pinger"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
 
-# Cron triggers - runs every 5 minutes for free on Cloudflare
+# Cron triggers - runs every minute for near-real-time delayed reminder delivery
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
 
 # Environment variables (non-secret). Set secrets via: wrangler secret put CRON_SECRET
 [vars]

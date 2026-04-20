@@ -2776,11 +2776,19 @@ export const processAutomationJob = async (jobId: string) => {
     SET status = 'processing', attempts = attempts + 1, updated_at = NOW()
     WHERE id = ${jobId}
       AND status = 'pending'
-    RETURNING id, shop_domain, rule_key, token_id, subscriber_id, payload
+    RETURNING id, shop_domain, rule_key, token_id, subscriber_id, payload, attempts
   `;
 
   const claim = claimRows[0] as
-    | { id: string; shop_domain: string; rule_key: string; token_id: number | null; subscriber_id: number | null; payload: AutomationJobPayload }
+    | {
+      id: string;
+      shop_domain: string;
+      rule_key: string;
+      token_id: number | null;
+      subscriber_id: number | null;
+      payload: AutomationJobPayload;
+      attempts: number;
+    }
     | undefined;
   if (!claim) {
     return { processed: false };
@@ -2840,12 +2848,22 @@ export const processAutomationJob = async (jobId: string) => {
   }
 
   if (!token || tokenStatus !== 'active') {
+    const maxMissingTokenRetries = 8;
+    const attempts = Number(claim.attempts ?? 0);
+    const shouldFail = attempts >= maxMissingTokenRetries;
+    const errorMessage = shouldFail
+      ? 'Missing active token.'
+      : 'Missing active token. Waiting for token refresh.';
+
     await sql`
       UPDATE automation_jobs
-      SET status = 'failed', error_message = 'Missing active token.', updated_at = NOW()
+      SET status = ${shouldFail ? 'failed' : 'pending'},
+          error_message = ${errorMessage},
+          due_at = CASE WHEN ${shouldFail} THEN due_at ELSE NOW() + INTERVAL '1 minute' END,
+          updated_at = NOW()
       WHERE id = ${jobId}
     `;
-    return { processed: false, error: 'Missing active token.' };
+    return { processed: false, error: errorMessage };
   }
 
   try {

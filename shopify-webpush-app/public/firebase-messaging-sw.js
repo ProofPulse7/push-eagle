@@ -19,6 +19,22 @@ firebase.initializeApp(firebaseConfig);
 // messages.
 const messaging = firebase.messaging();
 
+const sendTrackingBeacon = (trackUrl) => {
+  if (!trackUrl) {
+    return Promise.resolve();
+  }
+
+  return fetch(trackUrl, {
+    method: 'GET',
+    mode: 'no-cors',
+    credentials: 'omit',
+    cache: 'no-store',
+    keepalive: true,
+  }).catch(() => {
+    // Ignore tracking errors to keep click-through instant.
+  });
+};
+
 const buildPushEagleActions = (payload) => {
   const notificationActions = Array.isArray(payload.notification?.actions)
     ? payload.notification.actions
@@ -49,6 +65,9 @@ messaging.onBackgroundMessage(function(payload) {
   const url = payload.fcmOptions?.link || payload.data?.url || '/';
   const button1Url = payload.data?.button1Url || url;
   const button2Url = payload.data?.button2Url || '';
+  const trackPrimaryUrl = payload.data?.trackPrimaryUrl || '';
+  const trackButton1Url = payload.data?.trackButton1Url || '';
+  const trackButton2Url = payload.data?.trackButton2Url || '';
 
   const notificationOptions = {
     body: payload.notification?.body,
@@ -59,6 +78,9 @@ messaging.onBackgroundMessage(function(payload) {
       url,
       button1Url,
       button2Url,
+      trackPrimaryUrl,
+      trackButton1Url,
+      trackButton2Url,
     },
   };
 
@@ -70,13 +92,17 @@ self.addEventListener('notificationclick', function(event) {
 
   const data = event.notification?.data || {};
   let targetUrl;
+  let trackUrl;
   if (event.action === 'btn_1') {
     targetUrl = data.button1Url || data.url || '/';
+    trackUrl = data.trackButton1Url || data.trackPrimaryUrl || '';
   } else if (event.action === 'btn_2') {
     targetUrl = data.button2Url || data.url || '/';
+    trackUrl = data.trackButton2Url || data.trackPrimaryUrl || '';
   } else {
     targetUrl = data.url || '/';
+    trackUrl = data.trackPrimaryUrl || '';
   }
 
-  event.waitUntil(clients.openWindow(targetUrl));
+  event.waitUntil(Promise.all([sendTrackingBeacon(trackUrl), clients.openWindow(targetUrl)]));
 });
