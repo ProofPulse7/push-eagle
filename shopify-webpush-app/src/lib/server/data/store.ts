@@ -4685,6 +4685,16 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
 
   const subscriberId = Number(subscriberRows[0]?.id);
 
+  const existingActiveTokenRows = await sql`
+    SELECT id
+    FROM subscriber_tokens
+    WHERE shop_domain = ${input.shopDomain}
+      AND subscriber_id = ${subscriberId}
+      AND status = 'active'
+      AND fcm_token <> ${input.token}
+    LIMIT 1
+  `;
+
   const tokenRows = await sql`
     INSERT INTO subscriber_tokens (shop_domain, subscriber_id, fcm_token, user_agent, status, token_type, vapid_endpoint, vapid_p256dh, vapid_auth, updated_at, last_seen_at)
     VALUES (
@@ -4716,6 +4726,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
 
   const tokenId = Number(tokenRows[0]?.id);
   const tokenWasInserted = Boolean(tokenRows[0]?.was_inserted);
+  const subscriberAlreadyHadActiveToken = existingActiveTokenRows.length > 0;
 
   const welcomeRuleRows = await sql`
     SELECT enabled, config
@@ -4725,7 +4736,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     LIMIT 1
   `;
 
-  if (Boolean(welcomeRuleRows[0]?.enabled) && tokenWasInserted) {
+  if (Boolean(welcomeRuleRows[0]?.enabled) && tokenWasInserted && !subscriberAlreadyHadActiveToken) {
     const existingWelcomeJobRows = await sql`
       SELECT id
       FROM automation_jobs

@@ -16,8 +16,7 @@ export const runtime = 'nodejs';
  * requires CORS headers.
  */
 function addCorsHeaders(response: NextResponse, requestOrigin: string | null) {
-  // Allow all myshopify.com storefronts (dev stores and live stores)
-  if (requestOrigin && /^https:\/\/[a-z0-9-]+\.myshopify\.com$/i.test(requestOrigin)) {
+  if (requestOrigin && /^https:\/\/[a-z0-9.-]+$/i.test(requestOrigin)) {
     response.headers.set('Access-Control-Allow-Origin', requestOrigin);
     response.headers.set('Access-Control-Allow-Credentials', 'true');
     response.headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -59,12 +58,13 @@ export async function GET(request: Request) {
     });
 
     const optIn = await getOptInSettings(shopDomain);
-  const shopifyCapabilities = await getMerchantCapabilitySnapshot(shopDomain);
+    const shopifyCapabilities = await getMerchantCapabilitySnapshot(shopDomain);
 
     void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
 
     const existingCookieId = cookieStore.get(cookieName)?.value ?? null;
-    const externalId = customerExternalId ?? existingCookieId ?? getAnonymousExternalId();
+    const requestedExternalId = url.searchParams.get('externalId')?.trim() || null;
+    const externalId = customerExternalId ?? existingCookieId ?? requestedExternalId ?? getAnonymousExternalId();
 
     const response = NextResponse.json({
       ok: true,
