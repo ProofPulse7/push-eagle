@@ -3196,26 +3196,21 @@ export const processAutomationJob = async (jobId: string) => {
       .slice(0, 2)
       .filter((btn) => btn?.title && btn?.link)
       .map((btn, i) => ({ action: `btn_${i + 1}`, title: String(btn.title) }));
-    
-    // Track button URLs with automation context
-    const trackedButton1Url = payload.ruleKey && rawActionButtons[0]?.link
+    const automationButton1Url = payload.ruleKey && rawActionButtons[0]?.link
       ? buildAutomationTrackedUrl(String(rawActionButtons[0].link), payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
       : (rawActionButtons[0]?.link ? String(rawActionButtons[0].link) : '');
-    
-    const trackedButton2Url = payload.ruleKey && rawActionButtons[1]?.link
+    const automationButton2Url = payload.ruleKey && rawActionButtons[1]?.link
       ? buildAutomationTrackedUrl(String(rawActionButtons[1].link), payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
       : (rawActionButtons[1]?.link ? String(rawActionButtons[1].link) : '');
-
     const primaryTrackUrl = payload.ruleKey
       ? buildAutomationClickTrackingUrl(trackedTargetUrl, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
       : '';
     const button1TrackUrl = payload.ruleKey
-      ? buildAutomationClickTrackingUrl(trackedButton1Url, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+      ? buildAutomationClickTrackingUrl(automationButton1Url, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
       : '';
     const button2TrackUrl = payload.ruleKey
-      ? buildAutomationClickTrackingUrl(trackedButton2Url, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+      ? buildAutomationClickTrackingUrl(automationButton2Url, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
       : '';
-    
     const automationAction1Title = automationActions[0]?.title ?? '';
     const automationAction2Title = automationActions[1]?.title ?? '';
 
@@ -3236,8 +3231,8 @@ export const processAutomationJob = async (jobId: string) => {
           image: payload.imageUrl ?? null,
           url: trackedTargetUrl ?? payload.targetUrl ?? null,
           actions: automationActions,
-          button1Url: trackedButton1Url || null,
-          button2Url: trackedButton2Url || null,
+          button1Url: automationButton1Url || null,
+          button2Url: automationButton2Url || null,
           trackPrimaryUrl: primaryTrackUrl || null,
           trackButton1Url: button1TrackUrl || null,
           trackButton2Url: button2TrackUrl || null,
@@ -3265,8 +3260,8 @@ export const processAutomationJob = async (jobId: string) => {
           source: 'automation',
           ruleKey: String(payload.ruleKey ?? ''),
           url: trackedTargetUrl ?? payload.targetUrl ?? '',
-          button1Url: trackedButton1Url ?? '',
-          button2Url: trackedButton2Url ?? '',
+          button1Url: automationButton1Url ?? '',
+          button2Url: automationButton2Url ?? '',
           trackPrimaryUrl: primaryTrackUrl,
           trackButton1Url: button1TrackUrl,
           trackButton2Url: button2TrackUrl,
