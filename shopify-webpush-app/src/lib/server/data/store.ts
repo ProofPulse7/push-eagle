@@ -1391,7 +1391,7 @@ const resolveAutomationDestination = async (shopDomain: string, payload: Automat
     shopDomain,
   );
 
-  const targetUrl = toHttpUrlOrNull(payload.targetUrl ?? null, storeBase) ?? storeBase;
+  const targetUrl = toHttpUrlOrNull(unwrapTrackingRedirectUrl(payload.targetUrl ?? ''), storeBase) ?? storeBase;
 
   const fallbackLogo = rows[0]?.brand_logo_url ?? rows[0]?.opt_in_logo_url ?? null;
   const iconUrl = toHttpUrlOrNull(payload.iconUrl ?? null, storeBase)
@@ -1407,7 +1407,7 @@ const resolveAutomationDestination = async (shopDomain: string, payload: Automat
   const actionButtons = rawActionButtons
     .map((button) => {
       const title = String(button.title ?? '').trim();
-      const link = toHttpUrlOrNull(String(button.link ?? ''), storeBase);
+      const link = toHttpUrlOrNull(unwrapTrackingRedirectUrl(String(button.link ?? '')), storeBase);
       if (!title || !link) {
         return null;
       }
@@ -3205,9 +3205,13 @@ export const processAutomationJob = async (jobId: string) => {
       },
     };
 
-    const trackedTargetUrl = payload.ruleKey
-      ? buildAutomationTrackedUrl(payload.targetUrl ?? null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
-      : payload.targetUrl ?? null;
+    const effectiveRuleKey = (payload.ruleKey ?? claim.rule_key) as AutomationRuleKey;
+    const trackedTargetUrl = buildAutomationTrackedUrl(
+      payload.targetUrl ?? null,
+      effectiveRuleKey,
+      claim.shop_domain,
+      payload.externalId ?? null,
+    ) ?? payload.targetUrl ?? null;
 
     let fcmMessageId: string;
 
@@ -3218,21 +3222,30 @@ export const processAutomationJob = async (jobId: string) => {
       .slice(0, 2)
       .filter((btn) => btn?.title && btn?.link)
       .map((btn, i) => ({ action: `btn_${i + 1}`, title: String(btn.title) }));
-    const automationButton1Url = payload.ruleKey && rawActionButtons[0]?.link
-      ? buildAutomationTrackedUrl(String(rawActionButtons[0].link), payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+    const automationButton1Url = rawActionButtons[0]?.link
+      ? buildAutomationTrackedUrl(String(rawActionButtons[0].link), effectiveRuleKey, claim.shop_domain, payload.externalId ?? null)
       : (rawActionButtons[0]?.link ? String(rawActionButtons[0].link) : '');
-    const automationButton2Url = payload.ruleKey && rawActionButtons[1]?.link
-      ? buildAutomationTrackedUrl(String(rawActionButtons[1].link), payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+    const automationButton2Url = rawActionButtons[1]?.link
+      ? buildAutomationTrackedUrl(String(rawActionButtons[1].link), effectiveRuleKey, claim.shop_domain, payload.externalId ?? null)
       : (rawActionButtons[1]?.link ? String(rawActionButtons[1].link) : '');
-    const primaryTrackUrl = payload.ruleKey
-      ? buildAutomationClickTrackingUrl(trackedTargetUrl, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
-      : '';
-    const button1TrackUrl = payload.ruleKey
-      ? buildAutomationClickTrackingUrl(automationButton1Url, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
-      : '';
-    const button2TrackUrl = payload.ruleKey
-      ? buildAutomationClickTrackingUrl(automationButton2Url, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
-      : '';
+    const primaryTrackUrl = buildAutomationClickTrackingUrl(
+      trackedTargetUrl,
+      effectiveRuleKey,
+      claim.shop_domain,
+      payload.externalId ?? null,
+    );
+    const button1TrackUrl = buildAutomationClickTrackingUrl(
+      automationButton1Url,
+      effectiveRuleKey,
+      claim.shop_domain,
+      payload.externalId ?? null,
+    );
+    const button2TrackUrl = buildAutomationClickTrackingUrl(
+      automationButton2Url,
+      effectiveRuleKey,
+      claim.shop_domain,
+      payload.externalId ?? null,
+    );
     const automationAction1Title = automationActions[0]?.title ?? '';
     const automationAction2Title = automationActions[1]?.title ?? '';
 
