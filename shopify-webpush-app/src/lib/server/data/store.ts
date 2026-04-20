@@ -108,6 +108,22 @@ type RecordIosHomeScreenInput = {
   deviceContext?: Record<string, unknown> | null;
 };
 
+type RecordStorefrontTokenDiagnosticInput = {
+  shopDomain: string;
+  externalId?: string | null;
+  eventType: string;
+  status?: 'info' | 'success' | 'error';
+  reason?: string | null;
+  message?: string | null;
+  tokenType?: 'fcm' | 'vapid' | null;
+  browser?: string | null;
+  platform?: string | null;
+  locale?: string | null;
+  permissionState?: string | null;
+  endpoint?: string | null;
+  details?: Record<string, unknown> | null;
+};
+
 type SubscriberSortOrder = 'asc' | 'desc';
 
 type SubscriberListRow = {
@@ -786,6 +802,24 @@ const ensureSchema = async () => {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
 
+      await sql`CREATE TABLE IF NOT EXISTS storefront_token_diagnostics (
+        id BIGSERIAL PRIMARY KEY,
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        external_id TEXT,
+        event_type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'info',
+        reason TEXT,
+        message TEXT,
+        token_type TEXT,
+        browser TEXT,
+        platform TEXT,
+        locale TEXT,
+        permission_state TEXT,
+        endpoint TEXT,
+        details JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+
       await sql`CREATE TABLE IF NOT EXISTS pixel_events (
         id TEXT PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -950,6 +984,8 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_external_created ON subscriber_activity_events(shop_domain, external_id, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_product_created ON subscriber_activity_events(shop_domain, product_id, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_cart_created ON subscriber_activity_events(shop_domain, cart_token, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_storefront_diag_shop_created ON storefront_token_diagnostics(shop_domain, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_storefront_diag_shop_event_created ON storefront_token_diagnostics(shop_domain, event_type, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_variant ON shopify_product_variants(shop_domain, variant_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_inventory ON shopify_product_variants(shop_domain, inventory_item_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_product ON shopify_product_variants(shop_domain, product_id)`;
@@ -6521,6 +6557,219 @@ export const clearWelcomeAutomationHistory = async (shopDomain: string) => {
     clearedDeliveries: deliveryRows.length,
     clearedClicks: clickRows.length,
     clearedAt: new Date().toISOString(),
+  };
+};
+
+export const recordStorefrontTokenDiagnostic = async (input: RecordStorefrontTokenDiagnosticInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  await ensureMerchant(input.shopDomain);
+
+  await sql`
+    INSERT INTO storefront_token_diagnostics (
+      shop_domain,
+      external_id,
+      event_type,
+      status,
+      reason,
+      message,
+      token_type,
+      browser,
+      platform,
+      locale,
+      permission_state,
+      endpoint,
+      details
+    )
+    VALUES (
+      ${input.shopDomain},
+      ${input.externalId ?? null},
+      ${String(input.eventType || 'unknown')},
+      ${input.status ?? 'info'},
+      ${input.reason ?? null},
+      ${input.message ?? null},
+      ${input.tokenType ?? null},
+      ${input.browser ?? null},
+      ${input.platform ?? null},
+      ${input.locale ?? null},
+      ${input.permissionState ?? null},
+      ${input.endpoint ?? null},
+      ${input.details ? JSON.stringify(input.details) : null}::jsonb
+    )
+  `;
+};
+
+export const getStorefrontDiagnostics = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const tokenSummaryRows = await sql`
+    SELECT
+      COALESCE(NULLIF(token_type, ''), 'fcm') AS token_type,
+      COALESCE(NULLIF(status, ''), 'unknown') AS status,
+      COUNT(*)::INT AS total
+    FROM subscriber_tokens
+    WHERE shop_domain = ${shopDomain}
+    GROUP BY 1, 2
+    ORDER BY 1 ASC, 2 ASC
+  `;
+
+  const recentTokenRows = await sql`
+    SELECT
+      t.id,
+      t.fcm_token,
+      t.token_type,
+      t.status,
+      t.updated_at,
+      t.last_seen_at,
+      s.external_id,
+      s.browser,
+      s.platform
+    FROM subscriber_tokens t
+    LEFT JOIN subscribers s ON s.id = t.subscriber_id
+    WHERE t.shop_domain = ${shopDomain}
+    ORDER BY t.updated_at DESC NULLS LAST, t.last_seen_at DESC NULLS LAST
+    LIMIT 30
+  `;
+
+  const recentDiagnosticRows = await sql`
+    SELECT
+      id,
+      event_type,
+      status,
+      reason,
+      message,
+      token_type,
+      browser,
+      platform,
+      locale,
+      permission_state,
+      endpoint,
+      external_id,
+      details,
+      created_at
+    FROM storefront_token_diagnostics
+    WHERE shop_domain = ${shopDomain}
+    ORDER BY created_at DESC
+    LIMIT 80
+  `;
+
+  const recentWelcomeJobs = await sql`
+    SELECT
+      j.id,
+      COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key,
+      j.status,
+      j.error_message,
+      j.updated_at,
+      j.sent_at,
+      j.payload ->> 'externalId' AS external_id
+    FROM automation_jobs j
+    WHERE j.shop_domain = ${shopDomain}
+      AND j.rule_key = 'welcome_subscriber'
+    ORDER BY j.updated_at DESC
+    LIMIT 40
+  `;
+
+  const failureRows = await sql`
+    SELECT
+      COALESCE(NULLIF(reason, ''), 'unknown') AS reason,
+      COUNT(*)::INT AS total
+    FROM storefront_token_diagnostics
+    WHERE shop_domain = ${shopDomain}
+      AND status = 'error'
+      AND created_at >= NOW() - INTERVAL '24 hours'
+    GROUP BY 1
+    ORDER BY total DESC
+    LIMIT 10
+  `;
+
+  const tokenSummary = (tokenSummaryRows as Array<Record<string, unknown>>).map((row) => ({
+    tokenType: String(row.token_type ?? 'fcm'),
+    status: String(row.status ?? 'unknown'),
+    total: Number(row.total ?? 0),
+  }));
+
+  const issues: string[] = [];
+  const activeTokens = tokenSummary
+    .filter((item) => item.status === 'active')
+    .reduce((sum, item) => sum + item.total, 0);
+
+  if (activeTokens === 0) {
+    issues.push('No active subscriber tokens found for this shop. Real notifications cannot be delivered.');
+  }
+
+  const diagnosticsInLastHour = (recentDiagnosticRows as Array<Record<string, unknown>>)
+    .filter((row) => {
+      const createdAtRaw = row.created_at ? new Date(String(row.created_at)).getTime() : 0;
+      return createdAtRaw > Date.now() - 60 * 60 * 1000;
+    });
+
+  const hasRecentTokenSaveFailures = diagnosticsInLastHour.some(
+    (row) => String(row.reason ?? '') === 'token-save-failed' || String(row.reason ?? '') === 'token-empty',
+  );
+  const hasRecentTokenSuccess = diagnosticsInLastHour.some((row) => String(row.event_type ?? '') === 'token_register_success');
+  if (hasRecentTokenSaveFailures && !hasRecentTokenSuccess) {
+    issues.push('Token registration failures were detected recently without any success event in the last hour.');
+  }
+
+  if (!env.NEXT_PUBLIC_FIREBASE_VAPID_KEY) {
+    issues.push('NEXT_PUBLIC_FIREBASE_VAPID_KEY is empty; browser token generation can fail on some devices.');
+  }
+
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) {
+    issues.push('VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY are not fully configured; Firefox/Safari delivery can fail.');
+  }
+
+  return {
+    shopDomain,
+    checkedAt: new Date().toISOString(),
+    tokenSummary,
+    recentFailures: (failureRows as Array<Record<string, unknown>>).map((row) => ({
+      reason: String(row.reason ?? 'unknown'),
+      total: Number(row.total ?? 0),
+    })),
+    recentDiagnostics: (recentDiagnosticRows as Array<Record<string, unknown>>).map((row) => ({
+      id: Number(row.id ?? 0),
+      eventType: String(row.event_type ?? ''),
+      status: String(row.status ?? ''),
+      reason: row.reason ? String(row.reason) : null,
+      message: row.message ? String(row.message) : null,
+      tokenType: row.token_type ? String(row.token_type) : null,
+      browser: row.browser ? String(row.browser) : null,
+      platform: row.platform ? String(row.platform) : null,
+      locale: row.locale ? String(row.locale) : null,
+      permissionState: row.permission_state ? String(row.permission_state) : null,
+      endpoint: row.endpoint ? String(row.endpoint) : null,
+      externalId: row.external_id ? String(row.external_id) : null,
+      details: row.details && typeof row.details === 'object' ? (row.details as Record<string, unknown>) : null,
+      createdAt: row.created_at ? new Date(String(row.created_at)).toISOString() : null,
+    })),
+    recentTokens: (recentTokenRows as Array<Record<string, unknown>>).map((row) => ({
+      id: Number(row.id ?? 0),
+      tokenType: String(row.token_type ?? 'fcm'),
+      status: String(row.status ?? ''),
+      tokenPreview: String(row.fcm_token ?? '').slice(0, 22),
+      updatedAt: row.updated_at ? new Date(String(row.updated_at)).toISOString() : null,
+      lastSeenAt: row.last_seen_at ? new Date(String(row.last_seen_at)).toISOString() : null,
+      externalId: row.external_id ? String(row.external_id) : null,
+      browser: row.browser ? String(row.browser) : null,
+      platform: row.platform ? String(row.platform) : null,
+    })),
+    recentWelcomeJobs: (recentWelcomeJobs as Array<Record<string, unknown>>).map((row) => ({
+      id: String(row.id ?? ''),
+      stepKey: String(row.step_key ?? ''),
+      status: String(row.status ?? ''),
+      errorMessage: row.error_message ? String(row.error_message) : null,
+      updatedAt: row.updated_at ? new Date(String(row.updated_at)).toISOString() : null,
+      sentAt: row.sent_at ? new Date(String(row.sent_at)).toISOString() : null,
+      externalId: row.external_id ? String(row.external_id) : null,
+    })),
+    issues,
+    env: {
+      firebaseVapidConfigured: Boolean(env.NEXT_PUBLIC_FIREBASE_VAPID_KEY),
+      webPushVapidConfigured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY),
+    },
   };
 };
 

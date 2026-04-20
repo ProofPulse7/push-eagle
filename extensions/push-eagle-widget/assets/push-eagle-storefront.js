@@ -296,6 +296,60 @@
     }
   }
 
+  async function reportTokenDiagnostic(boot, payload) {
+    if (!boot || !boot.shopDomain) {
+      return;
+    }
+
+    var body = {
+      shopDomain: boot.shopDomain,
+      externalId: boot.externalId || null,
+      eventType: payload && payload.eventType ? payload.eventType : 'unknown',
+      status: payload && payload.status ? payload.status : 'info',
+      reason: payload && payload.reason ? payload.reason : null,
+      message: payload && payload.message ? payload.message : null,
+      tokenType: payload && payload.tokenType ? payload.tokenType : null,
+      browser: payload && payload.browser ? payload.browser : detectBrowser(),
+      platform: payload && payload.platform ? payload.platform : detectPlatform(),
+      locale: navigator.language || null,
+      permissionState: ('Notification' in window && Notification.permission) ? Notification.permission : null,
+      endpoint: payload && payload.endpoint ? payload.endpoint : null,
+      details: payload && payload.details ? payload.details : null,
+    };
+
+    var endpoints = [];
+    if (boot.tokenDiagnosticsEndpoint) {
+      endpoints.push(boot.tokenDiagnosticsEndpoint);
+    }
+    if (boot.tokenDiagnosticsFallbackEndpoint && endpoints.indexOf(boot.tokenDiagnosticsFallbackEndpoint) === -1) {
+      endpoints.push(boot.tokenDiagnosticsFallbackEndpoint);
+    }
+
+    if (endpoints.length === 0) {
+      return;
+    }
+
+    for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {
+      var endpoint = endpoints[endpointIndex];
+      try {
+        var response = await fetch(endpoint, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (response.ok) {
+          return;
+        }
+      } catch (_error) {
+        // Try next endpoint.
+      }
+    }
+  }
+
   function getProductMetadataFromElement(element) {
     var node = element;
 
@@ -1201,6 +1255,8 @@
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
       activityEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity'),
       activityFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity' : '',
+      tokenDiagnosticsEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/token-diagnostics'),
+      tokenDiagnosticsFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/token-diagnostics' : '',
       iosHomeScreenEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen'),
       iosHomeScreenFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/ios-home-screen' : '',
       optIn: defaultOptInSettings,
@@ -1566,9 +1622,9 @@
             responseError = '';
           }
 
-          tokenSaveReason = 'http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
+          tokenSaveReason = String(endpoint) + '|http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
         } catch (tokenSaveError) {
-          tokenSaveReason = 'network-error:' + (tokenSaveError && tokenSaveError.message ? String(tokenSaveError.message) : 'request failed');
+          tokenSaveReason = String(endpoint) + '|network-error:' + (tokenSaveError && tokenSaveError.message ? String(tokenSaveError.message) : 'request failed');
         }
       }
 
@@ -1694,6 +1750,11 @@
       return;
     }
 
+    if (result.reason === 'permission-default') {
+      showStatus(root, 'Notification permission was not granted. Please tap Allow when the browser asks.', 'error');
+      return;
+    }
+
     if (result.reason === 'unsupported' || result.reason === 'https-required' || result.reason === 'ios-home-screen') {
       explainUnsupported(root, result.reason);
       return;
@@ -1756,6 +1817,44 @@
     var clientProfile = await buildClientProfile(root, boot);
     applyOptInSettings(root, config, boot);
 
+    function captureTokenRegistrationResult(result, phase) {
+      if (!result) {
+        return;
+      }
+
+      var profile = refreshClientProfile(clientProfile);
+      var browserName = profile && profile.browserName ? profile.browserName : detectBrowser();
+      var platformName = profile && profile.osName ? profile.osName : detectPlatform();
+
+      if (result.ok) {
+        void reportTokenDiagnostic(boot, {
+          eventType: 'token_register_success',
+          status: 'success',
+          tokenType: result.tokenType || null,
+          browser: browserName,
+          platform: platformName,
+          message: 'Token saved successfully.',
+          details: {
+            phase: phase,
+          },
+        });
+        return;
+      }
+
+      void reportTokenDiagnostic(boot, {
+        eventType: 'token_register_failure',
+        status: 'error',
+        reason: result.reason || 'unknown',
+        message: result.message || null,
+        tokenType: result.tokenType || null,
+        browser: browserName,
+        platform: platformName,
+        details: {
+          phase: phase,
+        },
+      });
+    }
+
     var settings = config.resolvedOptIn || getResolvedOptInSettings(boot);
     var isOnIos = clientProfile.osName === 'ios';
     var iosWatcherCleanup = null;
@@ -1790,6 +1889,7 @@
       // silently sync token so previously failed browsers can self-heal.
       if (clientProfile.permissionState === 'granted') {
         var grantedResult = await registerToken(config, boot, { silent: true }, clientProfile);
+        captureTokenRegistrationResult(grantedResult, 'granted-silent-sync');
         if (grantedResult.ok) {
           closePrompt(root);
         } else {
@@ -1808,6 +1908,7 @@
       if (effectiveMode === 'browser') {
         if (isMarkedSubscribed(config.shopDomain)) {
           var subscribedResult = await registerToken(config, boot, { silent: true }, clientProfile);
+          captureTokenRegistrationResult(subscribedResult, 'browser-existing-subscription');
           if (subscribedResult.ok) {
             closePrompt(root);
             return;
@@ -1900,6 +2001,7 @@
         incrementSessionDisplayCount(config.shopDomain);
         recordPromptAttempt(config.shopDomain);
         var browserModeResult = await registerToken(config, boot, { silent: false }, clientProfile);
+        captureTokenRegistrationResult(browserModeResult, 'browser-native-prompt');
         if (!browserModeResult.ok) {
           explainRegistrationFailure(root, browserModeResult);
           openPrompt(root);
@@ -1928,6 +2030,7 @@
           }
 
           var result = await registerToken(config, boot, { silent: false }, clientProfile);
+          captureTokenRegistrationResult(result, effectiveMode === 'custom' ? 'custom-popup-click' : 'browser-flow-click');
 
           if (effectiveMode === 'custom') {
             if (!result.ok) {
