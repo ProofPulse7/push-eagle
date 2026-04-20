@@ -1000,17 +1000,36 @@ const buildAutomationTrackedUrl = (
   ruleKey: AutomationRuleKey,
   shopDomain: string,
   externalId?: string | null,
+  contentLabel?: string | null,
 ) => {
   if (!targetUrl) {
     return null;
   }
 
   try {
-    void shopDomain;
-    void externalId;
-    void ruleKey;
-    // Send users to the exact URL configured in automation settings.
-    return new URL(targetUrl).toString();
+    const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
+    const target = new URL(targetUrl, `https://${shopDomain}`);
+
+    if (!/^https?:$/i.test(target.protocol)) {
+      return targetUrl;
+    }
+
+    target.searchParams.set('utm_source', 'push_eagle');
+    target.searchParams.set('utm_medium', 'web_push_automation');
+    target.searchParams.set('utm_campaign', ruleKey);
+    if (contentLabel) {
+      target.searchParams.set('utm_content', contentLabel);
+    }
+
+    const trackerBase = new URL('/api/track/automation-click', trackingBase);
+    trackerBase.searchParams.set('r', ruleKey);
+    trackerBase.searchParams.set('s', shopDomain);
+    trackerBase.searchParams.set('u', target.toString());
+    if (externalId) {
+      trackerBase.searchParams.set('e', externalId);
+    }
+
+    return trackerBase.toString();
   } catch {
     return targetUrl;
   }
@@ -3205,7 +3224,7 @@ export const processAutomationJob = async (jobId: string) => {
     };
 
     const trackedTargetUrl = payload.ruleKey
-      ? buildAutomationTrackedUrl(payload.targetUrl ?? null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+      ? buildAutomationTrackedUrl(payload.targetUrl ?? null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null, 'primary')
       : payload.targetUrl ?? null;
 
     let fcmMessageId: string;
@@ -3217,8 +3236,18 @@ export const processAutomationJob = async (jobId: string) => {
       .slice(0, 2)
       .filter((btn) => btn?.title && btn?.link)
       .map((btn, i) => ({ action: `btn_${i + 1}`, title: String(btn.title) }));
-    const automationButton1Url = rawActionButtons[0]?.link ? String(rawActionButtons[0].link) : '';
-    const automationButton2Url = rawActionButtons[1]?.link ? String(rawActionButtons[1].link) : '';
+    const automationButton1Url = rawActionButtons[0]?.link
+      ? String(rawActionButtons[0].link)
+      : '';
+    const automationButton2Url = rawActionButtons[1]?.link
+      ? String(rawActionButtons[1].link)
+      : '';
+    const trackedButton1Url = payload.ruleKey
+      ? (buildAutomationTrackedUrl(automationButton1Url || null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null, 'button_1') ?? '')
+      : automationButton1Url;
+    const trackedButton2Url = payload.ruleKey
+      ? (buildAutomationTrackedUrl(automationButton2Url || null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null, 'button_2') ?? '')
+      : automationButton2Url;
     const automationAction1Title = automationActions[0]?.title ?? '';
     const automationAction2Title = automationActions[1]?.title ?? '';
 
@@ -3239,8 +3268,8 @@ export const processAutomationJob = async (jobId: string) => {
           image: payload.imageUrl ?? null,
           url: trackedTargetUrl ?? payload.targetUrl ?? null,
           actions: automationActions,
-          button1Url: automationButton1Url || null,
-          button2Url: automationButton2Url || null,
+          button1Url: trackedButton1Url || trackedTargetUrl || payload.targetUrl || null,
+          button2Url: trackedButton2Url || null,
         },
       );
     } else {
@@ -3265,8 +3294,8 @@ export const processAutomationJob = async (jobId: string) => {
           source: 'automation',
           ruleKey: String(payload.ruleKey ?? ''),
           url: trackedTargetUrl ?? payload.targetUrl ?? '',
-          button1Url: automationButton1Url,
-          button2Url: automationButton2Url,
+          button1Url: trackedButton1Url || trackedTargetUrl || payload.targetUrl || '',
+          button2Url: trackedButton2Url,
           action1Title: automationAction1Title,
           action2Title: automationAction2Title,
         },
