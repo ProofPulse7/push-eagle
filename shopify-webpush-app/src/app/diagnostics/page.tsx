@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
 import { AlertTriangle, Bug, Copy, RefreshCw } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 
@@ -67,7 +67,7 @@ type DiagnosticsPayload = {
   };
 };
 
-export default function DiagnosticsPage() {
+function DiagnosticsContent() {
   const searchParams = useSearchParams();
   const [nonce, setNonce] = useState(0);
   const shopDomain = (searchParams.get('shop') || '').trim();
@@ -200,5 +200,13 @@ export default function DiagnosticsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function DiagnosticsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-muted-foreground text-sm">Loading diagnostics…</div>}>
+      <DiagnosticsContent />
+    </Suspense>
   );
 }
