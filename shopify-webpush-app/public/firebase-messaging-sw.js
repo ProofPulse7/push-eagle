@@ -19,24 +19,36 @@ firebase.initializeApp(firebaseConfig);
 // messages.
 const messaging = firebase.messaging();
 
+function parseActions(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.filter((item) => item && item.action && item.title).slice(0, 2);
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => item && item.action && item.title).slice(0, 2)
+      : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
 messaging.onBackgroundMessage(function(payload) {
   console.log('Received background message ', payload);
   // Customize notification here
-  const notificationTitle = payload.notification?.title || 'Push Eagle';
+  const notificationTitle = payload.data?.title || payload.notification?.title || 'Push Eagle';
 
-  const rawActions = Array.isArray(payload.notification?.actions)
-    ? payload.notification.actions
-    : [];
-  const actions = rawActions.slice(0, 2).filter((a) => a && a.action && a.title);
+  const actions = parseActions(payload.data?.actionsJson || payload.notification?.actions);
 
-  const url = payload.fcmOptions?.link || payload.data?.url || '/';
+  const url = payload.data?.url || payload.fcmOptions?.link || '/';
   const button1Url = payload.data?.button1Url || url;
   const button2Url = payload.data?.button2Url || '';
 
   const notificationOptions = {
-    body: payload.notification?.body,
-    icon: payload.notification?.icon,
-    image: payload.notification?.image,
+    body: payload.data?.body || payload.notification?.body,
+    icon: payload.data?.iconUrl || payload.notification?.icon,
+    image: payload.data?.imageUrl || payload.notification?.image,
     actions: actions.length > 0 ? actions : undefined,
     data: {
       url,
@@ -61,5 +73,15 @@ self.addEventListener('notificationclick', function(event) {
     targetUrl = data.url || '/';
   }
 
-  event.waitUntil(clients.openWindow(targetUrl));
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
+      for (let i = 0; i < clientList.length; i += 1) {
+        const client = clientList[i];
+        if (client.url === targetUrl && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      return clients.openWindow(targetUrl);
+    })
+  );
 });

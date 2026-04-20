@@ -1350,6 +1350,22 @@
         return { ok: false, reason: 'sw-not-active', message: activationMessage };
       }
 
+      try {
+        if (registration && registration.update) {
+          await registration.update();
+        }
+      } catch (_registrationUpdateError) {
+        // Non-blocking refresh attempt.
+      }
+
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+          await navigator.serviceWorker.ready;
+        }
+      } catch (_readyError) {
+        // Non-blocking readiness hint.
+      }
+
       var firebaseVapidKey = (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey;
       var webPushVapidPublicKey = (boot.webPushVapidPublicKey || '').trim() || firebaseVapidKey;
       var token = null;
@@ -1391,6 +1407,17 @@
         }
       }
 
+      if (!token && registration && registration.pushManager) {
+        try {
+          var staleSubscription = await registration.pushManager.getSubscription();
+          if (staleSubscription) {
+            await staleSubscription.unsubscribe();
+          }
+        } catch (_unsubscribeStaleSubscriptionError) {
+          // Ignore unsubscribe failures and continue with fresh attempts.
+        }
+      }
+
       // Firefox/Safari may not return FCM token; fallback to native Web Push subscription.
       if (!token && webPushVapidPublicKey) {
         try {
@@ -1421,6 +1448,28 @@
             serviceWorkerRegistration: registration
           });
         } catch (_retryFcmError) {
+          token = null;
+        }
+      }
+
+      if (!token && webPushVapidPublicKey) {
+        try {
+          await delay(800);
+          var retrySubscription = await subscribeWithVapid(registration, webPushVapidPublicKey);
+          if (retrySubscription && retrySubscription.endpoint) {
+            token = retrySubscription.endpoint;
+            tokenType = 'vapid';
+            vapidEndpoint = retrySubscription.endpoint;
+            var retryJson = retrySubscription.toJSON ? retrySubscription.toJSON() : null;
+            var retryKeys = retryJson && retryJson.keys ? retryJson.keys : null;
+            vapidP256dh = retryKeys && retryKeys.p256dh
+              ? retryKeys.p256dh
+              : arrayBufferToBase64Url(retrySubscription.getKey && retrySubscription.getKey('p256dh'));
+            vapidAuth = retryKeys && retryKeys.auth
+              ? retryKeys.auth
+              : arrayBufferToBase64Url(retrySubscription.getKey && retrySubscription.getKey('auth'));
+          }
+        } catch (_retryVapidError) {
           token = null;
         }
       }

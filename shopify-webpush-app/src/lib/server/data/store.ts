@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { env } from '@/lib/config/env';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
-import { sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
+import { isVapidConfigured, sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
 import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
 import { deleteImageFromR2 } from '@/lib/server/media/r2';
 
@@ -1232,6 +1232,27 @@ const cleanupUnusedMediaAssets = async (shopDomain: string, removedUrls: string[
         AND shop_domain = ${shopDomain}
     `;
   }
+};
+
+const pruneUnusedMediaAssets = async (shopDomain: string, limit = 20) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT id, public_url, object_key
+    FROM media_assets
+    WHERE shop_domain = ${shopDomain}
+      AND object_key IS NOT NULL
+      AND created_at < NOW() - INTERVAL '30 minutes'
+    ORDER BY created_at ASC
+    LIMIT ${Math.max(1, Math.min(limit, 100))}
+  `;
+
+  const candidates = (rows as Array<Record<string, unknown>>)
+    .map((row) => String(row.public_url ?? '').trim() || `/${String(row.object_key ?? '').trim()}`)
+    .filter(Boolean);
+
+  await cleanupUnusedMediaAssets(shopDomain, candidates);
 };
 
 const resolveAutomationDestination = async (shopDomain: string, payload: AutomationJobPayload) => {
@@ -3105,25 +3126,22 @@ export const processAutomationJob = async (jobId: string) => {
       const messaging = getFirebaseAdminMessaging();
       const message = {
         token,
-        notification: {
-          title: payload.title,
-          body: payload.body,
-          imageUrl: payload.imageUrl ?? undefined,
-        },
         webpush: {
-          fcmOptions: { link: trackedTargetUrl ?? undefined },
-          notification: {
-            icon: payload.iconUrl ?? undefined,
-            image: payload.imageUrl ?? undefined,
-            actions: automationActions.length > 0 ? automationActions : undefined,
+          headers: {
+            Urgency: 'high',
           },
         },
         data: {
           source: 'automation',
           ruleKey: String(payload.ruleKey ?? ''),
+          title: String(payload.title ?? ''),
+          body: String(payload.body ?? ''),
+          iconUrl: String(payload.iconUrl ?? ''),
+          imageUrl: String(payload.imageUrl ?? ''),
           url: trackedTargetUrl ?? payload.targetUrl ?? '',
           button1Url: automationButton1Url,
           button2Url: automationButton2Url,
+          actionsJson: JSON.stringify(automationActions),
         },
       };
 
@@ -5468,27 +5486,23 @@ export const sendCampaign = async (
       if (fcmRecipients.length > 0) {
         const messages = fcmRecipients.map(({ item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, actions }) => ({
           token: item.fcm_token,
-          notification: {
-            title: campaign.title,
-            body: campaign.body,
-            imageUrl: platformImage ?? undefined,
-          },
           webpush: {
-            fcmOptions: {
-              link: trackedUrl ?? undefined,
-            },
-            notification: {
-              icon: campaign.icon_url ?? undefined,
-              image: platformImage ?? undefined,
-              actions: actions.length > 0 ? actions : undefined,
+            headers: {
+              Urgency: 'high',
             },
           },
           data: {
             campaignId,
             shopDomain,
+            title: String(campaign.title ?? ''),
+            body: String(campaign.body ?? ''),
+            iconUrl: String(campaign.icon_url ?? ''),
+            imageUrl: String(platformImage ?? ''),
             primaryUrl: trackedUrl ?? '',
+            url: trackedUrl ?? '',
             button1Url: firstButtonUrl ?? '',
             button2Url: secondButtonUrl ?? '',
+            actionsJson: JSON.stringify(actions),
           },
         }));
 
@@ -5671,6 +5685,8 @@ export const createMediaAsset = async (input: {
       ${input.publicUrl ?? null}
     )
   `;
+
+  await pruneUnusedMediaAssets(input.shopDomain, 10);
 
   return {
     id: assetId,
@@ -6171,6 +6187,17 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
     LIMIT 40
   `;
 
+  const tokenSummaryRows = await sql`
+    SELECT
+      COALESCE(NULLIF(token_type, ''), 'fcm') AS token_type,
+      COALESCE(NULLIF(status, ''), 'unknown') AS status,
+      COUNT(*)::INT AS total
+    FROM subscriber_tokens
+    WHERE shop_domain = ${shopDomain}
+    GROUP BY 1, 2
+    ORDER BY 1 ASC, 2 ASC
+  `;
+
   const summary = {
     reminder2: {
       pending: 0,
@@ -6326,11 +6353,54 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
 
   inferredIssues.push(...invalidMediaIssues);
 
+  const normalizeButtonStatus = (buttons: Array<{ title: string; link: string }> | undefined, stepKey: WelcomeStepKey) => {
+    const values = Array.isArray(buttons) ? buttons.slice(0, 2) : [];
+    return values.map((button, index) => ({
+      index: index + 1,
+      title: String(button?.title ?? '').trim(),
+      rawLink: String(button?.link ?? '').trim(),
+      normalizedLink: toHttpUrlOrNull(String(button?.link ?? '').trim(), storeBase),
+      valid: Boolean(String(button?.title ?? '').trim() && toHttpUrlOrNull(String(button?.link ?? '').trim(), storeBase)),
+      stepKey,
+    }));
+  };
+
+  const actionButtons = {
+    'reminder-1': normalizeButtonStatus(welcomeConfig.steps['reminder-1'].actionButtons, 'reminder-1'),
+    'reminder-2': normalizeButtonStatus(welcomeConfig.steps['reminder-2'].actionButtons, 'reminder-2'),
+    'reminder-3': normalizeButtonStatus(welcomeConfig.steps['reminder-3'].actionButtons, 'reminder-3'),
+  };
+
+  for (const stepKey of ['reminder-1', 'reminder-2', 'reminder-3'] as const) {
+    for (const button of actionButtons[stepKey]) {
+      if (!button.valid) {
+        inferredIssues.push(`${stepKey}.button-${button.index} is invalid and will be omitted from live notifications.`);
+      }
+    }
+  }
+
+  const tokenSummary = (tokenSummaryRows as Array<Record<string, unknown>>).map((row) => ({
+    tokenType: String(row.token_type ?? 'fcm'),
+    status: String(row.status ?? 'unknown'),
+    total: Number(row.total ?? 0),
+  }));
+
+  if (tokenSummary.some((item) => item.tokenType === 'vapid') && !isVapidConfigured()) {
+    inferredIssues.push('VAPID subscriber tokens exist but VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY are not configured for sending.');
+  }
+
+  if ((actionButtons['reminder-2'].length > 0 || actionButtons['reminder-3'].length > 0) && tokenSummary.every((item) => item.total === 0)) {
+    inferredIssues.push('No subscriber tokens are stored yet, so welcome action buttons cannot be verified on live sends.');
+  }
+
   return {
     shopDomain,
     checkedAt: new Date().toISOString(),
     summary,
     reminderMedia,
+    actionButtons,
+    tokenSummary,
+    vapidConfigured: isVapidConfigured(),
     inferredIssues,
     recentJobs: (recentRows as Array<Record<string, unknown>>).map((row) => ({
       id: String(row.id ?? ''),

@@ -148,6 +148,20 @@ type WelcomeDiagnosticsPayload = {
     macosImage?: { present?: boolean; scheme?: string; normalized?: string | null };
     androidImage?: { present?: boolean; scheme?: string; normalized?: string | null };
   }>;
+  actionButtons?: Record<string, Array<{
+    index: number;
+    title: string;
+    rawLink: string;
+    normalizedLink: string | null;
+    valid: boolean;
+    stepKey: string;
+  }>>;
+  tokenSummary?: Array<{
+    tokenType: string;
+    status: string;
+    total: number;
+  }>;
+  vapidConfigured?: boolean;
   inferredIssues?: string[];
   recentJobs?: Array<{
     id: string;
@@ -360,6 +374,8 @@ export default function WelcomeNotificationsPage() {
     const reminder3 = diagnosticsPayload.summary?.reminder3;
     const issues = diagnosticsPayload.inferredIssues ?? [];
     const media = diagnosticsPayload.reminderMedia ?? {};
+    const actionButtons = diagnosticsPayload.actionButtons ?? {};
+    const tokenSummary = diagnosticsPayload.tokenSummary ?? [];
     const recentJobs = diagnosticsPayload.recentJobs ?? [];
 
     const recentText = recentJobs
@@ -386,6 +402,11 @@ export default function WelcomeNotificationsPage() {
       `reminder-2 pending=${reminder2?.pending ?? 0} dueNow=${reminder2?.dueNow ?? 0} processing=${reminder2?.processing ?? 0} sent=${reminder2?.sent ?? 0} delivered=${reminder2?.delivered ?? 0} failed=${reminder2?.failed ?? 0} skipped=${reminder2?.skipped ?? 0} lastDeliveredAt=${reminder2?.lastDeliveredAt ?? 'null'}`,
       `reminder-3 pending=${reminder3?.pending ?? 0} dueNow=${reminder3?.dueNow ?? 0} processing=${reminder3?.processing ?? 0} sent=${reminder3?.sent ?? 0} delivered=${reminder3?.delivered ?? 0} failed=${reminder3?.failed ?? 0} skipped=${reminder3?.skipped ?? 0} lastDeliveredAt=${reminder3?.lastDeliveredAt ?? 'null'}`,
       `staleProcessing=${diagnosticsPayload.summary?.staleProcessing ?? 0}`,
+      `vapidConfigured=${diagnosticsPayload.vapidConfigured ? 'yes' : 'no'}`,
+      'token summary:',
+      ...(tokenSummary.length > 0
+        ? tokenSummary.map((item) => `tokenType=${item.tokenType} status=${item.status} total=${item.total}`)
+        : ['none']),
       'configured media:',
       ...(['reminder-1', 'reminder-2', 'reminder-3'] as const).map((stepKey) => {
         const item = media[stepKey] ?? {};
@@ -396,6 +417,16 @@ export default function WelcomeNotificationsPage() {
           `${stepKey}.macosImage present=${item.macosImage?.present ? 'yes' : 'no'} scheme=${item.macosImage?.scheme ?? 'none'} normalized=${item.macosImage?.normalized ?? 'null'}`,
           `${stepKey}.androidImage present=${item.androidImage?.present ? 'yes' : 'no'} scheme=${item.androidImage?.scheme ?? 'none'} normalized=${item.androidImage?.normalized ?? 'null'}`,
         ].join(' | ');
+      }),
+      'configured action buttons:',
+      ...(['reminder-1', 'reminder-2', 'reminder-3'] as const).map((stepKey) => {
+        const stepButtons = actionButtons[stepKey] ?? [];
+        if (stepButtons.length === 0) {
+          return `${stepKey}.buttons none`;
+        }
+        return stepButtons
+          .map((button) => `${stepKey}.button-${button.index} valid=${button.valid ? 'yes' : 'no'} title=${button.title || 'null'} rawLink=${button.rawLink || 'null'} normalizedLink=${button.normalizedLink ?? 'null'}`)
+          .join('\n');
       }),
       'issues:',
       ...(issues.length > 0 ? issues.map((issue, index) => `${index + 1}. ${issue}`) : ['1. no inferred issues']),
