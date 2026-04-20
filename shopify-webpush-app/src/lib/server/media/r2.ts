@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 import { env } from '@/lib/config/env';
 
@@ -22,14 +22,11 @@ const getR2Config = () => {
   }
   const accessKeyId = getRequired(env.R2_ACCESS_KEY_ID, 'R2_ACCESS_KEY_ID');
   const secretAccessKey = getRequired(env.R2_SECRET_ACCESS_KEY, 'R2_SECRET_ACCESS_KEY');
-  const publicBaseUrl = getRequired(env.R2_PUBLIC_BASE_URL, 'R2_PUBLIC_BASE_URL').replace(/\/$/, '');
-
   return {
     bucketName,
     endpoint,
     accessKeyId,
     secretAccessKey,
-    publicBaseUrl,
   };
 };
 
@@ -89,6 +86,26 @@ export const uploadImageToR2 = async (input: {
 
   return {
     objectKey,
-    publicUrl: `${config.publicBaseUrl}/${objectKey}`,
+  };
+};
+
+export const getImageFromR2 = async (objectKey: string) => {
+  const config = getR2Config();
+  const response = await getClient().send(new GetObjectCommand({
+    Bucket: config.bucketName,
+    Key: objectKey,
+  }));
+
+  const body = response.Body;
+  if (!body) {
+    throw new Error('R2 object body is missing.');
+  }
+
+  const bytes = Buffer.from(await body.transformToByteArray());
+
+  return {
+    bytes,
+    contentType: String(response.ContentType ?? 'application/octet-stream'),
+    cacheControl: String(response.CacheControl ?? 'public, max-age=31536000, immutable'),
   };
 };

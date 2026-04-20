@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { getMediaAsset } from '@/lib/server/data/store';
+import { getImageFromR2 } from '@/lib/server/media/r2';
 
 export const runtime = 'nodejs';
 
@@ -11,8 +12,15 @@ export async function GET(_request: Request, context: { params: { id: string } }
       return NextResponse.json({ ok: false, error: 'Media asset not found.' }, { status: 404 });
     }
 
-    if (asset.public_url) {
-      return NextResponse.redirect(asset.public_url, { status: 307 });
+    if (asset.object_key) {
+      const r2Object = await getImageFromR2(asset.object_key);
+      return new NextResponse(r2Object.bytes, {
+        status: 200,
+        headers: {
+          'content-type': r2Object.contentType,
+          'cache-control': r2Object.cacheControl,
+        },
+      });
     }
 
     if (!asset.data_base64) {

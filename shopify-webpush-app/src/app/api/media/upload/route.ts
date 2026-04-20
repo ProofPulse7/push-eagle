@@ -28,6 +28,8 @@ const parseDataUrl = (dataUrl: string) => {
 
 export async function POST(request: Request) {
   try {
+    const requestUrl = new URL(request.url);
+    const origin = requestUrl.origin.replace(/\/$/, '');
     const body = schema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
 
@@ -46,14 +48,13 @@ export async function POST(request: Request) {
       shopDomain,
       contentType,
       objectKey: uploaded.objectKey,
-      publicUrl: uploaded.publicUrl,
     });
 
     return NextResponse.json({
       ok: true,
       asset: {
         id: asset.id,
-        url: asset.url,
+        url: `${origin}/api/media/${asset.id}`,
       },
     });
   } catch (error) {
