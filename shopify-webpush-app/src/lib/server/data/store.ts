@@ -1007,14 +1007,9 @@ const buildAutomationTrackedUrl = (
   try {
     void shopDomain;
     void externalId;
-    const target = new URL(targetUrl);
-    target.searchParams.set('utm_source', 'push_eagle');
-    target.searchParams.set('utm_medium', 'web_push');
-    target.searchParams.set('utm_campaign', `automation_${ruleKey}`);
-    target.searchParams.set('utm_content', ruleKey);
-    // For automation notifications, send users directly to the configured merchant URL.
-    // This avoids app-domain mismatches that can break click redirects in production.
-    return target.toString();
+    void ruleKey;
+    // Send users to the exact URL configured in automation settings.
+    return new URL(targetUrl).toString();
   } catch {
     return targetUrl;
   }

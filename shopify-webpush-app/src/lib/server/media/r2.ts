@@ -27,6 +27,7 @@ const getR2Config = () => {
     endpoint,
     accessKeyId,
     secretAccessKey,
+    publicBaseUrl: env.R2_PUBLIC_BASE_URL.trim().replace(/\/$/, ''),
   };
 };
 
@@ -86,6 +87,7 @@ export const uploadImageToR2 = async (input: {
 
   return {
     objectKey,
+    publicUrl: config.publicBaseUrl ? `${config.publicBaseUrl}/${objectKey}` : null,
   };
 };
 

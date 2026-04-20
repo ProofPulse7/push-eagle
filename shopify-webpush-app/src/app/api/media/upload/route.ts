@@ -48,13 +48,14 @@ export async function POST(request: Request) {
       shopDomain,
       contentType,
       objectKey: uploaded.objectKey,
+      publicUrl: uploaded.publicUrl,
     });
 
     return NextResponse.json({
       ok: true,
       asset: {
         id: asset.id,
-        url: `${origin}/api/media/${asset.id}`,
+        url: uploaded.publicUrl || `${origin}/api/media/${asset.id}`,
       },
     });
   } catch (error) {
