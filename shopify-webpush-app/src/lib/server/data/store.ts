@@ -930,6 +930,20 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_smart_delivery_metrics_shop ON smart_delivery_metrics(shop_domain)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_token ON campaign_deliveries(campaign_id, token_id)`;
+      await sql`
+        WITH ranked AS (
+          SELECT ctid, ROW_NUMBER() OVER (
+            PARTITION BY automation_job_id
+            ORDER BY delivered_at ASC, id ASC
+          ) AS rn
+          FROM automation_deliveries
+          WHERE automation_job_id IS NOT NULL
+        )
+        DELETE FROM automation_deliveries d
+        USING ranked r
+        WHERE d.ctid = r.ctid AND r.rn > 1
+      `;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_deliveries_job ON automation_deliveries(automation_job_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_rule_time ON automation_deliveries(shop_domain, rule_key, delivered_at DESC)`;
@@ -1006,17 +1020,13 @@ const buildAutomationTrackedUrl = (
     return null;
   }
 
+  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
+
   try {
-    const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
-    const target = new URL(targetUrl, `https://${shopDomain}`);
-
-    if (!/^https?:$/i.test(target.protocol)) {
-      return targetUrl;
-    }
-
+    const target = new URL(targetUrl);
     target.searchParams.set('utm_source', 'push_eagle');
-    target.searchParams.set('utm_medium', 'web_push_automation');
-    target.searchParams.set('utm_campaign', ruleKey);
+    target.searchParams.set('utm_medium', 'web_push');
+    target.searchParams.set('utm_campaign', `automation_${ruleKey}`);
     if (contentLabel) {
       target.searchParams.set('utm_content', contentLabel);
     }
@@ -2801,25 +2811,28 @@ export const processAutomationJob = async (jobId: string) => {
     return { processed: false, error: 'Missing active token.' };
   }
 
+  let markedSent = false;
+
   try {
+    const alreadyDeliveredRows = await sql`
+      SELECT id
+      FROM automation_deliveries
+      WHERE automation_job_id = ${claim.id}
+      LIMIT 1
+    `;
+
+    if (alreadyDeliveredRows.length > 0) {
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW(), error_message = NULL
+        WHERE id = ${jobId}
+      `;
+      return { processed: true };
+    }
+
     let payload = claim.payload ?? { title: 'Notification', body: '' };
     let subscriberPlatform: string | null = null;
     let subscriberBrowser: string | null = null;
-    let welcomeSendLockKey: string | null = null;
-
-    const releaseWelcomeSendLock = async () => {
-      if (!welcomeSendLockKey) {
-        return;
-      }
-
-      try {
-        await sql`SELECT pg_advisory_unlock(hashtext(${welcomeSendLockKey}))`;
-      } catch {
-        // Best-effort unlock.
-      }
-
-      welcomeSendLockKey = null;
-    };
 
     if (claim.subscriber_id) {
       const subscriberRows = await sql`
@@ -2981,56 +2994,6 @@ export const processAutomationJob = async (jobId: string) => {
           `;
           return { processed: false, error: 'Welcome reminder already delivered to subscriber for this step.' };
         }
-      }
-
-      const lockRecipientKey = claim.subscriber_id
-        ? `subscriber:${claim.subscriber_id}`
-        : payloadExternalId
-          ? `external:${payloadExternalId}`
-          : deliveryTokenId
-            ? `token:${deliveryTokenId}`
-            : `job:${claim.id}`;
-
-      welcomeSendLockKey = `welcome-send:${claim.shop_domain}:${payloadStepKey}:${lockRecipientKey}`;
-
-      const lockRows = await sql`
-        SELECT pg_try_advisory_lock(hashtext(${welcomeSendLockKey})) AS locked
-      `;
-
-      if (!Boolean(lockRows[0]?.locked)) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Welcome reminder send already in progress for this subscriber step.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
-        await releaseWelcomeSendLock();
-        return { processed: false, error: 'Welcome reminder send already in progress for this subscriber step.' };
-      }
-
-      const lockedDuplicateDeliveryRows = await sql`
-        SELECT d.id
-        FROM automation_deliveries d
-        JOIN automation_jobs j ON j.id = d.automation_job_id
-        WHERE d.shop_domain = ${claim.shop_domain}
-          AND d.rule_key = 'welcome_subscriber'
-          AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-          AND (
-            (${claim.subscriber_id ?? null} IS NOT NULL AND d.subscriber_id = ${claim.subscriber_id ?? null})
-            OR (${deliveryTokenId ?? null} IS NOT NULL AND d.token_id = ${deliveryTokenId ?? null})
-            OR (${payloadExternalId} <> '' AND d.external_id = ${payloadExternalId})
-          )
-        ORDER BY d.delivered_at DESC
-        LIMIT 1
-      `;
-
-      if (lockedDuplicateDeliveryRows.length > 0) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Welcome reminder already delivered for this subscriber step.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
-        await releaseWelcomeSendLock();
-        return { processed: false, error: 'Welcome reminder already delivered for this subscriber step.' };
       }
     }
 
@@ -3223,8 +3186,10 @@ export const processAutomationJob = async (jobId: string) => {
       },
     };
 
-    const trackedTargetUrl = payload.ruleKey
-      ? buildAutomationTrackedUrl(payload.targetUrl ?? null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null, 'primary')
+    const effectiveRuleKey = (payload.ruleKey ?? claim.rule_key) as AutomationRuleKey;
+
+    const trackedTargetUrl = effectiveRuleKey
+      ? buildAutomationTrackedUrl(payload.targetUrl ?? null, effectiveRuleKey, claim.shop_domain, payload.externalId ?? null, 'main')
       : payload.targetUrl ?? null;
 
     let fcmMessageId: string;
@@ -3236,18 +3201,14 @@ export const processAutomationJob = async (jobId: string) => {
       .slice(0, 2)
       .filter((btn) => btn?.title && btn?.link)
       .map((btn, i) => ({ action: `btn_${i + 1}`, title: String(btn.title) }));
-    const automationButton1Url = rawActionButtons[0]?.link
-      ? String(rawActionButtons[0].link)
+    const automationButton1Url = rawActionButtons[0]?.link ? String(rawActionButtons[0].link) : '';
+    const automationButton2Url = rawActionButtons[1]?.link ? String(rawActionButtons[1].link) : '';
+    const trackedAutomationButton1Url = automationButton1Url
+      ? (buildAutomationTrackedUrl(automationButton1Url, effectiveRuleKey, claim.shop_domain, payload.externalId ?? null, 'action_1') || automationButton1Url)
       : '';
-    const automationButton2Url = rawActionButtons[1]?.link
-      ? String(rawActionButtons[1].link)
+    const trackedAutomationButton2Url = automationButton2Url
+      ? (buildAutomationTrackedUrl(automationButton2Url, effectiveRuleKey, claim.shop_domain, payload.externalId ?? null, 'action_2') || automationButton2Url)
       : '';
-    const trackedButton1Url = payload.ruleKey
-      ? (buildAutomationTrackedUrl(automationButton1Url || null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null, 'button_1') ?? '')
-      : automationButton1Url;
-    const trackedButton2Url = payload.ruleKey
-      ? (buildAutomationTrackedUrl(automationButton2Url || null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null, 'button_2') ?? '')
-      : automationButton2Url;
     const automationAction1Title = automationActions[0]?.title ?? '';
     const automationAction2Title = automationActions[1]?.title ?? '';
 
@@ -3268,8 +3229,8 @@ export const processAutomationJob = async (jobId: string) => {
           image: payload.imageUrl ?? null,
           url: trackedTargetUrl ?? payload.targetUrl ?? null,
           actions: automationActions,
-          button1Url: trackedButton1Url || trackedTargetUrl || payload.targetUrl || null,
-          button2Url: trackedButton2Url || null,
+          button1Url: trackedAutomationButton1Url || null,
+          button2Url: trackedAutomationButton2Url || null,
         },
       );
     } else {
@@ -3294,8 +3255,8 @@ export const processAutomationJob = async (jobId: string) => {
           source: 'automation',
           ruleKey: String(payload.ruleKey ?? ''),
           url: trackedTargetUrl ?? payload.targetUrl ?? '',
-          button1Url: trackedButton1Url || trackedTargetUrl || payload.targetUrl || '',
-          button2Url: trackedButton2Url,
+          button1Url: trackedAutomationButton1Url,
+          button2Url: trackedAutomationButton2Url,
           action1Title: automationAction1Title,
           action2Title: automationAction2Title,
         },
@@ -3309,6 +3270,7 @@ export const processAutomationJob = async (jobId: string) => {
       SET status = 'sent', sent_at = NOW(), updated_at = NOW(), error_message = NULL
       WHERE id = ${jobId}
     `;
+    markedSent = true;
 
     await sql`
       INSERT INTO automation_deliveries (
@@ -3331,35 +3293,16 @@ export const processAutomationJob = async (jobId: string) => {
         ${payload.targetUrl ?? null},
         ${fcmMessageId}
       )
+      ON CONFLICT (automation_job_id)
+      DO UPDATE SET
+        fcm_message_id = EXCLUDED.fcm_message_id,
+        delivered_at = COALESCE(automation_deliveries.delivered_at, NOW())
     `;
-
-    await releaseWelcomeSendLock();
 
     return { processed: true };
   } catch (error) {
-    if (claim.rule_key === 'welcome_subscriber') {
-      try {
-        const payload = claim.payload ?? {};
-        const payloadMetadata = (payload.metadata ?? {}) as Record<string, unknown>;
-        const payloadStepKey = payloadMetadata.stepKey == null ? '' : String(payloadMetadata.stepKey);
-        const payloadExternalId = payload.externalId == null ? '' : String(payload.externalId);
-        const lockRecipientKey = claim.subscriber_id
-          ? `subscriber:${claim.subscriber_id}`
-          : payloadExternalId
-            ? `external:${payloadExternalId}`
-            : claim.token_id
-              ? `token:${claim.token_id}`
-              : `job:${claim.id}`;
-        const lockKey = payloadStepKey
-          ? `welcome-send:${claim.shop_domain}:${payloadStepKey}:${lockRecipientKey}`
-          : null;
-
-        if (lockKey) {
-          await sql`SELECT pg_advisory_unlock(hashtext(${lockKey}))`;
-        }
-      } catch {
-        // Best-effort unlock on error.
-      }
+    if (markedSent) {
+      return { processed: true };
     }
 
     const message = error instanceof Error ? error.message : 'Failed to send automation message.';
