@@ -972,7 +972,7 @@ const buildTrackedUrl = (
   }
 
   try {
-    const target = new URL(targetUrl);
+    const target = new URL(unwrapTrackingRedirectUrl(targetUrl));
     target.searchParams.set('utm_source', 'push_eagle');
     target.searchParams.set('utm_medium', 'web_push');
     target.searchParams.set('utm_campaign', campaignId);
@@ -1023,7 +1023,7 @@ const buildAutomationTrackedUrl = (
   }
 
   try {
-    const target = new URL(targetUrl);
+    const target = new URL(unwrapTrackingRedirectUrl(targetUrl));
     target.searchParams.set('utm_source', 'push_eagle');
     target.searchParams.set('utm_medium', 'web_push');
     target.searchParams.set('utm_campaign', ruleKey);
@@ -1032,6 +1032,28 @@ const buildAutomationTrackedUrl = (
     return targetUrl;
   }
 };
+
+function unwrapTrackingRedirectUrl(candidate: string) {
+  try {
+    const parsed = new URL(candidate);
+    const pathname = parsed.pathname.toLowerCase();
+    const isTrackingPath = pathname === '/api/track/click' || pathname === '/api/track/automation-click';
+    const encodedTarget = parsed.searchParams.get('u');
+    if (!isTrackingPath || !encodedTarget) {
+      return candidate;
+    }
+
+    const decodedTarget = decodeURIComponent(encodedTarget);
+    const nested = new URL(decodedTarget);
+    if (/^https?:$/i.test(nested.protocol)) {
+      return nested.toString();
+    }
+
+    return candidate;
+  } catch {
+    return candidate;
+  }
+}
 
 const buildAutomationClickTrackingUrl = (
   trackedTargetUrl: string | null | undefined,
