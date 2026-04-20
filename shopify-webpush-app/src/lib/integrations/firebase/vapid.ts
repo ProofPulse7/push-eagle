@@ -38,6 +38,9 @@ type PushPayload = {
   actions?: Array<{ action: string; title: string }>;
   button1Url?: string | null;
   button2Url?: string | null;
+  trackPrimaryUrl?: string | null;
+  trackButton1Url?: string | null;
+  trackButton2Url?: string | null;
 };
 
 let vapidConfigured = false;
@@ -80,6 +83,9 @@ export const sendVapidPushNotification = async (
       url: payload.url ?? '/',
       button1Url: payload.button1Url ?? '',
       button2Url: payload.button2Url ?? '',
+      trackPrimaryUrl: payload.trackPrimaryUrl ?? '',
+      trackButton1Url: payload.trackButton1Url ?? '',
+      trackButton2Url: payload.trackButton2Url ?? '',
       action1Title: payload.actions?.[0]?.title ?? '',
       action2Title: payload.actions?.[1]?.title ?? '',
     },

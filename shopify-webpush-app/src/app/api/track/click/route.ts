@@ -12,6 +12,7 @@ export async function GET(request: Request) {
     const shop = url.searchParams.get('s');
     const target = url.searchParams.get('u');
     const externalId = url.searchParams.get('e');
+    const noRedirect = url.searchParams.get('nr') === '1';
 
     if (!campaignId || !shop || !target) {
       return NextResponse.json({ ok: false, error: 'Missing click-tracking parameters.' }, { status: 400 });
@@ -38,6 +39,16 @@ export async function GET(request: Request) {
       ipAddress,
       referrer: request.headers.get('referer'),
     });
+
+    if (noRedirect) {
+      return new NextResponse(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
 
     return NextResponse.redirect(targetUrl, { status: 307 });
   } catch (error) {

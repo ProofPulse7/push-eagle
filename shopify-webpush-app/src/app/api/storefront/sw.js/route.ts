@@ -21,6 +21,22 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
+function sendTrackingBeacon(trackUrl) {
+  if (!trackUrl) {
+    return Promise.resolve();
+  }
+
+  return fetch(trackUrl, {
+    method: 'GET',
+    mode: 'no-cors',
+    credentials: 'omit',
+    cache: 'no-store',
+    keepalive: true,
+  }).catch(function() {
+    // Ignore tracking failures so click-through always works.
+  });
+}
+
 function buildPushEagleActions(payload) {
   const notificationActions = Array.isArray(payload.notification?.actions)
     ? payload.notification.actions
@@ -48,6 +64,9 @@ messaging.onBackgroundMessage(function(payload) {
   const url = payload.fcmOptions?.link || payload.data?.url || '/';
   const button1Url = payload.data?.button1Url || url;
   const button2Url = payload.data?.button2Url || '';
+  const trackPrimaryUrl = payload.data?.trackPrimaryUrl || '';
+  const trackButton1Url = payload.data?.trackButton1Url || '';
+  const trackButton2Url = payload.data?.trackButton2Url || '';
   const options = {
     body: payload.notification?.body,
     icon: payload.notification?.icon,
@@ -56,7 +75,10 @@ messaging.onBackgroundMessage(function(payload) {
     data: {
       url,
       button1Url,
-      button2Url
+      button2Url,
+      trackPrimaryUrl,
+      trackButton1Url,
+      trackButton2Url
     }
   };
 
@@ -68,13 +90,16 @@ self.addEventListener('notificationclick', function(event) {
 
   const data = event.notification?.data || {};
   let target = data.url || '/';
+  let trackUrl = data.trackPrimaryUrl || '';
   if (event.action === 'btn_1') {
     target = data.button1Url || data.url || '/';
+    trackUrl = data.trackButton1Url || data.trackPrimaryUrl || '';
   } else if (event.action === 'btn_2') {
     target = data.button2Url || data.url || '/';
+    trackUrl = data.trackButton2Url || data.trackPrimaryUrl || '';
   }
 
-  event.waitUntil(clients.openWindow(target));
+  event.waitUntil(Promise.all([sendTrackingBeacon(trackUrl), clients.openWindow(target)]));
 });
 
 // Fallback for VAPID/browser-native push payloads (Firefox/Safari).
@@ -90,6 +115,9 @@ self.addEventListener('push', function(event) {
   const url = payload.url || payload.data?.url || '/';
   const button1Url = payload.data?.button1Url || url;
   const button2Url = payload.data?.button2Url || '';
+  const trackPrimaryUrl = payload.data?.trackPrimaryUrl || '';
+  const trackButton1Url = payload.data?.trackButton1Url || '';
+  const trackButton2Url = payload.data?.trackButton2Url || '';
   const options = {
     body: payload.body || payload.notification?.body,
     icon: payload.icon || payload.notification?.icon,
@@ -98,7 +126,10 @@ self.addEventListener('push', function(event) {
     data: {
       url,
       button1Url,
-      button2Url
+      button2Url,
+      trackPrimaryUrl,
+      trackButton1Url,
+      trackButton2Url
     }
   };
 

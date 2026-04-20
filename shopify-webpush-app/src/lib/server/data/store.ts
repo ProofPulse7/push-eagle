@@ -963,15 +963,13 @@ const ensureSchema = async () => {
 const buildTrackedUrl = (
   targetUrl: string | null | undefined,
   campaignId: string,
-  shopDomain: string,
-  externalId?: string | null,
+  _shopDomain: string,
+  _externalId?: string | null,
   contentLabel?: string | null,
 ) => {
   if (!targetUrl) {
     return null;
   }
-
-  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
 
   try {
     const target = new URL(targetUrl);
@@ -981,48 +979,84 @@ const buildTrackedUrl = (
     if (contentLabel) {
       target.searchParams.set('utm_content', contentLabel);
     }
+    return target.toString();
+  } catch {
+    return targetUrl;
+  }
+};
 
+const buildCampaignClickTrackingUrl = (
+  trackedTargetUrl: string | null | undefined,
+  campaignId: string,
+  shopDomain: string,
+  externalId?: string | null,
+) => {
+  if (!trackedTargetUrl) {
+    return '';
+  }
+
+  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
+
+  try {
     const trackerBase = new URL('/api/track/click', trackingBase);
     trackerBase.searchParams.set('c', campaignId);
     trackerBase.searchParams.set('s', shopDomain);
-    trackerBase.searchParams.set('u', target.toString());
+    trackerBase.searchParams.set('u', trackedTargetUrl);
+    trackerBase.searchParams.set('nr', '1');
     if (externalId) {
       trackerBase.searchParams.set('e', externalId);
     }
     return trackerBase.toString();
   } catch {
-    return targetUrl;
+    return '';
   }
 };
 
 const buildAutomationTrackedUrl = (
   targetUrl: string | null | undefined,
   ruleKey: AutomationRuleKey,
-  shopDomain: string,
-  externalId?: string | null,
+  _shopDomain: string,
+  _externalId?: string | null,
 ) => {
   if (!targetUrl) {
     return null;
   }
-
-  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
 
   try {
     const target = new URL(targetUrl);
     target.searchParams.set('utm_source', 'push_eagle');
     target.searchParams.set('utm_medium', 'web_push');
     target.searchParams.set('utm_campaign', ruleKey);
+    return target.toString();
+  } catch {
+    return targetUrl;
+  }
+};
 
+const buildAutomationClickTrackingUrl = (
+  trackedTargetUrl: string | null | undefined,
+  ruleKey: AutomationRuleKey,
+  shopDomain: string,
+  externalId?: string | null,
+) => {
+  if (!trackedTargetUrl) {
+    return '';
+  }
+
+  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
+
+  try {
     const trackerBase = new URL('/api/track/automation-click', trackingBase);
     trackerBase.searchParams.set('r', ruleKey);
     trackerBase.searchParams.set('s', shopDomain);
-    trackerBase.searchParams.set('u', target.toString());
+    trackerBase.searchParams.set('u', trackedTargetUrl);
+    trackerBase.searchParams.set('nr', '1');
     if (externalId) {
       trackerBase.searchParams.set('e', externalId);
     }
     return trackerBase.toString();
   } catch {
-    return targetUrl;
+    return '';
   }
 };
 
@@ -3171,6 +3205,16 @@ export const processAutomationJob = async (jobId: string) => {
     const trackedButton2Url = payload.ruleKey && rawActionButtons[1]?.link
       ? buildAutomationTrackedUrl(String(rawActionButtons[1].link), payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
       : (rawActionButtons[1]?.link ? String(rawActionButtons[1].link) : '');
+
+    const primaryTrackUrl = payload.ruleKey
+      ? buildAutomationClickTrackingUrl(trackedTargetUrl, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+      : '';
+    const button1TrackUrl = payload.ruleKey
+      ? buildAutomationClickTrackingUrl(trackedButton1Url, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+      : '';
+    const button2TrackUrl = payload.ruleKey
+      ? buildAutomationClickTrackingUrl(trackedButton2Url, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+      : '';
     
     const automationAction1Title = automationActions[0]?.title ?? '';
     const automationAction2Title = automationActions[1]?.title ?? '';
@@ -3194,6 +3238,9 @@ export const processAutomationJob = async (jobId: string) => {
           actions: automationActions,
           button1Url: trackedButton1Url || null,
           button2Url: trackedButton2Url || null,
+          trackPrimaryUrl: primaryTrackUrl || null,
+          trackButton1Url: button1TrackUrl || null,
+          trackButton2Url: button2TrackUrl || null,
         },
       );
     } else {
@@ -3220,6 +3267,9 @@ export const processAutomationJob = async (jobId: string) => {
           url: trackedTargetUrl ?? payload.targetUrl ?? '',
           button1Url: trackedButton1Url ?? '',
           button2Url: trackedButton2Url ?? '',
+          trackPrimaryUrl: primaryTrackUrl,
+          trackButton1Url: button1TrackUrl,
+          trackButton2Url: button2TrackUrl,
           action1Title: automationAction1Title,
           action2Title: automationAction2Title,
         },
@@ -5549,6 +5599,9 @@ export const sendCampaign = async (
         const secondButtonUrl = actionButtons[1]?.link
           ? buildTrackedUrl(String(actionButtons[1].link), campaignId, shopDomain, item.external_id, 'button_2')
           : null;
+        const primaryTrackUrl = buildCampaignClickTrackingUrl(trackedUrl, campaignId, shopDomain, item.external_id);
+        const button1TrackUrl = buildCampaignClickTrackingUrl(firstButtonUrl, campaignId, shopDomain, item.external_id);
+        const button2TrackUrl = buildCampaignClickTrackingUrl(secondButtonUrl, campaignId, shopDomain, item.external_id);
 
         return {
           item,
@@ -5556,6 +5609,9 @@ export const sendCampaign = async (
           trackedUrl,
           firstButtonUrl,
           secondButtonUrl,
+          primaryTrackUrl,
+          button1TrackUrl,
+          button2TrackUrl,
           actions,
         };
       });
@@ -5564,7 +5620,7 @@ export const sendCampaign = async (
       const vapidRecipients = chunkWithPayload.filter(({ item }) => String((item as { token_type?: string | null }).token_type ?? 'fcm') === 'vapid');
 
       if (fcmRecipients.length > 0) {
-        const messages = fcmRecipients.map(({ item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, actions }) => ({
+        const messages = fcmRecipients.map(({ item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, primaryTrackUrl, button1TrackUrl, button2TrackUrl, actions }) => ({
           token: item.fcm_token,
           notification: {
             title: campaign.title,
@@ -5587,6 +5643,9 @@ export const sendCampaign = async (
             primaryUrl: trackedUrl ?? '',
             button1Url: firstButtonUrl ?? '',
             button2Url: secondButtonUrl ?? '',
+            trackPrimaryUrl: primaryTrackUrl,
+            trackButton1Url: button1TrackUrl,
+            trackButton2Url: button2TrackUrl,
             action1Title: actions[0]?.title ?? '',
             action2Title: actions[1]?.title ?? '',
           },
@@ -5630,7 +5689,7 @@ export const sendCampaign = async (
         }
       }
 
-      for (const { item, platformImage, trackedUrl } of vapidRecipients) {
+      for (const { item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, actions, primaryTrackUrl, button1TrackUrl, button2TrackUrl } of vapidRecipients) {
         try {
           const endpoint = String((item as { vapid_endpoint?: string | null }).vapid_endpoint ?? '');
           const p256dh = String((item as { vapid_p256dh?: string | null }).vapid_p256dh ?? '');
@@ -5649,6 +5708,12 @@ export const sendCampaign = async (
               icon: campaign.icon_url,
               image: platformImage,
               url: trackedUrl,
+              actions,
+              button1Url: firstButtonUrl,
+              button2Url: secondButtonUrl,
+              trackPrimaryUrl: primaryTrackUrl,
+              trackButton1Url: button1TrackUrl,
+              trackButton2Url: button2TrackUrl,
             },
           );
 
