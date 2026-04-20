@@ -930,20 +930,6 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_smart_delivery_metrics_shop ON smart_delivery_metrics(shop_domain)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_token ON campaign_deliveries(campaign_id, token_id)`;
-      await sql`
-        WITH ranked AS (
-          SELECT ctid, ROW_NUMBER() OVER (
-            PARTITION BY automation_job_id
-            ORDER BY delivered_at ASC, id ASC
-          ) AS rn
-          FROM automation_deliveries
-          WHERE automation_job_id IS NOT NULL
-        )
-        DELETE FROM automation_deliveries d
-        USING ranked r
-        WHERE d.ctid = r.ctid AND r.rn > 1
-      `;
-      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_deliveries_job ON automation_deliveries(automation_job_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_rule_time ON automation_deliveries(shop_domain, rule_key, delivered_at DESC)`;
@@ -1014,7 +1000,6 @@ const buildAutomationTrackedUrl = (
   ruleKey: AutomationRuleKey,
   shopDomain: string,
   externalId?: string | null,
-  contentLabel?: string | null,
 ) => {
   if (!targetUrl) {
     return null;
@@ -1026,10 +1011,7 @@ const buildAutomationTrackedUrl = (
     const target = new URL(targetUrl);
     target.searchParams.set('utm_source', 'push_eagle');
     target.searchParams.set('utm_medium', 'web_push');
-    target.searchParams.set('utm_campaign', `automation_${ruleKey}`);
-    if (contentLabel) {
-      target.searchParams.set('utm_content', contentLabel);
-    }
+    target.searchParams.set('utm_campaign', ruleKey);
 
     const trackerBase = new URL('/api/track/automation-click', trackingBase);
     trackerBase.searchParams.set('r', ruleKey);
@@ -1038,7 +1020,6 @@ const buildAutomationTrackedUrl = (
     if (externalId) {
       trackerBase.searchParams.set('e', externalId);
     }
-
     return trackerBase.toString();
   } catch {
     return targetUrl;
@@ -2811,25 +2792,7 @@ export const processAutomationJob = async (jobId: string) => {
     return { processed: false, error: 'Missing active token.' };
   }
 
-  let markedSent = false;
-
   try {
-    const alreadyDeliveredRows = await sql`
-      SELECT id
-      FROM automation_deliveries
-      WHERE automation_job_id = ${claim.id}
-      LIMIT 1
-    `;
-
-    if (alreadyDeliveredRows.length > 0) {
-      await sql`
-        UPDATE automation_jobs
-        SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW(), error_message = NULL
-        WHERE id = ${jobId}
-      `;
-      return { processed: true };
-    }
-
     let payload = claim.payload ?? { title: 'Notification', body: '' };
     let subscriberPlatform: string | null = null;
     let subscriberBrowser: string | null = null;
@@ -3186,10 +3149,8 @@ export const processAutomationJob = async (jobId: string) => {
       },
     };
 
-    const effectiveRuleKey = (payload.ruleKey ?? claim.rule_key) as AutomationRuleKey;
-
-    const trackedTargetUrl = effectiveRuleKey
-      ? buildAutomationTrackedUrl(payload.targetUrl ?? null, effectiveRuleKey, claim.shop_domain, payload.externalId ?? null, 'main')
+    const trackedTargetUrl = payload.ruleKey
+      ? buildAutomationTrackedUrl(payload.targetUrl ?? null, payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
       : payload.targetUrl ?? null;
 
     let fcmMessageId: string;
@@ -3201,14 +3162,16 @@ export const processAutomationJob = async (jobId: string) => {
       .slice(0, 2)
       .filter((btn) => btn?.title && btn?.link)
       .map((btn, i) => ({ action: `btn_${i + 1}`, title: String(btn.title) }));
-    const automationButton1Url = rawActionButtons[0]?.link ? String(rawActionButtons[0].link) : '';
-    const automationButton2Url = rawActionButtons[1]?.link ? String(rawActionButtons[1].link) : '';
-    const trackedAutomationButton1Url = automationButton1Url
-      ? (buildAutomationTrackedUrl(automationButton1Url, effectiveRuleKey, claim.shop_domain, payload.externalId ?? null, 'action_1') || automationButton1Url)
-      : '';
-    const trackedAutomationButton2Url = automationButton2Url
-      ? (buildAutomationTrackedUrl(automationButton2Url, effectiveRuleKey, claim.shop_domain, payload.externalId ?? null, 'action_2') || automationButton2Url)
-      : '';
+    
+    // Track button URLs with automation context
+    const trackedButton1Url = payload.ruleKey && rawActionButtons[0]?.link
+      ? buildAutomationTrackedUrl(String(rawActionButtons[0].link), payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+      : (rawActionButtons[0]?.link ? String(rawActionButtons[0].link) : '');
+    
+    const trackedButton2Url = payload.ruleKey && rawActionButtons[1]?.link
+      ? buildAutomationTrackedUrl(String(rawActionButtons[1].link), payload.ruleKey, claim.shop_domain, payload.externalId ?? null)
+      : (rawActionButtons[1]?.link ? String(rawActionButtons[1].link) : '');
+    
     const automationAction1Title = automationActions[0]?.title ?? '';
     const automationAction2Title = automationActions[1]?.title ?? '';
 
@@ -3229,8 +3192,8 @@ export const processAutomationJob = async (jobId: string) => {
           image: payload.imageUrl ?? null,
           url: trackedTargetUrl ?? payload.targetUrl ?? null,
           actions: automationActions,
-          button1Url: trackedAutomationButton1Url || null,
-          button2Url: trackedAutomationButton2Url || null,
+          button1Url: trackedButton1Url || null,
+          button2Url: trackedButton2Url || null,
         },
       );
     } else {
@@ -3255,8 +3218,8 @@ export const processAutomationJob = async (jobId: string) => {
           source: 'automation',
           ruleKey: String(payload.ruleKey ?? ''),
           url: trackedTargetUrl ?? payload.targetUrl ?? '',
-          button1Url: trackedAutomationButton1Url,
-          button2Url: trackedAutomationButton2Url,
+          button1Url: trackedButton1Url ?? '',
+          button2Url: trackedButton2Url ?? '',
           action1Title: automationAction1Title,
           action2Title: automationAction2Title,
         },
@@ -3270,7 +3233,6 @@ export const processAutomationJob = async (jobId: string) => {
       SET status = 'sent', sent_at = NOW(), updated_at = NOW(), error_message = NULL
       WHERE id = ${jobId}
     `;
-    markedSent = true;
 
     await sql`
       INSERT INTO automation_deliveries (
@@ -3293,18 +3255,10 @@ export const processAutomationJob = async (jobId: string) => {
         ${payload.targetUrl ?? null},
         ${fcmMessageId}
       )
-      ON CONFLICT (automation_job_id)
-      DO UPDATE SET
-        fcm_message_id = EXCLUDED.fcm_message_id,
-        delivered_at = COALESCE(automation_deliveries.delivered_at, NOW())
     `;
 
     return { processed: true };
   } catch (error) {
-    if (markedSent) {
-      return { processed: true };
-    }
-
     const message = error instanceof Error ? error.message : 'Failed to send automation message.';
     await sql`
       UPDATE automation_jobs
