@@ -14,7 +14,6 @@ import {
   Tag,
   BarChart,
   LogIn,
-  Stethoscope,
 } from 'lucide-react';
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
@@ -67,9 +66,6 @@ export function MobileSidebar() {
             </NavLink>
             <NavLink href="/plans" icon={Tag}>
                 Plans
-            </NavLink>
-            <NavLink href="/diagnostics" icon={Stethoscope}>
-                Diagnostics
             </NavLink>
             <NavLink href="/settings" icon={Settings}>
                 Settings

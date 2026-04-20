@@ -89,6 +89,7 @@ export async function GET(request: Request) {
         measurementId: env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
         vapidKey: env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
       },
+      webPushVapidPublicKey: env.VAPID_PUBLIC_KEY,
     });
 
     response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');

@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 import { env } from '@/lib/config/env';
 
@@ -110,4 +110,12 @@ export const getImageFromR2 = async (objectKey: string) => {
     contentType: String(response.ContentType ?? 'application/octet-stream'),
     cacheControl: String(response.CacheControl ?? 'public, max-age=31536000, immutable'),
   };
+};
+
+export const deleteImageFromR2 = async (objectKey: string) => {
+  const config = getR2Config();
+  await getClient().send(new DeleteObjectCommand({
+    Bucket: config.bucketName,
+    Key: objectKey,
+  }));
 };

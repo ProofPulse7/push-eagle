@@ -1258,6 +1258,20 @@
     return outputArray;
   }
 
+  function arrayBufferToBase64Url(value) {
+    if (!value) {
+      return null;
+    }
+
+    var bytes = new Uint8Array(value);
+    var binary = '';
+    for (var i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+
+    return window.btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
   async function subscribeWithVapid(registration, vapidKey) {
     if (!registration || !registration.pushManager || !vapidKey) {
       return null;
@@ -1336,7 +1350,8 @@
         return { ok: false, reason: 'sw-not-active', message: activationMessage };
       }
 
-      var vapidKey = (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey;
+      var firebaseVapidKey = (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey;
+      var webPushVapidPublicKey = (boot.webPushVapidPublicKey || '').trim() || firebaseVapidKey;
       var token = null;
       var tokenType = 'fcm';
       var vapidEndpoint = null;
@@ -1346,7 +1361,7 @@
       if (messaging && messaging.getToken) {
         try {
           token = await messaging.getToken({
-            vapidKey: vapidKey,
+            vapidKey: firebaseVapidKey,
             serviceWorkerRegistration: registration
           });
         } catch (_fcmError) {
@@ -1354,25 +1369,70 @@
         }
       }
 
-      // Firefox/Safari may not return FCM token; fallback to native Web Push subscription.
-      if (!token && vapidKey) {
+      if (!token && registration && registration.pushManager) {
         try {
-          var subscription = await subscribeWithVapid(registration, vapidKey);
+          var existingSubscription = await registration.pushManager.getSubscription();
+          if (existingSubscription && existingSubscription.endpoint) {
+            token = existingSubscription.endpoint;
+            tokenType = 'vapid';
+            vapidEndpoint = existingSubscription.endpoint;
+
+            var existingJson = existingSubscription.toJSON ? existingSubscription.toJSON() : null;
+            var existingKeys = existingJson && existingJson.keys ? existingJson.keys : null;
+            vapidP256dh = existingKeys && existingKeys.p256dh
+              ? existingKeys.p256dh
+              : arrayBufferToBase64Url(existingSubscription.getKey && existingSubscription.getKey('p256dh'));
+            vapidAuth = existingKeys && existingKeys.auth
+              ? existingKeys.auth
+              : arrayBufferToBase64Url(existingSubscription.getKey && existingSubscription.getKey('auth'));
+          }
+        } catch (_existingSubscriptionError) {
+          token = null;
+        }
+      }
+
+      // Firefox/Safari may not return FCM token; fallback to native Web Push subscription.
+      if (!token && webPushVapidPublicKey) {
+        try {
+          var subscription = await subscribeWithVapid(registration, webPushVapidPublicKey);
           if (subscription && subscription.endpoint) {
             token = subscription.endpoint;
             tokenType = 'vapid';
             vapidEndpoint = subscription.endpoint;
-            var keys = subscription.toJSON && subscription.toJSON().keys ? subscription.toJSON().keys : null;
-            vapidP256dh = keys && keys.p256dh ? keys.p256dh : null;
-            vapidAuth = keys && keys.auth ? keys.auth : null;
+            var subscriptionJson = subscription.toJSON ? subscription.toJSON() : null;
+            var keys = subscriptionJson && subscriptionJson.keys ? subscriptionJson.keys : null;
+            vapidP256dh = keys && keys.p256dh
+              ? keys.p256dh
+              : arrayBufferToBase64Url(subscription.getKey && subscription.getKey('p256dh'));
+            vapidAuth = keys && keys.auth
+              ? keys.auth
+              : arrayBufferToBase64Url(subscription.getKey && subscription.getKey('auth'));
           }
         } catch (_vapidError) {
           token = null;
         }
       }
 
+      if (!token && messaging && messaging.getToken) {
+        try {
+          await delay(1200);
+          token = await messaging.getToken({
+            vapidKey: firebaseVapidKey,
+            serviceWorkerRegistration: registration
+          });
+        } catch (_retryFcmError) {
+          token = null;
+        }
+      }
+
       if (!token) {
-        return { ok: false, reason: 'token-empty' };
+        return {
+          ok: false,
+          reason: 'token-empty',
+          message: webPushVapidPublicKey
+            ? 'No FCM token and no Web Push subscription returned by browser.'
+            : 'No FCM token and Web Push VAPID public key is missing.'
+        };
       }
 
       var payload = {

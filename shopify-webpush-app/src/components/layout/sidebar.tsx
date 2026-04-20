@@ -17,7 +17,6 @@ import {
   Megaphone,
   BarChart,
   LogIn,
-  Stethoscope,
 } from 'lucide-react';
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
@@ -87,9 +86,6 @@ export function Sidebar() {
         <div className="mt-auto space-y-1">
              <NavLink href="/plans" icon={Tag}>
                 Plans
-            </NavLink>
-            <NavLink href="/diagnostics" icon={Stethoscope}>
-                Diagnostics
             </NavLink>
             <NavLink href="/settings" icon={Settings}>
                 Settings

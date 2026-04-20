@@ -5,6 +5,7 @@ import { getNeonSql } from '@/lib/integrations/database/neon';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
 import { sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
 import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
+import { deleteImageFromR2 } from '@/lib/server/media/r2';
 
 type CreateCampaignInput = {
   shopDomain: string;
@@ -1049,6 +1050,190 @@ const toHttpUrlOrNull = (candidate: string | null | undefined, baseUrl?: string 
   }
 };
 
+const collectMediaReferences = (value: unknown): Set<string> => {
+  const found = new Set<string>();
+  const r2Base = env.R2_PUBLIC_BASE_URL.trim().replace(/\/$/, '');
+
+  const walk = (node: unknown) => {
+    if (node == null) {
+      return;
+    }
+
+    if (typeof node === 'string') {
+      const candidate = node.trim();
+      if (!candidate) {
+        return;
+      }
+
+      const isMediaPath = candidate.includes('/api/media/') || candidate.includes('/merchant-media/');
+      const isR2Public = Boolean(r2Base && candidate.startsWith(r2Base));
+      if (isMediaPath || isR2Public) {
+        found.add(candidate);
+      }
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach((item) => walk(item));
+      return;
+    }
+
+    if (typeof node === 'object') {
+      Object.values(node as Record<string, unknown>).forEach((item) => walk(item));
+    }
+  };
+
+  walk(value);
+  return found;
+};
+
+const extractAssetIdFromMediaUrl = (value: string) => {
+  const match = value.match(/\/api\/media\/([a-z0-9-]+)/i);
+  return match?.[1] ?? null;
+};
+
+const extractObjectKeyFromMediaUrl = (value: string) => {
+  try {
+    const url = new URL(value);
+    return decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+  } catch {
+    if (value.startsWith('/')) {
+      return decodeURIComponent(value.replace(/^\/+/, ''));
+    }
+    return null;
+  }
+};
+
+const cleanupUnusedMediaAssets = async (shopDomain: string, removedUrls: string[]) => {
+  const uniqueUrls = [...new Set(removedUrls.map((url) => String(url ?? '').trim()).filter(Boolean))];
+  if (uniqueUrls.length === 0) {
+    return;
+  }
+
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  type MediaAssetRef = {
+    id: string;
+    public_url: string | null;
+    object_key: string | null;
+    shop_domain: string;
+  };
+
+  for (const mediaUrl of uniqueUrls) {
+    let mediaAssetRow: MediaAssetRef | null = null;
+
+    const assetId = extractAssetIdFromMediaUrl(mediaUrl);
+    if (assetId) {
+      const rows = await sql`
+        SELECT id, public_url, object_key, shop_domain
+        FROM media_assets
+        WHERE id = ${assetId}
+          AND shop_domain = ${shopDomain}
+        LIMIT 1
+      `;
+      mediaAssetRow = (rows[0] as MediaAssetRef | undefined) ?? null;
+    }
+
+    if (!mediaAssetRow) {
+      const rows = await sql`
+        SELECT id, public_url, object_key, shop_domain
+        FROM media_assets
+        WHERE public_url = ${mediaUrl}
+          AND shop_domain = ${shopDomain}
+        LIMIT 1
+      `;
+      mediaAssetRow = (rows[0] as MediaAssetRef | undefined) ?? null;
+    }
+
+    if (!mediaAssetRow) {
+      const objectKey = extractObjectKeyFromMediaUrl(mediaUrl);
+      if (objectKey) {
+        const rows = await sql`
+          SELECT id, public_url, object_key, shop_domain
+          FROM media_assets
+          WHERE object_key = ${objectKey}
+            AND shop_domain = ${shopDomain}
+          LIMIT 1
+        `;
+        mediaAssetRow = (rows[0] as MediaAssetRef | undefined) ?? null;
+      }
+    }
+
+    if (!mediaAssetRow || !mediaAssetRow.object_key) {
+      continue;
+    }
+
+    const rows = await sql`
+      SELECT
+        EXISTS (
+          SELECT 1
+          FROM campaigns
+          WHERE shop_domain = ${shopDomain}
+            AND (
+              icon_url = ${mediaAssetRow.public_url}
+              OR image_url = ${mediaAssetRow.public_url}
+              OR windows_image_url = ${mediaAssetRow.public_url}
+              OR macos_image_url = ${mediaAssetRow.public_url}
+              OR android_image_url = ${mediaAssetRow.public_url}
+              OR icon_url LIKE ${`%/api/media/${mediaAssetRow.id}%`}
+              OR image_url LIKE ${`%/api/media/${mediaAssetRow.id}%`}
+              OR windows_image_url LIKE ${`%/api/media/${mediaAssetRow.id}%`}
+              OR macos_image_url LIKE ${`%/api/media/${mediaAssetRow.id}%`}
+              OR android_image_url LIKE ${`%/api/media/${mediaAssetRow.id}%`}
+            )
+        ) AS in_campaigns,
+        EXISTS (
+          SELECT 1
+          FROM merchant_settings
+          WHERE shop_domain = ${shopDomain}
+            AND (
+              opt_in_logo_url = ${mediaAssetRow.public_url}
+              OR brand_logo_url = ${mediaAssetRow.public_url}
+              OR opt_in_logo_url LIKE ${`%/api/media/${mediaAssetRow.id}%`}
+              OR brand_logo_url LIKE ${`%/api/media/${mediaAssetRow.id}%`}
+            )
+        ) AS in_settings,
+        EXISTS (
+          SELECT 1
+          FROM automation_rules
+          WHERE shop_domain = ${shopDomain}
+            AND (
+              config::text LIKE ${`%${mediaAssetRow.id}%`}
+              OR config::text LIKE ${`%${mediaAssetRow.object_key}%`}
+              OR (${mediaAssetRow.public_url} IS NOT NULL AND config::text LIKE ${`%${mediaAssetRow.public_url}%`})
+            )
+        ) AS in_automation_rules
+    `;
+
+    const referenceRow = rows[0] as {
+      in_campaigns?: boolean;
+      in_settings?: boolean;
+      in_automation_rules?: boolean;
+    } | undefined;
+
+    const stillReferenced = Boolean(
+      referenceRow?.in_campaigns || referenceRow?.in_settings || referenceRow?.in_automation_rules,
+    );
+
+    if (stillReferenced) {
+      continue;
+    }
+
+    try {
+      await deleteImageFromR2(mediaAssetRow.object_key);
+    } catch {
+      // Ignore remote delete errors and still prune stale metadata row.
+    }
+
+    await sql`
+      DELETE FROM media_assets
+      WHERE id = ${mediaAssetRow.id}
+        AND shop_domain = ${shopDomain}
+    `;
+  }
+};
+
 const resolveAutomationDestination = async (shopDomain: string, payload: AutomationJobPayload) => {
   const sql = getNeonSql();
   const rows = await sql`
@@ -1706,8 +1891,10 @@ export const upsertAutomationRule = async (
 
   const currentEnabled = Boolean(currentRows[0]?.enabled);
   const currentConfig = (currentRows[0]?.config ?? {}) as Record<string, unknown>;
+  const currentMediaRefs = collectMediaReferences(currentConfig);
   const nextEnabled = typeof enabled === 'boolean' ? enabled : currentEnabled;
   const nextConfig = config === undefined ? currentConfig : mergeRuleConfig(ruleKey, currentConfig, config);
+  const nextMediaRefs = collectMediaReferences(nextConfig);
 
   const rows = await sql`
     UPDATE automation_rules
@@ -1718,6 +1905,11 @@ export const upsertAutomationRule = async (
   `;
 
   const row = rows[0];
+  const removedMediaRefs = [...currentMediaRefs].filter((url) => !nextMediaRefs.has(url));
+  if (removedMediaRefs.length > 0) {
+    await cleanupUnusedMediaAssets(shopDomain, removedMediaRefs);
+  }
+
   return row
     ? {
         id: String(row.id),
@@ -5615,6 +5807,14 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
   const sql = getNeonSql();
   await ensureMerchant(input.shopDomain);
 
+  const existingRows = await sql`
+    SELECT opt_in_logo_url
+    FROM merchant_settings
+    WHERE shop_domain = ${input.shopDomain}
+    LIMIT 1
+  `;
+  const previousLogoUrl = existingRows[0]?.opt_in_logo_url ? String(existingRows[0].opt_in_logo_url) : null;
+
   await sql`
     INSERT INTO merchant_settings (
       shop_domain,
@@ -5688,6 +5888,10 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
       ios_widget_message = EXCLUDED.ios_widget_message,
       updated_at = NOW()
   `;
+
+  if (previousLogoUrl && previousLogoUrl !== (input.logoUrl ?? null)) {
+    await cleanupUnusedMediaAssets(input.shopDomain, [previousLogoUrl]);
+  }
 
   return {
     promptType: input.promptType,
@@ -5858,6 +6062,14 @@ export const updateBrandingSettings = async (input: UpdateBrandingSettingsInput)
   const sql = getNeonSql();
   await ensureMerchant(input.shopDomain);
 
+  const existingRows = await sql`
+    SELECT brand_logo_url
+    FROM merchant_settings
+    WHERE shop_domain = ${input.shopDomain}
+    LIMIT 1
+  `;
+  const previousLogoUrl = existingRows[0]?.brand_logo_url ? String(existingRows[0].brand_logo_url) : null;
+
   await sql`
     INSERT INTO merchant_settings (shop_domain, brand_logo_url, updated_at)
     VALUES (${input.shopDomain}, ${input.logoUrl ?? null}, NOW())
@@ -5866,6 +6078,10 @@ export const updateBrandingSettings = async (input: UpdateBrandingSettingsInput)
       brand_logo_url = EXCLUDED.brand_logo_url,
       updated_at = NOW()
   `;
+
+  if (previousLogoUrl && previousLogoUrl !== (input.logoUrl ?? null)) {
+    await cleanupUnusedMediaAssets(input.shopDomain, [previousLogoUrl]);
+  }
 
   return {
     logoUrl: input.logoUrl ?? null,
