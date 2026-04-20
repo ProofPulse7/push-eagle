@@ -12,6 +12,7 @@ import {
     ShoppingCart,
     Tag,
     Truck,
+    Zap,
     type LucideIcon,
 } from 'lucide-react';
 
@@ -281,6 +282,12 @@ export default function AutomationsPage() {
                         <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Automations</h1>
                         <p className="mt-1 text-sm text-slate-500">Set up automated workflows to engage your audience.</p>
                     </div>
+                    <Link href={`/automations/diagnostic${typeof window !== 'undefined' && window.location.search ? window.location.search : ''}`}>
+                        <Button variant="outline" size="sm" className="gap-2">
+                            <Zap className="w-4 h-4" />
+                            Diagnostics
+                        </Button>
+                    </Link>
                 </div>
 
                 <section className="space-y-3">

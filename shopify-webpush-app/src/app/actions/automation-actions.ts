@@ -19,6 +19,24 @@ type SaveStepInput = {
 
 type SupportedAutomationRuleKey = 'welcome_subscriber' | 'cart_abandonment_30m' | 'browse_abandonment_15m' | 'shipping_notifications' | 'back_in_stock' | 'price_drop';
 
+const normalizeTrackedLink = (value: string | null | undefined) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return raw;
+  }
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.pathname === '/api/track/automation-click' || parsed.pathname === '/api/track/click') {
+      return parsed.searchParams.get('u') || raw;
+    }
+  } catch {
+    return raw;
+  }
+
+  return raw;
+};
+
 const automationDefinitions: Record<SupportedAutomationRuleKey, {
   path: string;
   allowedStepIds: Set<string>;
@@ -91,7 +109,9 @@ export async function saveAutomationStep(ruleKey: SupportedAutomationRuleKey, st
 
   const nextDelay = delayLabelToMinutes(data.delayLabel) ?? Number(existingStep.delayMinutes ?? 0);
   const nextActionButtons = Array.isArray(data.actionButtons)
-    ? data.actionButtons.filter((item) => item?.title && item?.link)
+    ? data.actionButtons
+      .filter((item) => item?.title && item?.link)
+      .map((item) => ({ ...item, link: normalizeTrackedLink(item.link) }))
     : ((existingStep.actionButtons as Array<{ title: string; link: string }> | undefined) ?? []);
 
   const stepPatch = {
@@ -101,7 +121,7 @@ export async function saveAutomationStep(ruleKey: SupportedAutomationRuleKey, st
     body: String(data.message ?? existingStep.body ?? ''),
     targetUrl: data.primaryLink == null || String(data.primaryLink).trim() === ''
       ? (existingStep.targetUrl as string | null | undefined) ?? null
-      : data.primaryLink,
+      : normalizeTrackedLink(data.primaryLink),
     iconUrl: data.logoUrl ?? (existingStep.iconUrl as string | null | undefined) ?? null,
     imageUrl: data.heroUrl ?? (existingStep.imageUrl as string | null | undefined) ?? null,
     windowsImageUrl: data.windowsHeroUrl ?? (existingStep.windowsImageUrl as string | null | undefined) ?? null,

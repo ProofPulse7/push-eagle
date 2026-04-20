@@ -17,6 +17,24 @@ const DEFAULT_BATCH_SIZE = 1000;
 const DEFAULT_MAX_CONCURRENT = 50;
 const DEFAULT_MAX_RETRIES = 3;
 
+const normalizeTrackedLink = (value: string | null | undefined) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return '/';
+  }
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.pathname === '/api/track/click' || parsed.pathname === '/api/track/automation-click') {
+      return parsed.searchParams.get('u') || raw;
+    }
+  } catch {
+    return raw;
+  }
+
+  return raw;
+};
+
 /**
  * Process pending automation jobs in batches
  * Handles FCM sending with retry logic and error recovery
@@ -96,6 +114,7 @@ async function sendJobNotification(
       campaignLabel?: string | null;
       metadata?: Record<string, unknown>;
     };
+    const destinationUrl = normalizeTrackedLink(payload.targetUrl);
 
     const fcmPayload: any = {
       notification: {
@@ -108,7 +127,7 @@ async function sendJobNotification(
         timestamp: new Date().toISOString(),
       },
       webpush: {
-        fcmOptions: { link: payload.targetUrl || '/' },
+        fcmOptions: { link: destinationUrl },
         notification: {
           title: payload.title,
           body: payload.body,
@@ -121,6 +140,7 @@ async function sendJobNotification(
         data: {
           ruleKey: String(job.rule_key),
           campaignLabel: payload.campaignLabel || 'automation',
+          url: destinationUrl,
         },
       },
     };

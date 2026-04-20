@@ -53,6 +53,24 @@ export interface CampaignContextType {
 
 export const CampaignContext = createContext<CampaignContextType | undefined>(undefined);
 
+const normalizeTrackedLink = (value: string | null | undefined) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+        return '';
+    }
+
+    try {
+        const parsed = new URL(raw);
+        if (parsed.pathname === '/api/track/click' || parsed.pathname === '/api/track/automation-click') {
+            return parsed.searchParams.get('u') || raw;
+        }
+    } catch {
+        return raw;
+    }
+
+    return raw;
+};
+
 export function useCampaignState() {
     const context = useContext(CampaignContext);
     if (!context) {
@@ -88,6 +106,14 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [recurringPattern, setRecurringPattern] = useState('');
 
     useEffect(() => {
+        if (primaryLink) {
+            const normalized = normalizeTrackedLink(primaryLink);
+            if (normalized !== primaryLink) {
+                setPrimaryLink(normalized);
+                return;
+            }
+        }
+
         if (primaryLink) {
             return;
         }

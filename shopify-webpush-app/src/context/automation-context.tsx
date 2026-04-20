@@ -41,6 +41,24 @@ export interface AutomationContextType {
 
 export const AutomationContext = createContext<AutomationContextType | undefined>(undefined);
 
+const normalizeTrackedLink = (value: string | null | undefined) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+        return '';
+    }
+
+    try {
+        const parsed = new URL(raw);
+        if (parsed.pathname === '/api/track/automation-click' || parsed.pathname === '/api/track/click') {
+            return parsed.searchParams.get('u') || raw;
+        }
+    } catch {
+        return raw;
+    }
+
+    return raw;
+};
+
 export function useAutomationState() {
     const context = useContext(AutomationContext);
     if (!context) {
@@ -67,7 +85,7 @@ export function AutomationStateProvider({ children }: { children: ReactNode }) {
         if (initialState?.notification) {
             setTitle(initialState.notification.title || '');
             setMessage(initialState.notification.message || '');
-            setPrimaryLink(initialState.notification.targetUrl || fallbackStoreUrl);
+            setPrimaryLink(normalizeTrackedLink(initialState.notification.targetUrl) || fallbackStoreUrl);
             // Always restore the step-specific icon if one was saved; fall back to settings logo only if absent
             const stepIcon = initialState.notification.iconUrl || null;
             if (stepIcon || !logo.preview) {
@@ -80,7 +98,10 @@ export function AutomationStateProvider({ children }: { children: ReactNode }) {
             setWindowsHero({ file: null, preview: windowsHeroUrl, originalPreview: windowsHeroUrl });
             setMacHero({ file: null, preview: macHeroUrl, originalPreview: macHeroUrl });
             setAndroidHero({ file: null, preview: androidHeroUrl, originalPreview: androidHeroUrl });
-            setActionButtons(initialState.notification.actionButtons || []);
+            setActionButtons((initialState.notification.actionButtons || []).map((button) => ({
+                ...button,
+                link: normalizeTrackedLink(button.link),
+            })));
             setIsInitialized(true);
         }
     }, [logo.preview, setLogo, fallbackStoreUrl]);
