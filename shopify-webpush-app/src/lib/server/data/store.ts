@@ -2786,6 +2786,21 @@ export const processAutomationJob = async (jobId: string) => {
     let payload = claim.payload ?? { title: 'Notification', body: '' };
     let subscriberPlatform: string | null = null;
     let subscriberBrowser: string | null = null;
+    let welcomeSendLockKey: string | null = null;
+
+    const releaseWelcomeSendLock = async () => {
+      if (!welcomeSendLockKey) {
+        return;
+      }
+
+      try {
+        await sql`SELECT pg_advisory_unlock(hashtext(${welcomeSendLockKey}))`;
+      } catch {
+        // Best-effort unlock.
+      }
+
+      welcomeSendLockKey = null;
+    };
 
     if (claim.subscriber_id) {
       const subscriberRows = await sql`
@@ -2947,6 +2962,56 @@ export const processAutomationJob = async (jobId: string) => {
           `;
           return { processed: false, error: 'Welcome reminder already delivered to subscriber for this step.' };
         }
+      }
+
+      const lockRecipientKey = claim.subscriber_id
+        ? `subscriber:${claim.subscriber_id}`
+        : payloadExternalId
+          ? `external:${payloadExternalId}`
+          : deliveryTokenId
+            ? `token:${deliveryTokenId}`
+            : `job:${claim.id}`;
+
+      welcomeSendLockKey = `welcome-send:${claim.shop_domain}:${payloadStepKey}:${lockRecipientKey}`;
+
+      const lockRows = await sql`
+        SELECT pg_try_advisory_lock(hashtext(${welcomeSendLockKey})) AS locked
+      `;
+
+      if (!Boolean(lockRows[0]?.locked)) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Welcome reminder send already in progress for this subscriber step.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        await releaseWelcomeSendLock();
+        return { processed: false, error: 'Welcome reminder send already in progress for this subscriber step.' };
+      }
+
+      const lockedDuplicateDeliveryRows = await sql`
+        SELECT d.id
+        FROM automation_deliveries d
+        JOIN automation_jobs j ON j.id = d.automation_job_id
+        WHERE d.shop_domain = ${claim.shop_domain}
+          AND d.rule_key = 'welcome_subscriber'
+          AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+          AND (
+            (${claim.subscriber_id ?? null} IS NOT NULL AND d.subscriber_id = ${claim.subscriber_id ?? null})
+            OR (${deliveryTokenId ?? null} IS NOT NULL AND d.token_id = ${deliveryTokenId ?? null})
+            OR (${payloadExternalId} <> '' AND d.external_id = ${payloadExternalId})
+          )
+        ORDER BY d.delivered_at DESC
+        LIMIT 1
+      `;
+
+      if (lockedDuplicateDeliveryRows.length > 0) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Welcome reminder already delivered for this subscriber step.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        await releaseWelcomeSendLock();
+        return { processed: false, error: 'Welcome reminder already delivered for this subscriber step.' };
       }
     }
 
@@ -3239,8 +3304,35 @@ export const processAutomationJob = async (jobId: string) => {
       )
     `;
 
+    await releaseWelcomeSendLock();
+
     return { processed: true };
   } catch (error) {
+    if (claim.rule_key === 'welcome_subscriber') {
+      try {
+        const payload = claim.payload ?? {};
+        const payloadMetadata = (payload.metadata ?? {}) as Record<string, unknown>;
+        const payloadStepKey = payloadMetadata.stepKey == null ? '' : String(payloadMetadata.stepKey);
+        const payloadExternalId = payload.externalId == null ? '' : String(payload.externalId);
+        const lockRecipientKey = claim.subscriber_id
+          ? `subscriber:${claim.subscriber_id}`
+          : payloadExternalId
+            ? `external:${payloadExternalId}`
+            : claim.token_id
+              ? `token:${claim.token_id}`
+              : `job:${claim.id}`;
+        const lockKey = payloadStepKey
+          ? `welcome-send:${claim.shop_domain}:${payloadStepKey}:${lockRecipientKey}`
+          : null;
+
+        if (lockKey) {
+          await sql`SELECT pg_advisory_unlock(hashtext(${lockKey}))`;
+        }
+      } catch {
+        // Best-effort unlock on error.
+      }
+    }
+
     const message = error instanceof Error ? error.message : 'Failed to send automation message.';
     await sql`
       UPDATE automation_jobs
