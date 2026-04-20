@@ -11,6 +11,14 @@ export async function GET(_request: Request, context: { params: { id: string } }
       return NextResponse.json({ ok: false, error: 'Media asset not found.' }, { status: 404 });
     }
 
+    if (asset.public_url) {
+      return NextResponse.redirect(asset.public_url, { status: 307 });
+    }
+
+    if (!asset.data_base64) {
+      return NextResponse.json({ ok: false, error: 'Media asset content not found.' }, { status: 404 });
+    }
+
     const bytes = Buffer.from(asset.data_base64, 'base64');
     return new NextResponse(bytes, {
       status: 200,

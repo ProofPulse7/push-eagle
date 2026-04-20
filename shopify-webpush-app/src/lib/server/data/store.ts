@@ -592,6 +592,9 @@ const ensureSchema = async () => {
         data_base64 TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      await sql`ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS object_key TEXT`;
+      await sql`ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS public_url TEXT`;
+      await sql`ALTER TABLE media_assets ALTER COLUMN data_base64 DROP NOT NULL`;
 
       await sql`CREATE TABLE IF NOT EXISTS merchant_settings (
         shop_domain TEXT PRIMARY KEY REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -5457,21 +5460,34 @@ export const cleanupMerchantData = async (shopDomain: string) => {
   `;
 };
 
-export const createMediaAsset = async (shopDomain: string, contentType: string, dataBase64: string) => {
+export const createMediaAsset = async (input: {
+  shopDomain: string;
+  contentType: string;
+  dataBase64?: string | null;
+  objectKey?: string | null;
+  publicUrl?: string | null;
+}) => {
   await ensureSchema();
   const sql = getNeonSql();
-  await ensureMerchant(shopDomain);
+  await ensureMerchant(input.shopDomain);
 
   const assetId = randomUUID();
 
   await sql`
-    INSERT INTO media_assets (id, shop_domain, content_type, data_base64)
-    VALUES (${assetId}, ${shopDomain}, ${contentType}, ${dataBase64})
+    INSERT INTO media_assets (id, shop_domain, content_type, data_base64, object_key, public_url)
+    VALUES (
+      ${assetId},
+      ${input.shopDomain},
+      ${input.contentType},
+      ${input.dataBase64 ?? null},
+      ${input.objectKey ?? null},
+      ${input.publicUrl ?? null}
+    )
   `;
 
   return {
     id: assetId,
-    url: `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/api/media/${assetId}`,
+    url: input.publicUrl?.trim() || `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/api/media/${assetId}`,
   };
 };
 
@@ -5480,7 +5496,7 @@ export const getMediaAsset = async (assetId: string) => {
   const sql = getNeonSql();
 
   const rows = await sql`
-    SELECT id, shop_domain, content_type, data_base64, created_at
+    SELECT id, shop_domain, content_type, data_base64, object_key, public_url, created_at
     FROM media_assets
     WHERE id = ${assetId}
     LIMIT 1
@@ -5491,7 +5507,9 @@ export const getMediaAsset = async (assetId: string) => {
         id: string;
         shop_domain: string;
         content_type: string;
-        data_base64: string;
+        data_base64: string | null;
+        object_key: string | null;
+        public_url: string | null;
         created_at: string | Date;
       }
     | null;

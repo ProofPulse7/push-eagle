@@ -26,6 +26,12 @@ const EnvSchema = z.object({
   NEXT_PUBLIC_FIREBASE_VAPID_KEY: z.string().default(''),
   FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON: z.string().default(''),
   FIREBASE_ADMIN_SERVICE_ACCOUNT_BASE64: z.string().default(''),
+  R2_ACCOUNT_ID: z.string().default(''),
+  R2_BUCKET_NAME: z.string().default(''),
+  R2_S3_ENDPOINT: z.string().default(''),
+  R2_ACCESS_KEY_ID: z.string().default(''),
+  R2_SECRET_ACCESS_KEY: z.string().default(''),
+  R2_PUBLIC_BASE_URL: z.string().default(''),
   // VAPID keys for cross-browser Web Push (Firefox, Safari 16.4+, and FCM fallback)
   // Generate with: node -e "const wp=require('web-push'); const k=wp.generateVAPIDKeys(); console.log(JSON.stringify(k))"
   VAPID_PUBLIC_KEY: z.string().default(''),
