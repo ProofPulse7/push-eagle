@@ -17,7 +17,6 @@ import {
   Megaphone,
   BarChart,
   LogIn,
-    Bug,
 } from 'lucide-react';
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
@@ -81,9 +80,6 @@ export function Sidebar() {
             </NavLink>
             <NavLink href="/opt-ins" icon={MonitorCheck}>
                 Opt-ins
-            </NavLink>
-            <NavLink href="/diagnostics" icon={Bug}>
-                Diagnostics
             </NavLink>
         </nav>
 

@@ -16,7 +16,8 @@ export const runtime = 'nodejs';
  * requires CORS headers.
  */
 function addCorsHeaders(response: NextResponse, requestOrigin: string | null) {
-  if (requestOrigin && /^https:\/\/[a-z0-9.-]+$/i.test(requestOrigin)) {
+  // Allow all myshopify.com storefronts (dev stores and live stores)
+  if (requestOrigin && /^https:\/\/[a-z0-9-]+\.myshopify\.com$/i.test(requestOrigin)) {
     response.headers.set('Access-Control-Allow-Origin', requestOrigin);
     response.headers.set('Access-Control-Allow-Credentials', 'true');
     response.headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -58,13 +59,12 @@ export async function GET(request: Request) {
     });
 
     const optIn = await getOptInSettings(shopDomain);
-    const shopifyCapabilities = await getMerchantCapabilitySnapshot(shopDomain);
+  const shopifyCapabilities = await getMerchantCapabilitySnapshot(shopDomain);
 
     void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
 
     const existingCookieId = cookieStore.get(cookieName)?.value ?? null;
-    const requestedExternalId = url.searchParams.get('externalId')?.trim() || null;
-    const externalId = customerExternalId ?? existingCookieId ?? requestedExternalId ?? getAnonymousExternalId();
+    const externalId = customerExternalId ?? existingCookieId ?? getAnonymousExternalId();
 
     const response = NextResponse.json({
       ok: true,
@@ -75,8 +75,6 @@ export async function GET(request: Request) {
       conversionFallbackEndpoint: `${directAppOrigin}/api/storefront/conversion`,
       activityEndpoint: `${proxyBasePath}/activity`,
       activityFallbackEndpoint: `${directAppOrigin}/api/storefront/activity`,
-      tokenDiagnosticsEndpoint: `${proxyBasePath}/token-diagnostics`,
-      tokenDiagnosticsFallbackEndpoint: `${directAppOrigin}/api/storefront/token-diagnostics`,
       iosHomeScreenEndpoint: `${proxyBasePath}/ios-home-screen`,
       iosHomeScreenFallbackEndpoint: `${directAppOrigin}/api/storefront/ios-home-screen`,
       optIn,

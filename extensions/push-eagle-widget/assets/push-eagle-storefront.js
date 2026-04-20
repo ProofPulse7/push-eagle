@@ -203,14 +203,6 @@
     return random;
   }
 
-  function persistExternalId(shopDomain, externalId) {
-    if (!shopDomain || !externalId) {
-      return;
-    }
-
-    safeLocalStorageSet(getStorageKey(shopDomain, 'external_id'), String(externalId));
-  }
-
   async function syncExternalIdToCart(externalId) {
     if (!externalId) {
       return;
@@ -293,60 +285,6 @@
       }
     } catch (_error) {
       // best effort only
-    }
-  }
-
-  async function reportTokenDiagnostic(boot, payload) {
-    if (!boot || !boot.shopDomain) {
-      return;
-    }
-
-    var body = {
-      shopDomain: boot.shopDomain,
-      externalId: boot.externalId || null,
-      eventType: payload && payload.eventType ? payload.eventType : 'unknown',
-      status: payload && payload.status ? payload.status : 'info',
-      reason: payload && payload.reason ? payload.reason : null,
-      message: payload && payload.message ? payload.message : null,
-      tokenType: payload && payload.tokenType ? payload.tokenType : null,
-      browser: payload && payload.browser ? payload.browser : detectBrowser(),
-      platform: payload && payload.platform ? payload.platform : detectPlatform(),
-      locale: navigator.language || null,
-      permissionState: ('Notification' in window && Notification.permission) ? Notification.permission : null,
-      endpoint: payload && payload.endpoint ? payload.endpoint : null,
-      details: payload && payload.details ? payload.details : null,
-    };
-
-    var endpoints = [];
-    if (boot.tokenDiagnosticsEndpoint) {
-      endpoints.push(boot.tokenDiagnosticsEndpoint);
-    }
-    if (boot.tokenDiagnosticsFallbackEndpoint && endpoints.indexOf(boot.tokenDiagnosticsFallbackEndpoint) === -1) {
-      endpoints.push(boot.tokenDiagnosticsFallbackEndpoint);
-    }
-
-    if (endpoints.length === 0) {
-      return;
-    }
-
-    for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {
-      var endpoint = endpoints[endpointIndex];
-      try {
-        var response = await fetch(endpoint, {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body)
-        });
-
-        if (response.ok) {
-          return;
-        }
-      } catch (_error) {
-        // Try next endpoint.
-      }
     }
   }
 
@@ -955,11 +893,6 @@
     clearPromptDismissal(shopDomain);
   }
 
-  function clearSubscribed(shopDomain) {
-    safeLocalStorageRemove(getStorageKey(shopDomain, 'subscribed'));
-    safeLocalStorageRemove(getStorageKey(shopDomain, 'last_token'));
-  }
-
   function isMarkedSubscribed(shopDomain) {
     return safeLocalStorageGet(getStorageKey(shopDomain, 'subscribed')) === 'true';
   }
@@ -1213,8 +1146,7 @@
 
   async function bootstrap(config) {
     var bootstrapUrl = config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH;
-    var existingExternalId = getOrCreateAnonExternalId(config.shopDomain);
-    var requestUrl = bootstrapUrl + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&') + '_pe_ts=' + String(Date.now()) + '&externalId=' + encodeURIComponent(existingExternalId);
+    var requestUrl = bootstrapUrl + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&') + '_pe_ts=' + String(Date.now());
     var cacheKey = getStorageKey(config.shopDomain, 'bootstrap_cache');
 
     // Try the Shopify App Proxy path first (same-origin, with credentials)
@@ -1224,13 +1156,11 @@
     if (!data && config.appUrl) {
       var directUrl = config.appUrl.replace(/\/$/, '') + '/api/storefront/bootstrap'
         + '?shop=' + encodeURIComponent(config.shopDomain)
-        + '&_pe_ts=' + String(Date.now())
-        + '&externalId=' + encodeURIComponent(existingExternalId);
+        + '&_pe_ts=' + String(Date.now());
       data = await tryBootstrapFetch(directUrl, config.shopDomain, false);
     }
 
     if (data && data.ok) {
-      persistExternalId(config.shopDomain, data.externalId || existingExternalId);
       safeLocalStorageSet(cacheKey, JSON.stringify(data));
       return data;
     }
@@ -1251,12 +1181,10 @@
     return {
       ok: true,
       shopDomain: config.shopDomain,
-      externalId: existingExternalId,
+      externalId: getOrCreateAnonExternalId(config.shopDomain),
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
       activityEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity'),
       activityFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity' : '',
-      tokenDiagnosticsEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/token-diagnostics'),
-      tokenDiagnosticsFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/token-diagnostics' : '',
       iosHomeScreenEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen'),
       iosHomeScreenFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/ios-home-screen' : '',
       optIn: defaultOptInSettings,
@@ -1390,12 +1318,10 @@
 
     try {
       var messaging = null;
-      var firebaseInitMessage = '';
       try {
         messaging = await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
-      } catch (firebaseInitError) {
+      } catch (_firebaseInitError) {
         messaging = null;
-        firebaseInitMessage = firebaseInitError && firebaseInitError.message ? String(firebaseInitError.message) : 'Firebase init failed.';
       }
 
       var swPath = runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH;
@@ -1424,22 +1350,6 @@
         return { ok: false, reason: 'sw-not-active', message: activationMessage };
       }
 
-      try {
-        if (registration && registration.update) {
-          await registration.update();
-        }
-      } catch (_registrationUpdateError) {
-        // Non-blocking refresh attempt.
-      }
-
-      try {
-        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
-          await navigator.serviceWorker.ready;
-        }
-      } catch (_readyError) {
-        // Non-blocking readiness hint.
-      }
-
       var firebaseVapidKey = (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey;
       var webPushVapidPublicKey = (boot.webPushVapidPublicKey || '').trim() || firebaseVapidKey;
       var token = null;
@@ -1447,7 +1357,6 @@
       var vapidEndpoint = null;
       var vapidP256dh = null;
       var vapidAuth = null;
-      var tokenErrorMessages = [];
 
       if (messaging && messaging.getToken) {
         try {
@@ -1455,12 +1364,9 @@
             vapidKey: firebaseVapidKey,
             serviceWorkerRegistration: registration
           });
-        } catch (fcmError) {
+        } catch (_fcmError) {
           token = null;
-          tokenErrorMessages.push('FCM getToken failed: ' + (fcmError && fcmError.message ? String(fcmError.message) : 'unknown error'));
         }
-      } else if (firebaseInitMessage) {
-        tokenErrorMessages.push(firebaseInitMessage);
       }
 
       if (!token && registration && registration.pushManager) {
@@ -1480,20 +1386,8 @@
               ? existingKeys.auth
               : arrayBufferToBase64Url(existingSubscription.getKey && existingSubscription.getKey('auth'));
           }
-        } catch (existingSubscriptionError) {
+        } catch (_existingSubscriptionError) {
           token = null;
-          tokenErrorMessages.push('Existing push subscription lookup failed: ' + (existingSubscriptionError && existingSubscriptionError.message ? String(existingSubscriptionError.message) : 'unknown error'));
-        }
-      }
-
-      if (!token && registration && registration.pushManager) {
-        try {
-          var staleSubscription = await registration.pushManager.getSubscription();
-          if (staleSubscription) {
-            await staleSubscription.unsubscribe();
-          }
-        } catch (_unsubscribeStaleSubscriptionError) {
-          // Ignore unsubscribe failures and continue with fresh attempts.
         }
       }
 
@@ -1514,9 +1408,8 @@
               ? keys.auth
               : arrayBufferToBase64Url(subscription.getKey && subscription.getKey('auth'));
           }
-        } catch (vapidError) {
+        } catch (_vapidError) {
           token = null;
-          tokenErrorMessages.push('Web Push subscribe failed: ' + (vapidError && vapidError.message ? String(vapidError.message) : 'unknown error'));
         }
       }
 
@@ -1527,32 +1420,8 @@
             vapidKey: firebaseVapidKey,
             serviceWorkerRegistration: registration
           });
-        } catch (retryFcmError) {
+        } catch (_retryFcmError) {
           token = null;
-          tokenErrorMessages.push('FCM retry failed: ' + (retryFcmError && retryFcmError.message ? String(retryFcmError.message) : 'unknown error'));
-        }
-      }
-
-      if (!token && webPushVapidPublicKey) {
-        try {
-          await delay(800);
-          var retrySubscription = await subscribeWithVapid(registration, webPushVapidPublicKey);
-          if (retrySubscription && retrySubscription.endpoint) {
-            token = retrySubscription.endpoint;
-            tokenType = 'vapid';
-            vapidEndpoint = retrySubscription.endpoint;
-            var retryJson = retrySubscription.toJSON ? retrySubscription.toJSON() : null;
-            var retryKeys = retryJson && retryJson.keys ? retryJson.keys : null;
-            vapidP256dh = retryKeys && retryKeys.p256dh
-              ? retryKeys.p256dh
-              : arrayBufferToBase64Url(retrySubscription.getKey && retrySubscription.getKey('p256dh'));
-            vapidAuth = retryKeys && retryKeys.auth
-              ? retryKeys.auth
-              : arrayBufferToBase64Url(retrySubscription.getKey && retrySubscription.getKey('auth'));
-          }
-        } catch (retryVapidError) {
-          token = null;
-          tokenErrorMessages.push('Web Push retry failed: ' + (retryVapidError && retryVapidError.message ? String(retryVapidError.message) : 'unknown error'));
         }
       }
 
@@ -1560,10 +1429,9 @@
         return {
           ok: false,
           reason: 'token-empty',
-          message: (webPushVapidPublicKey
+          message: webPushVapidPublicKey
             ? 'No FCM token and no Web Push subscription returned by browser.'
-            : 'No FCM token and Web Push VAPID public key is missing.')
-            + (tokenErrorMessages.length > 0 ? ' ' + tokenErrorMessages.join(' | ') : '')
+            : 'No FCM token and Web Push VAPID public key is missing.'
         };
       }
 
@@ -1595,75 +1463,41 @@
 
       var tokenSaved = false;
       var tokenSaveReason = '';
-      var lastErrorDetails = [];
 
-      // Try to save token with multiple attempts and exponential backoff.
       for (var endpointIndex = 0; endpointIndex < tokenEndpoints.length; endpointIndex += 1) {
         var endpoint = tokenEndpoints[endpointIndex];
-        var retryCount = 0;
-        var maxRetries = 3;
-        var baseDelay = 300;
 
-        while (retryCount < maxRetries && !tokenSaved) {
-          try {
-            var tokenResponse = await fetch(endpoint, {
-              method: 'POST',
-              credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify(payload)
-            });
+        try {
+          var tokenResponse = await fetch(endpoint, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          });
 
-            if (tokenResponse.ok) {
-              tokenSaved = true;
-              break;
-            }
-
-            var responseError = '';
-            try {
-              var responseJson = await tokenResponse.json();
-              responseError = responseJson && responseJson.error ? String(responseJson.error) : '';
-            } catch (_jsonError) {
-              responseError = '';
-            }
-
-            tokenSaveReason = String(endpoint) + '|http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
-            lastErrorDetails.push(tokenSaveReason + ' (attempt ' + (retryCount + 1) + ')');
-
-            // Retry on transient errors (5xx, network issues, timeouts).
-            if (tokenResponse.status >= 500 || retryCount < maxRetries - 1) {
-              var delayMs = baseDelay * Math.pow(2, retryCount);
-              await delay(delayMs);
-              retryCount += 1;
-              continue;
-            }
-
-            break;
-          } catch (tokenSaveError) {
-            tokenSaveReason = String(endpoint) + '|network-error:' + (tokenSaveError && tokenSaveError.message ? String(tokenSaveError.message) : 'request failed');
-            lastErrorDetails.push(tokenSaveReason + ' (attempt ' + (retryCount + 1) + ')');
-
-            // Retry on network errors.
-            if (retryCount < maxRetries - 1) {
-              var delayMs = baseDelay * Math.pow(2, retryCount);
-              await delay(delayMs);
-              retryCount += 1;
-              continue;
-            }
-
+          if (tokenResponse.ok) {
+            tokenSaved = true;
             break;
           }
-        }
 
-        if (tokenSaved) {
-          break;
+          var responseError = '';
+          try {
+            var responseJson = await tokenResponse.json();
+            responseError = responseJson && responseJson.error ? String(responseJson.error) : '';
+          } catch (_jsonError) {
+            responseError = '';
+          }
+
+          tokenSaveReason = 'http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
+        } catch (_tokenSaveError) {
+          tokenSaveReason = 'network-error';
         }
       }
 
       if (!tokenSaved) {
-        var fullMessage = lastErrorDetails.length > 0 ? lastErrorDetails.join(' | ') : tokenSaveReason;
-        return { ok: false, reason: 'token-save-failed', message: fullMessage };
+        return { ok: false, reason: 'token-save-failed', message: tokenSaveReason };
       }
 
       markSubscribed(boot.shopDomain, token);
@@ -1763,50 +1597,6 @@
     showStatus(root, 'This browser does not support web push notifications for this store.', 'info');
   }
 
-  function explainRegistrationFailure(root, result) {
-    if (!result) {
-      showStatus(root, 'Setup failed. Please try again.', 'error');
-      return;
-    }
-
-    if (result.reason === 'sw-script-missing') {
-      showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
-      return;
-    }
-
-    if (result.reason === 'sw-not-active') {
-      showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
-      return;
-    }
-
-    if (result.reason === 'permission-denied') {
-      showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
-      return;
-    }
-
-    if (result.reason === 'permission-default') {
-      showStatus(root, 'Notification permission was not granted. Please tap Allow when the browser asks.', 'error');
-      return;
-    }
-
-    if (result.reason === 'unsupported' || result.reason === 'https-required' || result.reason === 'ios-home-screen') {
-      explainUnsupported(root, result.reason);
-      return;
-    }
-
-    if (result.reason === 'token-save-failed') {
-      showStatus(root, 'Notification permission is enabled, but token save failed. ' + (result.message || 'Please retry.'), 'error');
-      return;
-    }
-
-    if (result.reason === 'token-empty') {
-      showStatus(root, 'Browser granted permission, but no push token was returned. ' + (result.message || 'Please retry.'), 'error');
-      return;
-    }
-
-    showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
-  }
-
   async function runPrompt(root) {
     if (root.dataset.initialized === '1') {
       return;
@@ -1842,7 +1632,6 @@
     }
 
     var boot = await bootstrap(config);
-    persistExternalId(config.shopDomain, boot && boot.externalId ? boot.externalId : null);
     syncExternalIdToCart(boot && boot.externalId ? boot.externalId : null);
     bindCommerceActivityTracking(boot);
     sendActivityEvent(boot, window.location.pathname.indexOf('/products/') === 0 ? 'product_view' : 'page_view', {
@@ -1850,44 +1639,6 @@
     });
     var clientProfile = await buildClientProfile(root, boot);
     applyOptInSettings(root, config, boot);
-
-    function captureTokenRegistrationResult(result, phase) {
-      if (!result) {
-        return;
-      }
-
-      var profile = refreshClientProfile(clientProfile);
-      var browserName = profile && profile.browserName ? profile.browserName : detectBrowser();
-      var platformName = profile && profile.osName ? profile.osName : detectPlatform();
-
-      if (result.ok) {
-        void reportTokenDiagnostic(boot, {
-          eventType: 'token_register_success',
-          status: 'success',
-          tokenType: result.tokenType || null,
-          browser: browserName,
-          platform: platformName,
-          message: 'Token saved successfully.',
-          details: {
-            phase: phase,
-          },
-        });
-        return;
-      }
-
-      void reportTokenDiagnostic(boot, {
-        eventType: 'token_register_failure',
-        status: 'error',
-        reason: result.reason || 'unknown',
-        message: result.message || null,
-        tokenType: result.tokenType || null,
-        browser: browserName,
-        platform: platformName,
-        details: {
-          phase: phase,
-        },
-      });
-    }
 
     var settings = config.resolvedOptIn || getResolvedOptInSettings(boot);
     var isOnIos = clientProfile.osName === 'ios';
@@ -1922,15 +1673,8 @@
       // Best-effort token reconciliation: if permission is already granted,
       // silently sync token so previously failed browsers can self-heal.
       if (clientProfile.permissionState === 'granted') {
-        var grantedResult = await registerToken(config, boot, { silent: true }, clientProfile);
-        captureTokenRegistrationResult(grantedResult, 'granted-silent-sync');
-        if (grantedResult.ok) {
-          closePrompt(root);
-        } else {
-          clearSubscribed(config.shopDomain);
-          explainRegistrationFailure(root, grantedResult);
-          openPrompt(root);
-        }
+        await registerToken(config, boot, { silent: true }, clientProfile);
+        closePrompt(root);
         return;
       }
 
@@ -1941,16 +1685,8 @@
 
       if (effectiveMode === 'browser') {
         if (isMarkedSubscribed(config.shopDomain)) {
-          var subscribedResult = await registerToken(config, boot, { silent: true }, clientProfile);
-          captureTokenRegistrationResult(subscribedResult, 'browser-existing-subscription');
-          if (subscribedResult.ok) {
-            closePrompt(root);
-            return;
-          }
-
-          clearSubscribed(config.shopDomain);
-          explainRegistrationFailure(root, subscribedResult);
-          openPrompt(root);
+          await registerToken(config, boot, { silent: true }, clientProfile);
+          closePrompt(root);
           return;
         }
 
@@ -2035,9 +1771,16 @@
         incrementSessionDisplayCount(config.shopDomain);
         recordPromptAttempt(config.shopDomain);
         var browserModeResult = await registerToken(config, boot, { silent: false }, clientProfile);
-        captureTokenRegistrationResult(browserModeResult, 'browser-native-prompt');
         if (!browserModeResult.ok) {
-          explainRegistrationFailure(root, browserModeResult);
+          if (browserModeResult.reason === 'sw-script-missing') {
+            showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+          } else if (browserModeResult.reason === 'permission-denied') {
+            showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+          } else if (browserModeResult.reason === 'unsupported' || browserModeResult.reason === 'https-required') {
+            explainUnsupported(root, browserModeResult.reason);
+          } else {
+            showStatus(root, 'Setup failed (' + browserModeResult.reason + '). Please retry.', 'error');
+          }
           openPrompt(root);
           return;
         }
@@ -2064,12 +1807,19 @@
           }
 
           var result = await registerToken(config, boot, { silent: false }, clientProfile);
-          captureTokenRegistrationResult(result, effectiveMode === 'custom' ? 'custom-popup-click' : 'browser-flow-click');
 
           if (effectiveMode === 'custom') {
             if (!result.ok) {
               openPrompt(root);
-              explainRegistrationFailure(root, result);
+              if (result.reason === 'sw-script-missing') {
+                showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+              } else if (result.reason === 'sw-not-active') {
+                showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
+              } else if (result.reason === 'permission-denied') {
+                showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+              } else {
+                showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
+              }
               primaryButton.disabled = false;
               primaryButton.removeAttribute('aria-busy');
             }
@@ -2079,8 +1829,16 @@
           if (result.ok) {
             showStatus(root, 'Notifications enabled.', 'success');
             closePrompt(root);
+          } else if (result.reason === 'sw-script-missing') {
+            showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+          } else if (result.reason === 'sw-not-active') {
+            showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
+          } else if (result.reason === 'unsupported' || result.reason === 'https-required') {
+            explainUnsupported(root, result.reason);
+          } else if (result.reason === 'permission-denied') {
+            showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
           } else {
-            explainRegistrationFailure(root, result);
+            showStatus(root, 'Setup failed (' + result.reason + '). Please retry.', 'error');
           }
 
           primaryButton.disabled = false;

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { getRequestGeo } from '@/lib/server/request-geo';
-import { recordStorefrontTokenDiagnostic, upsertSubscriberToken } from '@/lib/server/data/store';
+import { upsertSubscriberToken } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -60,7 +60,6 @@ const buildCorsHeaders = (origin: string | null) => ({
   'Access-Control-Allow-Origin': origin || appOrigin || '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Domain',
-  'Access-Control-Allow-Credentials': 'true',
   Vary: 'Origin',
 });
 
@@ -167,22 +166,6 @@ export async function POST(request: Request) {
       deviceContext: body.deviceContext ?? null,
     });
 
-    await recordStorefrontTokenDiagnostic({
-      shopDomain,
-      externalId,
-      eventType: 'token_saved_server',
-      status: 'success',
-      tokenType: body.tokenType ?? 'fcm',
-      browser,
-      platform,
-      locale,
-      permissionState: null,
-      details: {
-        subscriberId: saved.subscriberId,
-        tokenId: saved.tokenId,
-      },
-    });
-
     return NextResponse.json(
       {
         ok: true,
@@ -195,24 +178,6 @@ export async function POST(request: Request) {
   } catch (error) {
     const origin = request.headers.get('origin');
     const message = error instanceof Error ? error.message : 'Failed to register storefront token.';
-
-    try {
-      const url = new URL(request.url);
-      const shopFromQuery = url.searchParams.get('shop');
-      if (shopFromQuery) {
-        const shopDomain = parseShopDomain(shopFromQuery);
-        await recordStorefrontTokenDiagnostic({
-          shopDomain,
-          eventType: 'token_saved_server',
-          status: 'error',
-          reason: 'server-error',
-          message,
-        });
-      }
-    } catch {
-      // Swallow diagnostics logging failures.
-    }
-
     return NextResponse.json({ ok: false, error: message }, { status: 400, headers: buildCorsHeaders(getCorsOrigin(origin)) });
   }
 }
