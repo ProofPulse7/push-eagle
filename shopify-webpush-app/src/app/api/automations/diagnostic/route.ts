@@ -1,273 +1,296 @@
 import { NextRequest, NextResponse } from 'next/server';
+
 import { getNeonSql } from '@/lib/integrations/database/neon';
+import { getWelcomeAutomationDiagnostics } from '@/lib/server/data/store';
+
+type DiagnosticIssue = {
+  severity: 'error' | 'warning' | 'info';
+  component: string;
+  title: string;
+  description: string;
+  details?: Record<string, unknown>;
+};
 
 type DiagnosticResult = {
   ok: boolean;
   checkedAt: string;
   shopDomain: string;
-  issues: Array<{
-    severity: 'error' | 'warning' | 'info';
-    component: string;
-    title: string;
-    description: string;
-    details?: Record<string, any>;
+  issues: DiagnosticIssue[];
+  welcomeDiagnostics?: Awaited<ReturnType<typeof getWelcomeAutomationDiagnostics>>;
+  duplicateReminderGroups?: Array<{
+    externalId: string;
+    stepKey: string;
+    deliveryCount: number;
+    tokenCount: number;
+    subscriberCount: number;
+    spreadSeconds: number;
+    firstDeliveredAt: string | null;
+    lastDeliveredAt: string | null;
   }>;
-  automationStepConfig?: Record<string, any>;
-  recentAutomationJobs?: Array<{
-    id: string;
-    rule_key: string;
-    due_at: string;
-    status: string;
-    payload: Record<string, any>;
+  multiTokenExternalIds?: Array<{
+    externalId: string;
+    activeTokenCount: number;
+    subscriberCount: number;
+    latestSeenAt: string | null;
   }>;
-  recentSentNotifications?: Array<{
-    id: string;
-    sent_at: string;
-    rule_key: string;
-    payload: Record<string, any>;
+  clickTracking?: {
+    deliveries7d: number;
+    deliveryRowsClicked7d: number;
+    clicks7d: number;
+    lastDeliveryClickAt: string | null;
+    lastAutomationClickAt: string | null;
+  };
+  recentWelcomeDeliveries?: Array<{
+    id: number;
+    externalId: string | null;
+    subscriberId: number | null;
+    tokenId: number | null;
+    stepKey: string;
+    targetUrl: string | null;
+    deliveredAt: string | null;
+    clickedAt: string | null;
+  }>;
+  recentAutomationClicks?: Array<{
+    id: number;
+    externalId: string | null;
+    targetUrl: string;
+    clickedAt: string | null;
   }>;
 };
 
 export async function GET(request: NextRequest) {
   try {
-    const shopDomain = request.nextUrl.searchParams.get('shop')?.toLowerCase();
+    const shopDomain = request.nextUrl.searchParams.get('shop')?.trim().toLowerCase();
     if (!shopDomain) {
-      return NextResponse.json({ error: 'Missing shop parameter' }, { status: 400 });
+      return NextResponse.json({ ok: false, error: 'Missing shop parameter.' }, { status: 400 });
     }
 
     const sql = getNeonSql();
-    const issues: DiagnosticResult['issues'] = [];
+    const checkedAt = new Date().toISOString();
 
-    // 1. Check automation step config
-    let automationStepConfig: Record<string, any> = {};
-    try {
-      const rules = await sql`
-        SELECT config
-        FROM automation_rules
+    const [welcomeDiagnostics, duplicateRows, multiTokenRows, deliverySummaryRows, clickSummaryRows, recentDeliveryRows, recentClickRows] = await Promise.all([
+      getWelcomeAutomationDiagnostics(shopDomain),
+      sql`
+        WITH grouped AS (
+          SELECT
+            d.external_id,
+            COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key,
+            COUNT(*)::INT AS delivery_count,
+            COUNT(DISTINCT d.token_id)::INT AS token_count,
+            COUNT(DISTINCT d.subscriber_id)::INT AS subscriber_count,
+            EXTRACT(EPOCH FROM (MAX(d.delivered_at) - MIN(d.delivered_at)))::INT AS spread_seconds,
+            MIN(d.delivered_at) AS first_delivered_at,
+            MAX(d.delivered_at) AS last_delivered_at
+          FROM automation_deliveries d
+          JOIN automation_jobs j ON j.id = d.automation_job_id
+          WHERE d.shop_domain = ${shopDomain}
+            AND d.rule_key = 'welcome_subscriber'
+            AND d.delivered_at >= NOW() - INTERVAL '7 days'
+            AND COALESCE(j.payload -> 'metadata' ->> 'stepKey', '') IN ('reminder-1', 'reminder-2', 'reminder-3')
+            AND COALESCE(d.external_id, '') <> ''
+          GROUP BY d.external_id, step_key
+        )
+        SELECT *
+        FROM grouped
+        WHERE delivery_count > 1
+        ORDER BY last_delivered_at DESC
+        LIMIT 25
+      `,
+      sql`
+        SELECT
+          s.external_id,
+          COUNT(*)::INT AS active_token_count,
+          COUNT(DISTINCT s.id)::INT AS subscriber_count,
+          MAX(t.last_seen_at) AS latest_seen_at
+        FROM subscriber_tokens t
+        JOIN subscribers s ON s.id = t.subscriber_id
+        WHERE t.shop_domain = ${shopDomain}
+          AND t.status = 'active'
+          AND COALESCE(s.external_id, '') <> ''
+        GROUP BY s.external_id
+        HAVING COUNT(*) > 1
+        ORDER BY active_token_count DESC, latest_seen_at DESC NULLS LAST
+        LIMIT 25
+      `,
+      sql`
+        SELECT
+          COUNT(*) FILTER (WHERE delivered_at >= NOW() - INTERVAL '7 days')::INT AS deliveries_7d,
+          COUNT(*) FILTER (WHERE clicked_at IS NOT NULL AND delivered_at >= NOW() - INTERVAL '7 days')::INT AS delivery_rows_clicked_7d,
+          MAX(clicked_at) AS last_delivery_click_at
+        FROM automation_deliveries
         WHERE shop_domain = ${shopDomain}
           AND rule_key = 'welcome_subscriber'
-        LIMIT 1
-      `;
-
-      if (rules.length > 0) {
-        automationStepConfig = rules[0].config || {};
-        const steps = automationStepConfig.steps || {};
-
-        // Check reminder-2 and reminder-3
-        ['reminder-2', 'reminder-3'].forEach((stepId: string) => {
-          const step = steps[stepId] || {};
-          if (step.targetUrl && step.targetUrl.includes('/api/track')) {
-            issues.push({
-              severity: 'error',
-              component: 'AutomationStepConfig',
-              title: `${stepId} has tracking URL stored`,
-              description: `The ${stepId} step has a tracking redirect URL stored instead of the merchant's direct URL.`,
-              details: {
-                stepId,
-                storedUrl: step.targetUrl,
-                shouldBe: 'merchant URL (e.g., https://store.com or /)',
-              },
-            });
-          }
-          if (step.actionButtons && Array.isArray(step.actionButtons)) {
-            step.actionButtons.forEach((btn: any, idx: number) => {
-              if (btn.link && btn.link.includes('/api/track')) {
-                issues.push({
-                  severity: 'error',
-                  component: 'AutomationStepConfig',
-                  title: `${stepId} button ${idx + 1} has tracking URL stored`,
-                  description: `Action button has a tracking redirect URL instead of merchant's direct URL.`,
-                  details: {
-                    stepId,
-                    buttonIndex: idx + 1,
-                    storedUrl: btn.link,
-                  },
-                });
-              }
-            });
-          }
-        });
-      } else {
-        issues.push({
-          severity: 'warning',
-          component: 'AutomationStepConfig',
-          title: 'No welcome_subscriber automation found',
-          description: 'Could not find automation rule for welcome_subscriber.',
-          details: { shopDomain },
-        });
-      }
-    } catch (err) {
-      issues.push({
-        severity: 'error',
-        component: 'AutomationStepConfig',
-        title: 'Error reading automation config',
-        description: String(err),
-      });
-    }
-
-    // 2. Check recent automation jobs
-    let recentAutomationJobs: DiagnosticResult['recentAutomationJobs'] = [];
-    try {
-      const jobs = await sql`
+      `,
+      sql`
         SELECT
-          id,
-          rule_key,
-          due_at,
-          status,
-          payload,
-          created_at
-        FROM automation_jobs
+          COUNT(*) FILTER (WHERE clicked_at >= NOW() - INTERVAL '7 days')::INT AS clicks_7d,
+          MAX(clicked_at) AS last_automation_click_at
+        FROM automation_clicks
         WHERE shop_domain = ${shopDomain}
           AND rule_key = 'welcome_subscriber'
-        ORDER BY created_at DESC
-        LIMIT 10
-      `;
+      `,
+      sql`
+        SELECT
+          d.id,
+          d.external_id,
+          d.subscriber_id,
+          d.token_id,
+          d.target_url,
+          d.delivered_at,
+          d.clicked_at,
+          COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key
+        FROM automation_deliveries d
+        JOIN automation_jobs j ON j.id = d.automation_job_id
+        WHERE d.shop_domain = ${shopDomain}
+          AND d.rule_key = 'welcome_subscriber'
+        ORDER BY d.delivered_at DESC
+        LIMIT 25
+      `,
+      sql`
+        SELECT id, external_id, target_url, clicked_at
+        FROM automation_clicks
+        WHERE shop_domain = ${shopDomain}
+          AND rule_key = 'welcome_subscriber'
+        ORDER BY clicked_at DESC
+        LIMIT 25
+      `,
+    ]);
 
-      recentAutomationJobs = jobs.map((job: any) => ({
-        id: job.id,
-        rule_key: job.rule_key,
-        due_at: job.due_at?.toISOString() || null,
-        status: job.status,
-        payload: job.payload,
-      }));
+    const duplicateReminderGroups = (duplicateRows as Array<Record<string, unknown>>).map((row) => ({
+      externalId: String(row.external_id ?? ''),
+      stepKey: String(row.step_key ?? ''),
+      deliveryCount: Number(row.delivery_count ?? 0),
+      tokenCount: Number(row.token_count ?? 0),
+      subscriberCount: Number(row.subscriber_count ?? 0),
+      spreadSeconds: Number(row.spread_seconds ?? 0),
+      firstDeliveredAt: row.first_delivered_at ? new Date(String(row.first_delivered_at)).toISOString() : null,
+      lastDeliveredAt: row.last_delivered_at ? new Date(String(row.last_delivered_at)).toISOString() : null,
+    }));
 
-      // Check if any have tracking URLs
-      jobs.forEach((job: any) => {
-        const payload = job.payload || {};
-        if (payload.targetUrl && payload.targetUrl.includes('/api/track')) {
-          issues.push({
-            severity: 'error',
-            component: 'AutomationJobs',
-            title: `Queued job ${job.id.substring(0, 8)} has tracking URL payload`,
-            description: `A queued automation job has a tracking redirect URL in its payload.`,
-            details: {
-              jobId: job.id,
-              status: job.status,
-              createdAt: job.created_at?.toISOString(),
-              payloadUrl: payload.targetUrl,
-            },
-          });
-        }
+    const multiTokenExternalIds = (multiTokenRows as Array<Record<string, unknown>>).map((row) => ({
+      externalId: String(row.external_id ?? ''),
+      activeTokenCount: Number(row.active_token_count ?? 0),
+      subscriberCount: Number(row.subscriber_count ?? 0),
+      latestSeenAt: row.latest_seen_at ? new Date(String(row.latest_seen_at)).toISOString() : null,
+    }));
+
+    const recentWelcomeDeliveries = (recentDeliveryRows as Array<Record<string, unknown>>).map((row) => ({
+      id: Number(row.id ?? 0),
+      externalId: row.external_id ? String(row.external_id) : null,
+      subscriberId: row.subscriber_id == null ? null : Number(row.subscriber_id),
+      tokenId: row.token_id == null ? null : Number(row.token_id),
+      stepKey: String(row.step_key ?? ''),
+      targetUrl: row.target_url ? String(row.target_url) : null,
+      deliveredAt: row.delivered_at ? new Date(String(row.delivered_at)).toISOString() : null,
+      clickedAt: row.clicked_at ? new Date(String(row.clicked_at)).toISOString() : null,
+    }));
+
+    const recentAutomationClicks = (recentClickRows as Array<Record<string, unknown>>).map((row) => ({
+      id: Number(row.id ?? 0),
+      externalId: row.external_id ? String(row.external_id) : null,
+      targetUrl: String(row.target_url ?? ''),
+      clickedAt: row.clicked_at ? new Date(String(row.clicked_at)).toISOString() : null,
+    }));
+
+    const deliverySummary = deliverySummaryRows[0] as Record<string, unknown> | undefined;
+    const clickSummary = clickSummaryRows[0] as Record<string, unknown> | undefined;
+
+    const clickTracking = {
+      deliveries7d: Number(deliverySummary?.deliveries_7d ?? 0),
+      deliveryRowsClicked7d: Number(deliverySummary?.delivery_rows_clicked_7d ?? 0),
+      clicks7d: Number(clickSummary?.clicks_7d ?? 0),
+      lastDeliveryClickAt: deliverySummary?.last_delivery_click_at ? new Date(String(deliverySummary.last_delivery_click_at)).toISOString() : null,
+      lastAutomationClickAt: clickSummary?.last_automation_click_at ? new Date(String(clickSummary.last_automation_click_at)).toISOString() : null,
+    };
+
+    const issues: DiagnosticIssue[] = [];
+
+    for (const issue of welcomeDiagnostics.inferredIssues) {
+      issues.push({
+        severity: 'warning',
+        component: 'WelcomeSequence',
+        title: 'Welcome automation warning',
+        description: issue,
       });
-    } catch (err) {
+    }
+
+    const simultaneousDuplicateGroups = duplicateReminderGroups.filter((group) => group.spreadSeconds <= 300 && group.deliveryCount > 1);
+    if (simultaneousDuplicateGroups.length > 0) {
       issues.push({
         severity: 'error',
-        component: 'AutomationJobs',
-        title: 'Error reading automation jobs',
-        description: String(err),
+        component: 'ReminderDeduplication',
+        title: 'Same reminder delivered multiple times close together',
+        description: 'At least one welcome reminder was delivered more than once for the same external user within five minutes.',
+        details: { groups: simultaneousDuplicateGroups.slice(0, 10) },
+      });
+    } else if (duplicateReminderGroups.length > 0) {
+      issues.push({
+        severity: 'warning',
+        component: 'ReminderDeduplication',
+        title: 'Repeated reminder deliveries detected',
+        description: 'The same welcome reminder appears multiple times for the same external user in recent history.',
+        details: { groups: duplicateReminderGroups.slice(0, 10) },
       });
     }
 
-    // 3. Check recent sent notifications from activity log or events
-    let recentSentNotifications: DiagnosticResult['recentSentNotifications'] = [];
-    try {
-      const events = await sql`
-        SELECT
-          id,
-          timestamp,
-          event_type,
-          data
-        FROM event_log
-        WHERE shop_domain = ${shopDomain}
-          AND event_type IN ('automation_sent', 'notification_sent')
-        ORDER BY timestamp DESC
-        LIMIT 20
-      `;
-
-      recentSentNotifications = events.slice(0, 5).map((evt: any) => ({
-        id: evt.id,
-        sent_at: evt.timestamp?.toISOString() || null,
-        rule_key: evt.data?.rule_key || 'unknown',
-        payload: evt.data || {},
-      }));
-
-      // Check for tracking URLs in sent notifications
-      events.forEach((evt: any) => {
-        const data = evt.data || {};
-        if (data.url && data.url.includes('/api/track')) {
-          issues.push({
-            severity: 'error',
-            component: 'SentNotifications',
-            title: `Recently sent notification had tracking URL`,
-            description: `A notification was sent with a tracking redirect URL.`,
-            details: {
-              timestamp: evt.timestamp?.toISOString(),
-              url: data.url,
-              ruleKey: data.rule_key,
-            },
-          });
-        }
+    if (multiTokenExternalIds.length > 0) {
+      issues.push({
+        severity: 'warning',
+        component: 'TokenInventory',
+        title: 'External users with multiple active tokens detected',
+        description: 'Multiple active tokens can explain repeated sends if dedupe is not applied at the external user level.',
+        details: { groups: multiTokenExternalIds.slice(0, 10) },
       });
-    } catch (err) {
-      // event_log might not exist, continue
     }
 
-    // 4. Check for service worker issues
-    try {
-      const swChecks = await sql`
-        SELECT
-          COUNT(*) as total_tokens,
-          COUNT(CASE WHEN last_service_worker_ping > NOW() - INTERVAL '24 hours' THEN 1 END) as recent_pings
-        FROM subscriber_tokens
-        WHERE shop_domain = ${shopDomain}
-      `;
-
-      if (swChecks[0]) {
-        const { total_tokens, recent_pings } = swChecks[0];
-        if (total_tokens === 0) {
-          issues.push({
-            severity: 'warning',
-            component: 'ServiceWorker',
-            title: 'No subscriber tokens registered',
-            description: 'No tokens found for this store. Notifications may not be working.',
-          });
-        } else if (recent_pings < total_tokens * 0.5) {
-          issues.push({
-            severity: 'warning',
-            component: 'ServiceWorker',
-            title: `Only ${recent_pings}/${total_tokens} service workers active in last 24h`,
-            description: 'Many service workers have not pinged recently.',
-          });
-        }
-      }
-    } catch (err) {
-      // Continue
+    if (clickTracking.deliveries7d > 0 && clickTracking.clicks7d === 0) {
+      issues.push({
+        severity: 'error',
+        component: 'ClickTracking',
+        title: 'Welcome deliveries exist but automation clicks are not being saved',
+        description: 'Notifications were delivered in the last 7 days, but no welcome automation click rows were recorded.',
+        details: {
+          deliveries7d: clickTracking.deliveries7d,
+          recentTargets: recentWelcomeDeliveries.slice(0, 5).map((row) => row.targetUrl),
+        },
+      });
+    } else if (clickTracking.clicks7d > 0) {
+      issues.push({
+        severity: 'info',
+        component: 'ClickTracking',
+        title: 'Welcome automation clicks exist in the database',
+        description: 'Automation click rows were found for welcome notifications.',
+        details: {
+          clicks7d: clickTracking.clicks7d,
+          lastAutomationClickAt: clickTracking.lastAutomationClickAt,
+        },
+      });
     }
 
-    // 5. Check buildAutomationTrackedUrl logic
-    issues.push({
-      severity: 'info',
-      component: 'URLBuilding',
-      title: 'URL Building Logic Check',
-      description: 'The buildAutomationTrackedUrl function should return merchant URL + ?utm_..., not /api/track/automation-click.',
-      details: {
-        expected: 'https://store.com/?utm_source=push_eagle&...',
-        bugIndication: 'If notifications open https://push-eagle.vercel.app/api/track/automation-click, the merchant URL is being replaced with tracker URL',
-      },
-    });
-
-    // 6. Check unwrapTrackingRedirectUrl
-    issues.push({
-      severity: 'info',
-      component: 'URLUnwrapping',
-      title: 'Tracking URL Unwrapper Check',
-      description: 'When loading saved configs, old /api/track URLs should be unwrapped back to the merchant URL.',
-      details: {
-        function: 'unwrapTrackingRedirectUrl',
-        shouldConvert: 'https://push-eagle.vercel.app/api/track/automation-click?u=https%3A%2F%2Fstore.com → https://store.com',
-      },
-    });
+    const recentRelativeTargets = recentWelcomeDeliveries.filter((row) => row.targetUrl?.startsWith('/'));
+    if (recentRelativeTargets.length > 0) {
+      issues.push({
+        severity: 'info',
+        component: 'ClickTracking',
+        title: 'Recent welcome deliveries include relative storefront URLs',
+        description: 'Relative URLs are valid storefront targets, but diagnostics lists them explicitly because click tracking failures often show up on these paths first.',
+        details: { deliveries: recentRelativeTargets.slice(0, 10) },
+      });
+    }
 
     return NextResponse.json({
-      ok: issues.filter(i => i.severity === 'error').length === 0,
-      checkedAt: new Date().toISOString(),
+      ok: issues.every((issue) => issue.severity !== 'error'),
+      checkedAt,
       shopDomain,
       issues,
-      automationStepConfig,
-      recentAutomationJobs,
-      recentSentNotifications,
-    } as DiagnosticResult);
-  } catch (err) {
+      welcomeDiagnostics,
+      duplicateReminderGroups,
+      multiTokenExternalIds,
+      clickTracking,
+      recentWelcomeDeliveries,
+      recentAutomationClicks,
+    } satisfies DiagnosticResult);
+  } catch (error) {
     return NextResponse.json(
       {
         ok: false,
@@ -278,11 +301,11 @@ export async function GET(request: NextRequest) {
             severity: 'error',
             component: 'Diagnostic',
             title: 'Diagnostic error',
-            description: String(err),
+            description: error instanceof Error ? error.message : 'Failed to run diagnostic.',
           },
         ],
-      },
-      { status: 500 }
+      } satisfies DiagnosticResult,
+      { status: 500 },
     );
   }
 }
