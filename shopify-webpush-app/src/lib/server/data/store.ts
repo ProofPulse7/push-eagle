@@ -995,7 +995,7 @@ const buildCampaignClickTrackingUrl = (
     return '';
   }
 
-  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
+  const trackingBase = env.NEXT_PUBLIC_APP_URL || env.SHOPIFY_ROOT_APP_URL || env.SHOPIFY_APP_URL;
 
   try {
     const trackerBase = new URL('/api/track/click', trackingBase);
@@ -1065,7 +1065,7 @@ const buildAutomationClickTrackingUrl = (
     return '';
   }
 
-  const trackingBase = env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL;
+  const trackingBase = env.NEXT_PUBLIC_APP_URL || env.SHOPIFY_ROOT_APP_URL || env.SHOPIFY_APP_URL;
 
   try {
     const trackerBase = new URL('/api/track/automation-click', trackingBase);
@@ -2986,6 +2986,30 @@ export const processAutomationJob = async (jobId: string) => {
             WHERE id = ${jobId}
           `;
           return { processed: false, error: 'Welcome reminder already delivered for this step.' };
+        }
+      }
+
+      if (claim.subscriber_id) {
+        const canonicalSubscriberWelcomeRows = await sql`
+          SELECT id
+          FROM automation_jobs
+          WHERE shop_domain = ${claim.shop_domain}
+            AND rule_key = 'welcome_subscriber'
+            AND subscriber_id = ${claim.subscriber_id}
+            AND payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+            AND status IN ('pending', 'processing', 'sent')
+          ORDER BY created_at ASC
+          LIMIT 1
+        `;
+
+        const canonicalSubscriberWelcomeJobId = canonicalSubscriberWelcomeRows[0]?.id == null ? '' : String(canonicalSubscriberWelcomeRows[0].id);
+        if (canonicalSubscriberWelcomeJobId && canonicalSubscriberWelcomeJobId !== claim.id) {
+          await sql`
+            UPDATE automation_jobs
+            SET status = 'skipped', error_message = 'Duplicate welcome reminder job suppressed for subscriber.', updated_at = NOW()
+            WHERE id = ${jobId}
+          `;
+          return { processed: false, error: 'Duplicate welcome reminder job suppressed for subscriber.' };
         }
       }
 
