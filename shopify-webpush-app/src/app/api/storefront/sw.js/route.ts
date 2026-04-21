@@ -99,8 +99,8 @@ self.addEventListener('notificationclick', function(event) {
     trackUrl = data.trackButton2Url || data.trackPrimaryUrl || '';
   }
 
-  const openWindowPromise = clients.openWindow(target);
-  event.waitUntil(Promise.allSettled([openWindowPromise, sendTrackingBeacon(trackUrl)]));
+  clients.openWindow(target);
+  event.waitUntil(sendTrackingBeacon(trackUrl));
 });
 
 // Fallback for VAPID/browser-native push payloads (Firefox/Safari).

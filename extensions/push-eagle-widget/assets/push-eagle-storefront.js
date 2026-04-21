@@ -1558,6 +1558,7 @@
       }
 
       markSubscribed(boot.shopDomain, token);
+      scheduleWelcomeWakeupPings(runtimeConfig, boot);
       return { ok: true, token: token, tokenType: tokenType };
     } catch (error) {
       var message = error && error.message ? String(error.message) : '';
@@ -1567,6 +1568,42 @@
 
       return { ok: false, reason: 'registration-failed', message: message };
     }
+  }
+
+  function scheduleWelcomeWakeupPings(runtimeConfig, boot) {
+    if (!boot || !boot.shopDomain || !boot.externalId) {
+      return;
+    }
+
+    var storageKey = getStorageKey(boot.shopDomain, 'welcome_wakeup_until');
+    var wakeupUntil = Date.now() + (8 * 60 * 1000);
+    safeLocalStorageSet(storageKey, String(wakeupUntil));
+
+    var bootstrapPath = runtimeConfig.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH;
+
+    var runWakeup = function () {
+      var deadline = Number(safeLocalStorageGet(storageKey) || '0');
+      if (!deadline || Date.now() > deadline) {
+        safeLocalStorageRemove(storageKey);
+        return;
+      }
+
+      var wakeUrl = bootstrapPath
+        + (bootstrapPath.indexOf('?') === -1 ? '?' : '&')
+        + 'shop=' + encodeURIComponent(boot.shopDomain)
+        + '&externalId=' + encodeURIComponent(boot.externalId)
+        + '&_peWake=' + String(Date.now());
+
+      fetch(wakeUrl, {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store'
+      }).catch(function () {});
+
+      window.setTimeout(runWakeup, 60 * 1000);
+    };
+
+    window.setTimeout(runWakeup, 60 * 1000);
   }
 
   function isIosSafari() {

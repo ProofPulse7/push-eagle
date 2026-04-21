@@ -104,6 +104,6 @@ self.addEventListener('notificationclick', function(event) {
     trackUrl = data.trackPrimaryUrl || '';
   }
 
-  const openWindowPromise = clients.openWindow(targetUrl);
-  event.waitUntil(Promise.allSettled([openWindowPromise, sendTrackingBeacon(trackUrl)]));
+  clients.openWindow(targetUrl);
+  event.waitUntil(sendTrackingBeacon(trackUrl));
 });
