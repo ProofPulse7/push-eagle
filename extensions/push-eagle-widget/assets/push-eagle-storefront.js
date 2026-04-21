@@ -1184,6 +1184,7 @@
     var existingExternalId = getOrCreateAnonExternalId(config.shopDomain);
     var cacheKey = getStorageKey(config.shopDomain, 'bootstrap_cache');
     var data = null;
+    var bootstrapSource = 'proxy';
     var resolvedProxyBootstrapPath = bootstrapPaths[0];
 
     for (var pathIndex = 0; pathIndex < bootstrapPaths.length; pathIndex += 1) {
@@ -1207,16 +1208,29 @@
         + '&_pe_ts=' + String(Date.now())
         + '&externalId=' + encodeURIComponent(existingExternalId);
       data = await tryBootstrapFetch(directUrl, config.shopDomain, false);
+      if (data && data.ok) {
+        bootstrapSource = 'direct';
+      }
     }
 
     if (data && data.ok) {
-      var resolvedProxyBasePath = getProxyBasePathFromBootstrapPath(resolvedProxyBootstrapPath);
-      data.tokenEndpoint = resolvedProxyBasePath + '/token';
-      data.activityEndpoint = resolvedProxyBasePath + '/activity';
-      data.iosHomeScreenEndpoint = resolvedProxyBasePath + '/ios-home-screen';
+      if (bootstrapSource === 'proxy') {
+        var resolvedProxyBasePath = getProxyBasePathFromBootstrapPath(resolvedProxyBootstrapPath);
+        data.tokenEndpoint = resolvedProxyBasePath + '/token';
+        data.activityEndpoint = resolvedProxyBasePath + '/activity';
+        data.iosHomeScreenEndpoint = resolvedProxyBasePath + '/ios-home-screen';
+      } else {
+        var directBase = config.appUrl ? config.appUrl.replace(/\/$/, '') : '';
+        if (directBase) {
+          data.tokenEndpoint = data.tokenEndpoint || (directBase + '/api/storefront/token?shop=' + encodeURIComponent(config.shopDomain));
+          data.activityEndpoint = data.activityEndpoint || (directBase + '/api/storefront/activity');
+          data.iosHomeScreenEndpoint = data.iosHomeScreenEndpoint || (directBase + '/api/storefront/ios-home-screen');
+        }
+      }
       if (!data.externalId) {
         data.externalId = existingExternalId;
       }
+      data.bootstrapSource = bootstrapSource;
       safeLocalStorageSet(getStorageKey(config.shopDomain, 'external_id'), String(data.externalId));
       safeLocalStorageSet(cacheKey, JSON.stringify(data));
       return data;
@@ -1239,6 +1253,7 @@
       ok: true,
       shopDomain: config.shopDomain,
       externalId: existingExternalId,
+      bootstrapSource: 'fallback',
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
       activityEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity'),
       activityFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity' : '',
@@ -1381,7 +1396,7 @@
         messaging = null;
       }
 
-      var swPath = runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH;
+      var swPath = (boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH;
       var swScope = deriveServiceWorkerScope(swPath);
       var registration;
 
@@ -1392,11 +1407,31 @@
           // Fallback to default scope derived from script directory for stricter browser/proxy combinations.
           registration = await navigator.serviceWorker.register(swPath);
         } catch (swRegisterError) {
-          var swMessage = swRegisterError && swRegisterError.message ? String(swRegisterError.message) : '';
-          if (/404|bad http response|script/i.test(swMessage)) {
-            return { ok: false, reason: 'sw-script-missing', message: swMessage };
+          var reusedExistingRegistration = false;
+          try {
+            var existingRegistrations = await navigator.serviceWorker.getRegistrations();
+            for (var r = 0; r < existingRegistrations.length; r += 1) {
+              var existing = existingRegistrations[r];
+              if (existing && typeof existing.scope === 'string' && existing.scope.indexOf('/apps/push-eagle/') !== -1) {
+                registration = existing;
+                reusedExistingRegistration = true;
+                break;
+              }
+            }
+            if (!reusedExistingRegistration) {
+              throw swRegisterError;
+            }
+          } catch (_existingRegistrationLookupError) {
+            throw swRegisterError;
           }
-          throw swRegisterError;
+
+          if (!reusedExistingRegistration) {
+            var swMessage = swRegisterError && swRegisterError.message ? String(swRegisterError.message) : '';
+            if (/404|bad http response|script/i.test(swMessage)) {
+              return { ok: false, reason: 'sw-script-missing', message: swMessage };
+            }
+            throw swRegisterError;
+          }
         }
       }
 
@@ -1579,7 +1614,11 @@
     var wakeupUntil = Date.now() + (8 * 60 * 1000);
     safeLocalStorageSet(storageKey, String(wakeupUntil));
 
-    var bootstrapPath = runtimeConfig.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH;
+    var proxyBootstrapPath = runtimeConfig.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH;
+    var directBootstrapBase = runtimeConfig.appUrl ? runtimeConfig.appUrl.replace(/\/$/, '') : '';
+    var directBootstrapPath = directBootstrapBase
+      ? (directBootstrapBase + '/api/storefront/bootstrap?shop=' + encodeURIComponent(boot.shopDomain))
+      : '';
 
     var runWakeup = function () {
       var deadline = Number(safeLocalStorageGet(storageKey) || '0');
@@ -1588,13 +1627,20 @@
         return;
       }
 
-      var wakeUrl = bootstrapPath
-        + (bootstrapPath.indexOf('?') === -1 ? '?' : '&')
-        + 'shop=' + encodeURIComponent(boot.shopDomain)
-        + '&externalId=' + encodeURIComponent(boot.externalId)
-        + '&_peWake=' + String(Date.now());
+      var wakeSuffix = '&externalId=' + encodeURIComponent(boot.externalId) + '&_peWake=' + String(Date.now());
 
-      fetch(wakeUrl, {
+      if (directBootstrapPath) {
+        fetch(directBootstrapPath + wakeSuffix, {
+          method: 'GET',
+          credentials: 'omit',
+          cache: 'no-store'
+        }).catch(function () {});
+      }
+
+      fetch(proxyBootstrapPath
+        + (proxyBootstrapPath.indexOf('?') === -1 ? '?' : '&')
+        + 'shop=' + encodeURIComponent(boot.shopDomain)
+        + wakeSuffix, {
         method: 'GET',
         credentials: 'include',
         cache: 'no-store'
