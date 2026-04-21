@@ -5,6 +5,26 @@ import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
 
+const resolveTargetUrl = (target: string, shopDomain: string): URL | null => {
+  try {
+    const absolute = new URL(target);
+    if (!/^https?:$/i.test(absolute.protocol)) {
+      return null;
+    }
+    return absolute;
+  } catch {
+    try {
+      const relative = new URL(target, `https://${shopDomain}`);
+      if (!/^https?:$/i.test(relative.protocol)) {
+        return null;
+      }
+      return relative;
+    } catch {
+      return null;
+    }
+  }
+};
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -19,11 +39,8 @@ export async function GET(request: Request) {
     }
 
     const shopDomain = parseShopDomain(shop);
-    let targetUrl: URL;
-
-    try {
-      targetUrl = new URL(target);
-    } catch {
+    const targetUrl = resolveTargetUrl(target, shopDomain);
+    if (!targetUrl) {
       return NextResponse.json({ ok: false, error: 'Invalid target URL.' }, { status: 400 });
     }
 

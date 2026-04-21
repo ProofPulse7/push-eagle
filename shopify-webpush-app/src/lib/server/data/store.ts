@@ -2183,7 +2183,7 @@ const listAutomationTargets = async (input: { shopDomain: string; externalId?: s
           s.id AS subscriber_id,
           s.external_id,
           ROW_NUMBER() OVER (
-            PARTITION BY s.id
+            PARTITION BY s.external_id
             ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
           ) AS rn
         FROM subscriber_tokens t
