@@ -238,21 +238,49 @@
     return random;
   }
 
-  async function syncExternalIdToCart(externalId) {
-    if (!externalId) {
+  function getOrCreateStableClientId(shopDomain) {
+    var key = getStorageKey(shopDomain, 'client_id');
+    var existing = safeLocalStorageGet(key);
+    if (existing) {
+      return existing;
+    }
+
+    var random = 'cid:' + String(Date.now()) + '_' + Math.random().toString(36).slice(2, 14);
+    safeLocalStorageSet(key, random);
+    return random;
+  }
+
+  function getShopifyCartToken() {
+    try {
+      if (window.Shopify && window.Shopify.cart && window.Shopify.cart.token) {
+        return String(window.Shopify.cart.token);
+      }
+      var cookieMatch = document.cookie.match(/(?:^|;)\s*cart=([^;]*)/);
+      if (cookieMatch) {
+        var decoded = decodeURIComponent(cookieMatch[1] || '');
+        return decoded || null;
+      }
+    } catch (_e) {}
+    return null;
+  }
+
+  async function syncExternalIdToCart(externalId, clientId) {
+    if (!externalId && !clientId) {
       return;
     }
 
     try {
       await fetch('/cart/update.js', {
         method: 'POST',
+        keepalive: true,
         credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           attributes: {
-            _push_eagle_external_id: externalId
+            _push_eagle_external_id: externalId || '',
+            _push_eagle_client_id: clientId || ''
           }
         })
       });
@@ -289,8 +317,10 @@
         eventType: eventType,
         pageUrl: url,
         productId: detectedProductId || (productMatch ? productMatch[1] : null),
+        cartToken: (metadata && metadata.cartToken) || null,
         metadata: metadata || {}
       };
+      payload.metadata.clientId = boot.clientId || null;
       var endpoints = [boot.activityEndpoint];
 
       if (boot.activityFallbackEndpoint && endpoints.indexOf(boot.activityFallbackEndpoint) === -1) {
@@ -377,12 +407,26 @@
       var details = getProductMetadataFromElement(form);
       var variantInput = form.querySelector('[name="id"]');
       var quantityInput = form.querySelector('[name="quantity"]');
+      var currentCartToken = getShopifyCartToken();
 
       sendActivityEvent(boot, 'add_to_cart', {
         productId: details.productId,
         variantId: details.variantId || (variantInput ? variantInput.value : null),
         quantity: quantityInput ? Number(quantityInput.value || '1') : 1,
+        cartToken: currentCartToken,
       });
+
+      // Write subscriber identity to cart attributes so the server-side webhook
+      // can find this subscriber. Call immediately (handles existing cart) and
+      // again after a short delay (handles newly created carts, races the webhook).
+      var _bootExId = boot && boot.externalId ? boot.externalId : null;
+      var _bootCid = boot && boot.clientId ? boot.clientId : null;
+      if (_bootExId || _bootCid) {
+        syncExternalIdToCart(_bootExId, _bootCid);
+        setTimeout(function () {
+          syncExternalIdToCart(_bootExId, _bootCid);
+        }, 800);
+      }
     }, true);
 
     document.addEventListener('click', function (event) {
@@ -814,6 +858,7 @@
       shopifyShopId: profile.shopifyShopId,
       shopifyShopName: profile.shopifyShopName,
       shopifyShopDomain: profile.shopifyShopDomain,
+      clientId: profile.clientId || null,
       shopifyLocale: profile.shopifyLocale,
       shopifyCountry: profile.shopifyCountry,
       shopifyAnalyticsAvailable: profile.shopifyAnalyticsAvailable,
@@ -1230,8 +1275,12 @@
       if (!data.externalId) {
         data.externalId = existingExternalId;
       }
+      if (!data.clientId) {
+        data.clientId = getOrCreateStableClientId(config.shopDomain);
+      }
       data.bootstrapSource = bootstrapSource;
       safeLocalStorageSet(getStorageKey(config.shopDomain, 'external_id'), String(data.externalId));
+      safeLocalStorageSet(getStorageKey(config.shopDomain, 'client_id'), String(data.clientId));
       safeLocalStorageSet(cacheKey, JSON.stringify(data));
       return data;
     }
@@ -1253,6 +1302,7 @@
       ok: true,
       shopDomain: config.shopDomain,
       externalId: existingExternalId,
+      clientId: getOrCreateStableClientId(config.shopDomain),
       bootstrapSource: 'fallback',
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
       activityEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity'),
@@ -1530,6 +1580,7 @@
       var payload = {
         shopDomain: boot.shopDomain,
         externalId: boot.externalId,
+        clientId: boot.clientId || null,
         token: token,
         tokenType: tokenType,
         vapidEndpoint: vapidEndpoint,
@@ -1540,7 +1591,9 @@
         locale: clientProfile && clientProfile.language ? clientProfile.language : navigator.language,
         country: clientProfile && clientProfile.country ? clientProfile.country : (clientProfile && clientProfile.shopifyCountry ? clientProfile.shopifyCountry : null),
         city: clientProfile && clientProfile.city ? clientProfile.city : null,
-        deviceContext: serializeClientProfile(clientProfile)
+        deviceContext: Object.assign({}, serializeClientProfile(clientProfile) || {}, {
+          clientId: boot.clientId || null
+        })
       };
 
       var primaryTokenEndpoint = boot.tokenEndpoint || runtimeConfig.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH;
@@ -1772,7 +1825,10 @@
     }
 
     var boot = await bootstrap(config);
-    syncExternalIdToCart(boot && boot.externalId ? boot.externalId : null);
+    syncExternalIdToCart(
+      boot && boot.externalId ? boot.externalId : null,
+      boot && boot.clientId ? boot.clientId : getOrCreateStableClientId(config.shopDomain)
+    );
     bindCommerceActivityTracking(boot);
     sendActivityEvent(boot, window.location.pathname.indexOf('/products/') === 0 ? 'product_view' : 'page_view', {
       referrer: document.referrer || null
