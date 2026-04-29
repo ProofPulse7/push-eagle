@@ -264,6 +264,28 @@
     return null;
   }
 
+  async function fetchCartTokenFromShopifyCartApi() {
+    try {
+      var response = await fetch('/cart.js', {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      var cart = await response.json();
+      var token = cart && cart.token ? String(cart.token).trim() : '';
+      return token || null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   async function syncExternalIdToCart(externalId, clientId) {
     if (!externalId && !clientId) {
       return;
@@ -427,6 +449,24 @@
           syncExternalIdToCart(_bootExId, _bootCid);
         }, 800);
       }
+
+      // On first add-to-cart, token often appears only after Shopify creates the cart.
+      // Fetch it after submit and emit a second add_to_cart signal with cartToken.
+      setTimeout(function () {
+        fetchCartTokenFromShopifyCartApi().then(function (latestCartToken) {
+          if (!latestCartToken) {
+            return;
+          }
+
+          sendActivityEvent(boot, 'add_to_cart', {
+            productId: details.productId,
+            variantId: details.variantId || (variantInput ? variantInput.value : null),
+            quantity: quantityInput ? Number(quantityInput.value || '1') : 1,
+            cartToken: latestCartToken,
+            source: 'post_submit_cart_fetch',
+          });
+        });
+      }, 1200);
     }, true);
 
     document.addEventListener('click', function (event) {
