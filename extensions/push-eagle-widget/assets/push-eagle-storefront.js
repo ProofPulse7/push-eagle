@@ -97,6 +97,14 @@
     }
   }
 
+  function normalizeServiceWorkerPath(swPath) {
+    var raw = String(swPath || '').trim();
+    if (!raw) {
+      return DEFAULT_PROXY_SERVICE_WORKER_PATH;
+    }
+    return raw.replace(/\/sw\.js(\?|$)/i, '/sw$1');
+  }
+
   function isSameOriginEndpoint(endpoint) {
     try {
       return new URL(endpoint, window.location.origin).origin === window.location.origin;
@@ -1486,7 +1494,7 @@
         messaging = null;
       }
 
-      var swPath = (boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH;
+      var swPath = normalizeServiceWorkerPath((boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH);
       var swScope = deriveServiceWorkerScope(swPath);
       var registration;
 
