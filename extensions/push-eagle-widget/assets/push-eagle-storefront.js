@@ -1464,6 +1464,34 @@
       try {
         var cachedBoot = JSON.parse(cached);
         if (cachedBoot && cachedBoot.ok) {
+          if (!cachedBoot.externalId) {
+            cachedBoot.externalId = existingExternalId;
+          }
+          if (!cachedBoot.clientId) {
+            cachedBoot.clientId = getOrCreateStableClientId(config.shopDomain);
+          }
+
+          var cachedDirectBase = config.appUrl ? config.appUrl.replace(/\/$/, '') : '';
+          if (!cachedBoot.tokenEndpoint) {
+            cachedBoot.tokenEndpoint = config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH;
+          }
+          if (!cachedBoot.activityEndpoint) {
+            cachedBoot.activityEndpoint = (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity');
+          }
+          if (!cachedBoot.iosHomeScreenEndpoint) {
+            cachedBoot.iosHomeScreenEndpoint = (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen');
+          }
+          if (!cachedBoot.activityFallbackEndpoint && cachedDirectBase) {
+            cachedBoot.activityFallbackEndpoint = cachedDirectBase + '/api/storefront/activity';
+          }
+          if (!cachedBoot.iosHomeScreenFallbackEndpoint && cachedDirectBase) {
+            cachedBoot.iosHomeScreenFallbackEndpoint = cachedDirectBase + '/api/storefront/ios-home-screen';
+          }
+          cachedBoot.bootstrapSource = cachedBoot.bootstrapSource || 'cache';
+
+          safeLocalStorageSet(getStorageKey(config.shopDomain, 'external_id'), String(cachedBoot.externalId));
+          safeLocalStorageSet(getStorageKey(config.shopDomain, 'client_id'), String(cachedBoot.clientId));
+          safeLocalStorageSet(cacheKey, JSON.stringify(cachedBoot));
           return cachedBoot;
         }
       } catch (_error) {
