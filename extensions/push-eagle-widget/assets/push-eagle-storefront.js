@@ -1782,6 +1782,7 @@
         shopDomain: boot.shopDomain,
         externalId: boot.externalId,
         clientId: boot.clientId || null,
+        cartToken: getShopifyCartToken(),
         token: token,
         tokenType: tokenType,
         vapidEndpoint: vapidEndpoint,
