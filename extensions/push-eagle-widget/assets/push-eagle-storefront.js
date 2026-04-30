@@ -423,6 +423,97 @@
 
     window.__pushEagleCommerceTrackingBound = true;
 
+    var lastAddToCartSignalAt = 0;
+
+    function isCartAddUrl(urlLike) {
+      var raw = String(urlLike || '').toLowerCase();
+      return raw.indexOf('/cart/add') !== -1;
+    }
+
+    function parseCartAddBody(body) {
+      var parsed = { variantId: null, quantity: 1 };
+      if (!body) {
+        return parsed;
+      }
+
+      try {
+        if (typeof body === 'string') {
+          var trimmed = body.trim();
+          if (trimmed.indexOf('{') === 0) {
+            var json = JSON.parse(trimmed);
+            parsed.variantId = json && json.id ? String(json.id) : null;
+            parsed.quantity = json && json.quantity ? Number(json.quantity) : 1;
+            return parsed;
+          }
+
+          var formData = new URLSearchParams(trimmed);
+          parsed.variantId = formData.get('id');
+          parsed.quantity = Number(formData.get('quantity') || '1');
+          return parsed;
+        }
+
+        if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+          parsed.variantId = body.get('id');
+          parsed.quantity = Number(body.get('quantity') || '1');
+          return parsed;
+        }
+
+        if (typeof FormData !== 'undefined' && body instanceof FormData) {
+          parsed.variantId = body.get('id');
+          parsed.quantity = Number(body.get('quantity') || '1');
+          return parsed;
+        }
+      } catch (_parseError) {}
+
+      return parsed;
+    }
+
+    function reportAddToCart(details, source) {
+      var now = Date.now();
+      if (now - lastAddToCartSignalAt < 700) {
+        return;
+      }
+      lastAddToCartSignalAt = now;
+
+      var currentCartToken = getShopifyCartToken();
+      var variantId = details && details.variantId ? details.variantId : null;
+      var quantity = details && details.quantity ? Number(details.quantity) : 1;
+      var productId = details && details.productId ? details.productId : null;
+
+      sendActivityEvent(boot, 'add_to_cart', {
+        productId: productId,
+        variantId: variantId,
+        quantity: Number.isFinite(quantity) ? quantity : 1,
+        cartToken: currentCartToken,
+        source: source || 'unknown',
+      });
+
+      var _bootExId = boot && boot.externalId ? boot.externalId : null;
+      var _bootCid = boot && boot.clientId ? boot.clientId : null;
+      if (_bootExId || _bootCid) {
+        syncExternalIdToCart(_bootExId, _bootCid);
+        setTimeout(function () {
+          syncExternalIdToCart(_bootExId, _bootCid);
+        }, 800);
+      }
+
+      setTimeout(function () {
+        fetchCartTokenFromShopifyCartApi().then(function (latestCartToken) {
+          if (!latestCartToken) {
+            return;
+          }
+
+          sendActivityEvent(boot, 'add_to_cart', {
+            productId: productId,
+            variantId: variantId,
+            quantity: Number.isFinite(quantity) ? quantity : 1,
+            cartToken: latestCartToken,
+            source: (source || 'unknown') + '_post_submit_cart_fetch',
+          });
+        });
+      }, 1200);
+    }
+
     document.addEventListener('submit', function (event) {
       var form = event.target;
       if (!form || !form.getAttribute) {
@@ -437,45 +528,79 @@
       var details = getProductMetadataFromElement(form);
       var variantInput = form.querySelector('[name="id"]');
       var quantityInput = form.querySelector('[name="quantity"]');
-      var currentCartToken = getShopifyCartToken();
-
-      sendActivityEvent(boot, 'add_to_cart', {
+      reportAddToCart({
         productId: details.productId,
         variantId: details.variantId || (variantInput ? variantInput.value : null),
         quantity: quantityInput ? Number(quantityInput.value || '1') : 1,
-        cartToken: currentCartToken,
-      });
-
-      // Write subscriber identity to cart attributes so the server-side webhook
-      // can find this subscriber. Call immediately (handles existing cart) and
-      // again after a short delay (handles newly created carts, races the webhook).
-      var _bootExId = boot && boot.externalId ? boot.externalId : null;
-      var _bootCid = boot && boot.clientId ? boot.clientId : null;
-      if (_bootExId || _bootCid) {
-        syncExternalIdToCart(_bootExId, _bootCid);
-        setTimeout(function () {
-          syncExternalIdToCart(_bootExId, _bootCid);
-        }, 800);
-      }
-
-      // On first add-to-cart, token often appears only after Shopify creates the cart.
-      // Fetch it after submit and emit a second add_to_cart signal with cartToken.
-      setTimeout(function () {
-        fetchCartTokenFromShopifyCartApi().then(function (latestCartToken) {
-          if (!latestCartToken) {
-            return;
-          }
-
-          sendActivityEvent(boot, 'add_to_cart', {
-            productId: details.productId,
-            variantId: details.variantId || (variantInput ? variantInput.value : null),
-            quantity: quantityInput ? Number(quantityInput.value || '1') : 1,
-            cartToken: latestCartToken,
-            source: 'post_submit_cart_fetch',
-          });
-        });
-      }, 1200);
+      }, 'form_submit');
     }, true);
+
+    if (!window.__pushEagleCartAddFetchWrapped && typeof window.fetch === 'function') {
+      window.__pushEagleCartAddFetchWrapped = true;
+      var originalFetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        var requestUrl = '';
+        try {
+          requestUrl = typeof input === 'string'
+            ? input
+            : (input && input.url ? String(input.url) : '');
+        } catch (_requestUrlError) {
+          requestUrl = '';
+        }
+
+        var maybeBody = init && Object.prototype.hasOwnProperty.call(init, 'body')
+          ? init.body
+          : null;
+        var parsedBody = parseCartAddBody(maybeBody);
+
+        return originalFetch(input, init).then(function (response) {
+          if (response && response.ok && isCartAddUrl(requestUrl)) {
+            reportAddToCart({
+              productId: null,
+              variantId: parsedBody.variantId,
+              quantity: parsedBody.quantity,
+            }, 'fetch_cart_add');
+          }
+          return response;
+        });
+      };
+    }
+
+    if (!window.__pushEagleCartAddXhrWrapped && window.XMLHttpRequest) {
+      window.__pushEagleCartAddXhrWrapped = true;
+      var originalOpen = window.XMLHttpRequest.prototype.open;
+      var originalSend = window.XMLHttpRequest.prototype.send;
+
+      window.XMLHttpRequest.prototype.open = function (method, url) {
+        this.__pushEagleUrl = String(url || '');
+        return originalOpen.apply(this, arguments);
+      };
+
+      window.XMLHttpRequest.prototype.send = function (body) {
+        var xhr = this;
+        var parsedBody = parseCartAddBody(body);
+
+        function onLoad() {
+          try {
+            if (xhr && xhr.status >= 200 && xhr.status < 300 && isCartAddUrl(xhr.__pushEagleUrl)) {
+              reportAddToCart({
+                productId: null,
+                variantId: parsedBody.variantId,
+                quantity: parsedBody.quantity,
+              }, 'xhr_cart_add');
+            }
+          } catch (_xhrTrackError) {}
+        }
+
+        try {
+          xhr.addEventListener('load', onLoad, { once: true });
+        } catch (_listenerError) {
+          xhr.addEventListener('load', onLoad);
+        }
+
+        return originalSend.apply(this, arguments);
+      };
+    }
 
     document.addEventListener('click', function (event) {
       var target = event.target;
