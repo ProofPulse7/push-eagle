@@ -26,7 +26,7 @@ api_version = "2026-07"
   [[webhooks.subscriptions]]
   topics = [ "carts/update" ]
   uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/carts-update"
-  include_fields = [ "id", "token", "updated_at", "line_items.product_id", "line_items.variant_id", "line_items.quantity", "line_items.url" ]
+  include_fields = [ "id", "token", "updated_at", "attributes", "line_items.product_id", "line_items.variant_id", "line_items.quantity", "line_items.url" ]
 
   [[webhooks.subscriptions]]
   topics = [ "checkouts/create", "checkouts/update" ]
