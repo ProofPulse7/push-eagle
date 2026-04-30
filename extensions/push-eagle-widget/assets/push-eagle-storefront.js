@@ -272,6 +272,26 @@
     return null;
   }
 
+  function getCookieValue(name) {
+    try {
+      var escaped = String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      var match = document.cookie.match(new RegExp('(?:^|; )' + escaped + '=([^;]*)'));
+      if (!match) {
+        return null;
+      }
+
+      var decoded = decodeURIComponent(match[1] || '').trim();
+      return decoded || null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function getShopifyAnalyticsClientId() {
+    // Shopify analytics uses the _shopify_y cookie as a stable browser-level id.
+    return getCookieValue('_shopify_y');
+  }
+
   async function fetchCartTokenFromShopifyCartApi() {
     try {
       var response = await fetch('/cart.js', {
@@ -351,6 +371,7 @@
         metadata: metadata || {}
       };
       payload.metadata.clientId = boot.clientId || null;
+      payload.metadata.shopifyAnalyticsClientId = getShopifyAnalyticsClientId();
       var endpoints = [boot.activityEndpoint];
 
       if (boot.activityFallbackEndpoint && endpoints.indexOf(boot.activityFallbackEndpoint) === -1) {
@@ -967,6 +988,7 @@
       shopifyShopId: shopifyContext.shopId,
       shopifyShopName: shopifyContext.shopName,
       shopifyShopDomain: shopifyContext.shopDomain,
+      shopifyAnalyticsClientId: getShopifyAnalyticsClientId(),
       shopifyLocale: shopifyContext.locale,
       shopifyCountry: shopifyContext.country,
       shopifyAnalyticsAvailable: shopifyContext.analyticsAvailable,
@@ -1032,6 +1054,7 @@
       shopifyShopName: profile.shopifyShopName,
       shopifyShopDomain: profile.shopifyShopDomain,
       clientId: profile.clientId || null,
+      shopifyAnalyticsClientId: profile.shopifyAnalyticsClientId || null,
       shopifyLocale: profile.shopifyLocale,
       shopifyCountry: profile.shopifyCountry,
       shopifyAnalyticsAvailable: profile.shopifyAnalyticsAvailable,
@@ -1782,7 +1805,6 @@
         shopDomain: boot.shopDomain,
         externalId: boot.externalId,
         clientId: boot.clientId || null,
-        cartToken: getShopifyCartToken(),
         token: token,
         tokenType: tokenType,
         vapidEndpoint: vapidEndpoint,
