@@ -1,6 +1,6 @@
 (function () {
   var DEFAULT_PROXY_BOOTSTRAP_PATH = '/apps/push-eagle/bootstrap';
-  var DEFAULT_PROXY_SERVICE_WORKER_PATH = '/apps/push-eagle/sw';
+  var DEFAULT_PROXY_SERVICE_WORKER_PATH = '/apps/push-eagle/sw.js';
   var DEFAULT_PROXY_TOKEN_PATH = '/apps/push-eagle/token';
   var roots = document.querySelectorAll('[data-push-eagle-root]');
   if (!roots || roots.length === 0) {
@@ -102,7 +102,7 @@
     if (!raw) {
       return DEFAULT_PROXY_SERVICE_WORKER_PATH;
     }
-    return raw.replace(/\/sw\.js(\?|$)/i, '/sw$1');
+    return raw.replace(/\/sw(\?|$)/i, '/sw.js$1');
   }
 
   function isSameOriginEndpoint(endpoint) {
