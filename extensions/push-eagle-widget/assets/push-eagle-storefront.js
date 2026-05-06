@@ -113,6 +113,15 @@
     }
   }
 
+  function isJsonResponse(response) {
+    if (!response || !response.headers || typeof response.headers.get !== 'function') {
+      return false;
+    }
+
+    var contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    return contentType.indexOf('application/json') !== -1;
+  }
+
   function getProxyBasePathFromBootstrapPath(bootstrapPath) {
     var normalized = String(bootstrapPath || '').split('?')[0];
     return normalized.replace(/\/bootstrap$/i, '') || '/apps/push-eagle';
@@ -391,7 +400,9 @@
             body: JSON.stringify(payload)
           });
 
-          if (response.ok) {
+          // Shopify can return storefront HTML (200 text/html) when app proxy is misrouted.
+          // Treat non-JSON as failure so we continue to fallback endpoint.
+          if (response.ok && isJsonResponse(response)) {
             break;
           }
         } catch (_endpointError) {
@@ -1848,7 +1859,8 @@
             body: JSON.stringify(payload)
           });
 
-          if (tokenResponse.ok) {
+          // Same as activity: treat 200 HTML proxy fallback pages as failed saves.
+          if (tokenResponse.ok && isJsonResponse(tokenResponse)) {
             tokenSaved = true;
             break;
           }

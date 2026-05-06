@@ -220,7 +220,9 @@ register(({ analytics, settings, init }) => {
 
   subscribeSafely(analytics, 'page_viewed', (event) => send('page_viewed', event));
   subscribeSafely(analytics, 'product_viewed', (event) => send('product_viewed', event));
-  subscribeSafely(analytics, 'product_added_to_cart', (event) => send('product_added_to_cart', event));
+  // Disabled temporarily: this Shopify event can crash inside strict pixel runtime
+  // with "Cannot read properties of null (reading 'flags')" before our handler runs.
+  // Cart recovery already uses storefront/cart webhook signals and remains functional.
   subscribeSafely(analytics, 'checkout_started', (event) => send('checkout_started', event));
   subscribeSafely(analytics, 'checkout_completed', (event) => send('checkout_completed', event));
 });
