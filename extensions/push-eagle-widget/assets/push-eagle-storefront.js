@@ -314,8 +314,8 @@
     }
   }
 
-  async function syncExternalIdToCart(externalId, clientId) {
-    if (!externalId && !clientId) {
+  async function syncExternalIdToCart(externalId, clientId, shopifyAnalyticsClientId) {
+    if (!externalId && !clientId && !shopifyAnalyticsClientId) {
       return;
     }
 
@@ -330,7 +330,8 @@
         body: JSON.stringify({
           attributes: {
             _push_eagle_external_id: externalId || '',
-            _push_eagle_client_id: clientId || ''
+            _push_eagle_client_id: clientId || '',
+            _push_eagle_shopify_analytics_client_id: shopifyAnalyticsClientId || ''
           }
         })
       });
@@ -511,10 +512,11 @@
 
       var _bootExId = boot && boot.externalId ? boot.externalId : null;
       var _bootCid = boot && boot.clientId ? boot.clientId : null;
-      if (_bootExId || _bootCid) {
-        syncExternalIdToCart(_bootExId, _bootCid);
+      var _shopifyAnalyticsClientId = getShopifyAnalyticsClientId();
+      if (_bootExId || _bootCid || _shopifyAnalyticsClientId) {
+        syncExternalIdToCart(_bootExId, _bootCid, _shopifyAnalyticsClientId);
         setTimeout(function () {
-          syncExternalIdToCart(_bootExId, _bootCid);
+          syncExternalIdToCart(_bootExId, _bootCid, _shopifyAnalyticsClientId);
         }, 800);
       }
 
@@ -2051,7 +2053,8 @@
     var boot = await bootstrap(config);
     syncExternalIdToCart(
       boot && boot.externalId ? boot.externalId : null,
-      boot && boot.clientId ? boot.clientId : getOrCreateStableClientId(config.shopDomain)
+      boot && boot.clientId ? boot.clientId : getOrCreateStableClientId(config.shopDomain),
+      getShopifyAnalyticsClientId()
     );
     bindCommerceActivityTracking(boot);
     sendActivityEvent(boot, window.location.pathname.indexOf('/products/') === 0 ? 'product_view' : 'page_view', {
