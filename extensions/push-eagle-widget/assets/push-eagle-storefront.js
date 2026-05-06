@@ -45,6 +45,34 @@
   var BROWSER_PROMPT_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
   var IOS_HOME_SCREEN_POLL_MS = 1000;
 
+  // Global event queue to buffer activity events that occur before bootstrap completes.
+  // This prevents loss of early add-to-cart events (within 5-10 seconds of page load).
+  var __activityEventQueue = [];
+  var __bootReady = false;
+  var __currentBoot = null; // Mutable reference updated during initialization
+
+  function enqueueActivityEvent(eventType, metadata) {
+    __activityEventQueue.push({ eventType: eventType, metadata: metadata, enqueuedAt: Date.now() });
+  }
+
+  function flushActivityEventQueue(boot) {
+    if (!boot || !__activityEventQueue || __activityEventQueue.length === 0) {
+      return;
+    }
+
+    var queue = __activityEventQueue.slice();
+    __activityEventQueue = [];
+
+    for (var i = 0; i < queue.length; i += 1) {
+      var queued = queue[i];
+      try {
+        sendActivityEvent(boot, queued.eventType, queued.metadata);
+      } catch (_queueFlushError) {
+        // best effort only
+      }
+    }
+  }
+
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
       var existing = document.querySelector('script[src="' + src + '"]');
@@ -350,7 +378,12 @@
   }
 
   async function sendActivityEvent(boot, eventType, metadata) {
+    // If boot is not fully ready, queue the event for later replay once bootstrap completes.
     if (!boot || !boot.activityEndpoint || !boot.shopDomain || !boot.externalId) {
+      if (!__bootReady && boot !== null && boot !== undefined) {
+        // Partial boot object provided but endpoints not ready; queue for retry
+        enqueueActivityEvent(eventType, metadata);
+      }
       return;
     }
 
@@ -450,7 +483,11 @@
   }
 
   function bindCommerceActivityTracking(boot) {
-    if (!boot || !boot.activityEndpoint || window.__pushEagleCommerceTrackingBound) {
+    // Update the mutable boot reference for all event handlers to use.
+    __currentBoot = boot;
+
+    // Only set up the global fetch/XHR/form wrappers on first call.
+    if (window.__pushEagleCommerceTrackingBound) {
       return;
     }
 
@@ -508,12 +545,17 @@
       }
       lastAddToCartSignalAt = now;
 
+      var currentBoot = __currentBoot;
+      if (!currentBoot) {
+        return;
+      }
+
       var currentCartToken = getShopifyCartToken();
       var variantId = details && details.variantId ? details.variantId : null;
       var quantity = details && details.quantity ? Number(details.quantity) : 1;
       var productId = details && details.productId ? details.productId : null;
 
-      sendActivityEvent(boot, 'add_to_cart', {
+      sendActivityEvent(currentBoot, 'add_to_cart', {
         productId: productId,
         variantId: variantId,
         quantity: Number.isFinite(quantity) ? quantity : 1,
@@ -521,8 +563,8 @@
         source: source || 'unknown',
       });
 
-      var _bootExId = boot && boot.externalId ? boot.externalId : null;
-      var _bootCid = boot && boot.clientId ? boot.clientId : null;
+      var _bootExId = currentBoot && currentBoot.externalId ? currentBoot.externalId : null;
+      var _bootCid = currentBoot && currentBoot.clientId ? currentBoot.clientId : null;
       var _shopifyAnalyticsClientId = getShopifyAnalyticsClientId();
       if (_bootExId || _bootCid || _shopifyAnalyticsClientId) {
         syncExternalIdToCart(_bootExId, _bootCid, _shopifyAnalyticsClientId);
@@ -537,7 +579,7 @@
             return;
           }
 
-          sendActivityEvent(boot, 'add_to_cart', {
+          sendActivityEvent(currentBoot, 'add_to_cart', {
             productId: productId,
             variantId: variantId,
             quantity: Number.isFinite(quantity) ? quantity : 1,
@@ -648,11 +690,14 @@
       }
 
       var details = getProductMetadataFromElement(checkoutTrigger);
-      sendActivityEvent(boot, 'checkout_start', {
-        productId: details.productId,
-        variantId: details.variantId,
-        cartToken: details.cartToken,
-      });
+      var currentBoot = __currentBoot;
+      if (currentBoot) {
+        sendActivityEvent(currentBoot, 'checkout_start', {
+          productId: details.productId,
+          variantId: details.variantId,
+          cartToken: details.cartToken,
+        });
+      }
     }, true);
   }
 
@@ -2062,7 +2107,15 @@
       return;
     }
 
+    // Bind commerce activity tracking early (before bootstrap completes) with a temporary boot object.
+    // This allows fetch/XHR/form wrappers to intercept add-to-cart events immediately.
+    // Events will be queued if boot endpoints aren't ready, then flushed after bootstrap completes.
+    var temporaryBoot = { shopDomain: config.shopDomain };
+    bindCommerceActivityTracking(temporaryBoot);
+
     var boot = await bootstrap(config);
+    __bootReady = true;
+    flushActivityEventQueue(boot);
     syncExternalIdToCart(
       boot && boot.externalId ? boot.externalId : null,
       boot && boot.clientId ? boot.clientId : getOrCreateStableClientId(config.shopDomain),
