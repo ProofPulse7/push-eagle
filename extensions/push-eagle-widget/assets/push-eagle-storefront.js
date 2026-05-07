@@ -508,20 +508,11 @@
       payload.metadata.clientId = boot.clientId || null;
       payload.metadata.shopifyAnalyticsClientId = getShopifyAnalyticsClientId();
       var endpoints = [];
-      if (boot.bootstrapSource === 'proxy') {
-        if (boot.activityEndpoint) {
-          endpoints.push(boot.activityEndpoint);
-        }
-        if (boot.activityFallbackEndpoint && endpoints.indexOf(boot.activityFallbackEndpoint) === -1) {
-          endpoints.push(boot.activityFallbackEndpoint);
-        }
-      } else {
-        if (boot.activityFallbackEndpoint) {
-          endpoints.push(boot.activityFallbackEndpoint);
-        }
-        if (boot.activityEndpoint && endpoints.indexOf(boot.activityEndpoint) === -1) {
-          endpoints.push(boot.activityEndpoint);
-        }
+      if (boot.activityFallbackEndpoint) {
+        endpoints.push(boot.activityFallbackEndpoint);
+      }
+      if (boot.activityEndpoint && endpoints.indexOf(boot.activityEndpoint) === -1) {
+        endpoints.push(boot.activityEndpoint);
       }
 
       for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {

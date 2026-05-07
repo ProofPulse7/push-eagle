@@ -16,6 +16,7 @@ import { ImageEditorSheet } from '../composer/editor-parts/image-editor-sheet';
 import { ScrollArea } from '../ui/scroll-area';
 import { AutomationComposerActions } from './automation-composer-actions';
 import { Check, Loader2 } from 'lucide-react';
+import { useSettings } from '@/context/settings-context';
 
 const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -41,12 +42,17 @@ export function AutomationComposer({
         androidHero, setAndroidHero,
         logo, setLogo,
     } = useAutomationState();
+    const { storeUrl, shopDomain } = useSettings();
     
     const [showWindowsWarning, setShowWindowsWarning] = useState(false);
     const [showMacWarning, setShowMacWarning] = useState(false);
     const [showAndroidWarning, setShowAndroidWarning] = useState(false);
     const [editingState, setEditingState] = useState<{ url: string; aspect: number; type: string } | null>(null);
     const [saveStatus, setSaveStatus] = useState<'Unsaved' | 'Saving...' | 'Changes saved'>('Unsaved');
+    const isCartAutomation = automationRuleKey === 'cart_abandonment_30m';
+    const cartDefaultPrimaryLink = '/cart';
+    const fallbackStoreLink = storeUrl || (shopDomain ? `https://${shopDomain}` : '/');
+    const cartGeneratedHero = "data:image/svg+xml,%3csvg width='728' height='360' viewBox='0 0 728 360' fill='none' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='728' height='360' fill='%23E2E8F0'/%3e%3ctext fill='%2364748B' font-family='Arial' font-size='24' x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle'%3ePRODUCT IMAGE IS GENERATED AUTOMATICALLY%3c/text%3e%3c/svg%3e";
     
     const handleTitleEmojiSelect = (emoji: { emoji: string }) => setTitle(`${title}${emoji.emoji}`);
     const handleMessageEmojiSelect = (emoji: { emoji: string }) => setMessage(`${message}${emoji.emoji}`);
@@ -142,6 +148,43 @@ export function AutomationComposer({
         return () => clearTimeout(handler);
     }, [title, message, primaryLink, windowsHero, macHero, androidHero, logo, actionButtons]);
 
+    useEffect(() => {
+        if (!isCartAutomation) {
+            return;
+        }
+
+        if (!primaryLink || !primaryLink.trim()) {
+            setPrimaryLink(cartDefaultPrimaryLink);
+        }
+
+        const nextButton1 = {
+            title: (actionButtons[0]?.title || '').trim() || 'Checkout',
+            link: (actionButtons[0]?.link || '').trim() || (primaryLink || cartDefaultPrimaryLink),
+        };
+        const nextButton2 = {
+            title: (actionButtons[1]?.title || '').trim() || 'Continue Shopping',
+            link: (actionButtons[1]?.link || '').trim() || fallbackStoreLink,
+        };
+
+        const needsUpdate =
+            actionButtons.length < 2
+            || actionButtons[0]?.title !== nextButton1.title
+            || actionButtons[0]?.link !== nextButton1.link
+            || actionButtons[1]?.title !== nextButton2.title
+            || actionButtons[1]?.link !== nextButton2.link;
+
+        if (needsUpdate) {
+            setActionButtons([nextButton1, nextButton2]);
+        }
+    }, [
+        isCartAutomation,
+        primaryLink,
+        setPrimaryLink,
+        actionButtons,
+        setActionButtons,
+        fallbackStoreLink,
+    ]);
+
     const getAutomationData = () => ({
       title,
       message,
@@ -184,6 +227,8 @@ export function AutomationComposer({
                             primaryLink={primaryLink} setPrimaryLink={setPrimaryLink}
                             handleTitleEmojiSelect={handleTitleEmojiSelect}
                             handleMessageEmojiSelect={handleMessageEmojiSelect}
+                            primaryLinkLabel={isCartAutomation ? 'Primary link' : 'Destination URL'}
+                            primaryLinkHelpText={isCartAutomation ? 'By default, PushEagle will use your cart page for the redirect link.' : undefined}
                             errors={{}}
                         />
                         <RichMediaEditor
@@ -191,8 +236,15 @@ export function AutomationComposer({
                             macHero={macHero} setMacHero={setMacHero} showMacWarning={showMacWarning}
                             androidHero={androidHero} setAndroidHero={setAndroidHero} showAndroidWarning={showAndroidWarning}
                             handleImageUpload={handleImageUpload} setEditingState={setEditingState}
+                            locked={isCartAutomation}
+                            lockedMessage="PushEagle will automatically use the product image for this push notification."
                         />
-                        <ActionButtonsEditor actionButtons={actionButtons} setActionButtons={setActionButtons} />
+                        <ActionButtonsEditor
+                            actionButtons={actionButtons}
+                            setActionButtons={setActionButtons}
+                            primaryLink={primaryLink || cartDefaultPrimaryLink}
+                            isCartAutomation={isCartAutomation}
+                        />
                         <LogoUploaderEditor logo={logo} setLogo={setLogo} handleImageUpload={handleImageUpload} setEditingState={setEditingState} />
                     </div>
                 </ScrollArea>
@@ -201,9 +253,9 @@ export function AutomationComposer({
             <div className="h-screen bg-background flex flex-col">
                 <div className="flex-grow overflow-y-auto">
                     <div className="grid min-h-full grid-cols-1 lg:grid-cols-2 lg:grid-rows-2 gap-px bg-slate-300/80 dark:bg-slate-700">
-                        <div className="bg-background p-4 flex items-center justify-center relative overflow-auto"><AndroidPreview title={title} message={message} link={primaryLink} icon={logo.preview} hero={androidHero.preview} actionButtons={actionButtons} /></div>
-                        <div className="bg-background p-4 flex items-center justify-center relative overflow-auto"><WindowsPreview title={title} message={message} link={primaryLink} hero={windowsHero.preview} actionButtons={actionButtons} /></div>
-                        <div className="bg-background p-4 flex items-center justify-center relative overflow-auto"><MacOSPreview title={title} message={message} link={primaryLink} icon={logo.preview} hero={macHero.preview} actionButtons={actionButtons} /></div>
+                        <div className="bg-background p-4 flex items-center justify-center relative overflow-auto"><AndroidPreview title={title} message={message} link={primaryLink} icon={logo.preview} hero={isCartAutomation ? cartGeneratedHero : androidHero.preview} actionButtons={actionButtons} /></div>
+                        <div className="bg-background p-4 flex items-center justify-center relative overflow-auto"><WindowsPreview title={title} message={message} link={primaryLink} hero={isCartAutomation ? cartGeneratedHero : windowsHero.preview} actionButtons={actionButtons} /></div>
+                        <div className="bg-background p-4 flex items-center justify-center relative overflow-auto"><MacOSPreview title={title} message={message} link={primaryLink} icon={logo.preview} hero={isCartAutomation ? cartGeneratedHero : macHero.preview} actionButtons={actionButtons} /></div>
                         <div className="bg-background p-4 flex items-center justify-center relative overflow-auto"><IOSPreview title={title} message={message} link={primaryLink} icon={logo.preview} /></div>
                     </div>
                 </div>

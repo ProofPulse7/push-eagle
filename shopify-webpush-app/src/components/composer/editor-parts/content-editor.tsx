@@ -39,7 +39,9 @@ export const ContentEditor = ({
     handleTitleEmojiSelect,
     handleMessageEmojiSelect,
     isGenerating,
-    errors = {}
+    errors = {},
+    primaryLinkLabel = 'Destination URL',
+    primaryLinkHelpText,
 }: {
     title: string;
     setTitle: (title: string) => void;
@@ -52,6 +54,8 @@ export const ContentEditor = ({
     handleMessageEmojiSelect: (emoji: { emoji: string }) => void;
     isGenerating?: boolean;
     errors: { title?: string, primaryLink?: string };
+    primaryLinkLabel?: string;
+    primaryLinkHelpText?: string;
 }) => {
     return (
         <div className="space-y-4 pt-2">
@@ -145,7 +149,7 @@ export const ContentEditor = ({
                 </div>
 
                 <div className="space-y-1.5">
-                    <Label htmlFor="primaryLink">Destination URL <span className="text-destructive">*</span></Label>
+                    <Label htmlFor="primaryLink">{primaryLinkLabel} <span className="text-destructive">*</span></Label>
                     <Input 
                         id="primaryLink" 
                         placeholder="Enter destination URL" 
@@ -153,6 +157,9 @@ export const ContentEditor = ({
                         onChange={e => setPrimaryLink(e.target.value)} 
                         className={cn(errors.primaryLink && "border-destructive")}
                     />
+                    {primaryLinkHelpText && (
+                        <p className="text-xs text-muted-foreground">{primaryLinkHelpText}</p>
+                    )}
                     {errors.primaryLink && (
                         <p className="text-sm text-destructive flex items-center gap-1.5 pt-1">
                             <Info className="h-4 w-4" /> {errors.primaryLink}
