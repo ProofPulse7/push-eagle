@@ -14,7 +14,6 @@
   data-shopify-country="{{ localization.country.iso_code }}"
   data-proxy-bootstrap-path="{{ block.settings.proxy_base_path | default: '/apps/push-eagle' | append: '/bootstrap' }}"
   data-proxy-service-worker-path="{{ block.settings.proxy_base_path | default: '/apps/push-eagle' | append: '/sw.js' }}"
-  data-local-service-worker-path="{{ 'push-eagle-local-sw.js' | asset_url }}"
   data-proxy-token-path="{{ block.settings.proxy_base_path | default: '/apps/push-eagle' | append: '/token' }}"
   data-display-trigger="{{ block.settings.display_trigger | default: 'auto' | strip }}"
   data-manual-selector="{{ block.settings.manual_selector | escape }}"
