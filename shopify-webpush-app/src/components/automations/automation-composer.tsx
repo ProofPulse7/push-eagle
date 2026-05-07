@@ -10,7 +10,6 @@ import { MacOSPreview } from '../composer/previews/macos-preview';
 
 import { ContentEditor } from '../composer/editor-parts/content-editor';
 import { RichMediaEditor } from '../composer/editor-parts/rich-media-editor';
-import { AbandonedCartHeroDisplay } from '../composer/editor-parts/abandoned-cart-hero-display';
 import { ActionButtonsEditor } from '../composer/editor-parts/action-buttons-editor';
 import { LogoUploaderEditor } from '../composer/editor-parts/logo-uploader-editor';
 import { ImageEditorSheet } from '../composer/editor-parts/image-editor-sheet';
@@ -187,16 +186,12 @@ export function AutomationComposer({
                             handleMessageEmojiSelect={handleMessageEmojiSelect}
                             errors={{}}
                         />
-                        {automationRuleKey === 'cart_abandonment_30m' ? (
-                            <AbandonedCartHeroDisplay />
-                        ) : (
-                            <RichMediaEditor
-                                windowsHero={windowsHero} setWindowsHero={setWindowsHero} showWindowsWarning={showWindowsWarning}
-                                macHero={macHero} setMacHero={setMacHero} showMacWarning={showMacWarning}
-                                androidHero={androidHero} setAndroidHero={setAndroidHero} showAndroidWarning={showAndroidWarning}
-                                handleImageUpload={handleImageUpload} setEditingState={setEditingState}
-                            />
-                        )}
+                        <RichMediaEditor
+                            windowsHero={windowsHero} setWindowsHero={setWindowsHero} showWindowsWarning={showWindowsWarning}
+                            macHero={macHero} setMacHero={setMacHero} showMacWarning={showMacWarning}
+                            androidHero={androidHero} setAndroidHero={setAndroidHero} showAndroidWarning={showAndroidWarning}
+                            handleImageUpload={handleImageUpload} setEditingState={setEditingState}
+                        />
                         <ActionButtonsEditor actionButtons={actionButtons} setActionButtons={setActionButtons} />
                         <LogoUploaderEditor logo={logo} setLogo={setLogo} handleImageUpload={handleImageUpload} setEditingState={setEditingState} />
                     </div>
