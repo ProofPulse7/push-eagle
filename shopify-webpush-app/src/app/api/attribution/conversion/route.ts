@@ -10,6 +10,8 @@ const conversionSchema = z.object({
   shopDomain: z.string().optional(),
   orderId: z.string().min(1),
   externalId: z.string().optional().nullable(),
+  customerId: z.string().optional().nullable(),
+  email: z.string().optional().nullable(),
   campaignId: z.string().optional().nullable(),
   occurredAt: z.string().optional().nullable(),
   revenueCents: z.number().int().nonnegative().optional(),
@@ -31,6 +33,8 @@ export async function POST(request: Request) {
       revenueCents: computedRevenueCents,
       occurredAt: body.occurredAt,
       externalId: body.externalId,
+      customerId: body.customerId,
+      email: body.email,
       campaignId: body.campaignId,
     });
 

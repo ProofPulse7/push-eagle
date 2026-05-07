@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { getNeonSql } from '@/lib/integrations/database/neon';
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
 import { recordSubscriberActivity, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
@@ -10,6 +11,8 @@ type ShopifyCartPayload = {
   id?: number | string;
   token?: string | null;
   updated_at?: string | null;
+  attributes?: Record<string, unknown> | Array<{ key?: string | null; name?: string | null; value?: string | null }> | null;
+  note_attributes?: Record<string, unknown> | Array<{ key?: string | null; name?: string | null; value?: string | null }> | null;
   line_items?: Array<{
     product_id?: number | string | null;
     variant_id?: number | string | null;
@@ -24,6 +27,161 @@ const deriveExternalId = (shopDomain: string, token?: string | null) => {
   }
 
   return `cart:${shopDomain}:${token}`;
+};
+
+const getCartAttribute = (payload: ShopifyCartPayload, key: string) => {
+  const pools = [payload.attributes, payload.note_attributes];
+
+  for (let idx = 0; idx < pools.length; idx += 1) {
+    const attributes = pools[idx];
+    if (!attributes) {
+      continue;
+    }
+
+    if (Array.isArray(attributes)) {
+      const row = attributes.find((item) => (item?.key ?? item?.name) === key);
+      const value = row?.value == null ? '' : String(row.value).trim();
+      if (value) {
+        return value;
+      }
+      continue;
+    }
+
+    const raw = (attributes as Record<string, unknown>)[key];
+    const value = raw == null ? '' : String(raw).trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+};
+
+const resolveIdentityFromCartSignals = async (shopDomain: string, token?: string | null) => {
+  const normalizedToken = token ? String(token).trim() : '';
+  if (!normalizedToken) {
+    return {
+      externalId: null as string | null,
+      clientId: null as string | null,
+    };
+  }
+
+  const sql = getNeonSql();
+  const rows = await sql`
+    WITH cart_related AS (
+      SELECT
+        external_id,
+        created_at,
+        COALESCE(metadata ->> 'clientId', metadata ->> 'shopifyAnalyticsClientId', '') AS client_id
+      FROM subscriber_activity_events
+      WHERE shop_domain = ${shopDomain}
+        AND cart_token = ${normalizedToken}
+        AND created_at >= NOW() - INTERVAL '14 days'
+
+      UNION ALL
+
+      SELECT
+        external_id,
+        created_at,
+        COALESCE(client_id, '') AS client_id
+      FROM pixel_events
+      WHERE shop_domain = ${shopDomain}
+        AND cart_token = ${normalizedToken}
+        AND created_at >= NOW() - INTERVAL '14 days'
+    ),
+    stitched AS (
+      SELECT external_id, created_at, client_id
+      FROM cart_related
+
+      UNION ALL
+
+      SELECT
+        e.external_id,
+        e.created_at,
+        COALESCE(e.metadata ->> 'clientId', e.metadata ->> 'shopifyAnalyticsClientId', '') AS client_id
+      FROM subscriber_activity_events e
+      WHERE e.shop_domain = ${shopDomain}
+        AND e.created_at >= NOW() - INTERVAL '14 days'
+        AND COALESCE(e.metadata ->> 'clientId', e.metadata ->> 'shopifyAnalyticsClientId', '') = ANY(
+          ARRAY(SELECT DISTINCT client_id FROM cart_related WHERE client_id <> '')
+        )
+
+      UNION ALL
+
+      SELECT
+        p.external_id,
+        p.created_at,
+        COALESCE(p.client_id, '') AS client_id
+      FROM pixel_events p
+      WHERE p.shop_domain = ${shopDomain}
+        AND p.created_at >= NOW() - INTERVAL '14 days'
+        AND COALESCE(p.client_id, '') = ANY(
+          ARRAY(SELECT DISTINCT client_id FROM cart_related WHERE client_id <> '')
+        )
+    )
+    SELECT external_id, client_id
+    FROM stitched
+    WHERE external_id IS NOT NULL
+      AND external_id <> ''
+    ORDER BY
+      CASE
+        WHEN external_id LIKE 'anon:%' THEN 0
+        WHEN external_id LIKE 'shopify_customer:%' THEN 1
+        WHEN external_id LIKE 'email:%' THEN 2
+        WHEN external_id LIKE 'cart:%' THEN 3
+        WHEN external_id LIKE 'px:%' THEN 4
+        ELSE 5
+      END,
+      created_at DESC
+    LIMIT 1
+  `;
+
+  const externalId = rows[0]?.external_id ? String(rows[0].external_id).trim() : '';
+  const clientId = rows[0]?.client_id ? String(rows[0].client_id).trim() : '';
+
+  return {
+    externalId: externalId || null,
+    clientId: clientId || null,
+  };
+};
+
+const resolveSubscriberClientId = async (shopDomain: string, externalId?: string | null) => {
+  const normalizedExternalId = externalId ? String(externalId).trim() : '';
+  if (!normalizedExternalId) {
+    return {
+      clientId: null as string | null,
+      shopifyAnalyticsClientId: null as string | null,
+    };
+  }
+
+  const sql = getNeonSql();
+  const rows = await sql`
+    SELECT
+      s.device_context ->> 'clientId' AS client_id,
+      s.device_context ->> 'shopifyAnalyticsClientId' AS shopify_analytics_client_id
+    FROM subscribers s
+    JOIN subscriber_tokens t ON t.subscriber_id = s.id
+    WHERE s.shop_domain = ${shopDomain}
+      AND t.shop_domain = ${shopDomain}
+      AND t.status = 'active'
+      AND s.external_id = ${normalizedExternalId}
+      AND (
+        COALESCE(s.device_context ->> 'clientId', '') <> ''
+        OR COALESCE(s.device_context ->> 'shopifyAnalyticsClientId', '') <> ''
+      )
+    ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC
+    LIMIT 1
+  `;
+
+  const clientId = rows[0]?.client_id ? String(rows[0].client_id).trim() : '';
+  const shopifyAnalyticsClientId = rows[0]?.shopify_analytics_client_id
+    ? String(rows[0].shopify_analytics_client_id).trim()
+    : '';
+
+  return {
+    clientId: clientId || null,
+    shopifyAnalyticsClientId: shopifyAnalyticsClientId || null,
+  };
 };
 
 export async function POST(request: Request) {
@@ -51,10 +209,31 @@ export async function POST(request: Request) {
       }
     }
 
-    const externalId = deriveExternalId(shopDomain, payload.token ?? null);
+    const cartSignalIdentity = await resolveIdentityFromCartSignals(shopDomain, payload.token ?? null);
+
+    const attributeExternalId = getCartAttribute(payload, '_push_eagle_external_id');
+    const fallbackExternalId = deriveExternalId(shopDomain, payload.token ?? null);
+    const resolvedExternalId = attributeExternalId
+      || cartSignalIdentity.externalId
+      || fallbackExternalId;
+    const externalId = resolvedExternalId;
     if (!externalId) {
       return NextResponse.json({ ok: true, shopDomain, skipped: 'missing-token' });
     }
+
+    const identitySource = attributeExternalId
+      ? 'attribute'
+      : cartSignalIdentity.externalId
+        ? 'signal'
+        : 'fallback_cart_token';
+
+    const subscriberClientIdentity = await resolveSubscriberClientId(shopDomain, externalId);
+    const shopifyAnalyticsClientId = getCartAttribute(payload, '_push_eagle_shopify_analytics_client_id')
+      || subscriberClientIdentity.shopifyAnalyticsClientId;
+    const clientId = getCartAttribute(payload, '_push_eagle_client_id')
+      || cartSignalIdentity.clientId
+      || subscriberClientIdentity.clientId
+      || shopifyAnalyticsClientId;
 
     const firstLineItem = (payload.line_items ?? [])[0];
     await recordSubscriberActivity({
@@ -69,6 +248,9 @@ export async function POST(request: Request) {
         variantId: firstLineItem?.variant_id ? String(firstLineItem.variant_id) : null,
         quantity: firstLineItem?.quantity ?? null,
         updatedAt: payload.updated_at ?? null,
+        clientId,
+        shopifyAnalyticsClientId,
+        cartIdentitySource: identitySource,
       },
     });
 

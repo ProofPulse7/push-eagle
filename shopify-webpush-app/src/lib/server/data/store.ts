@@ -44,6 +44,7 @@ type UpsertTokenInput = {
 type UpdateAttributionSettingsInput = {
   shopDomain: string;
   attributionModel: 'click' | 'impression';
+  attributionCreditMode: 'last_touch' | 'all_touches';
   clickWindowDays: number;
   impressionWindowDays: number;
 };
@@ -151,9 +152,12 @@ type RecordConversionInput = {
   revenueCents: number;
   occurredAt?: string | null;
   externalId?: string | null;
+  cartToken?: string | null;
+  clientId?: string | null;
   campaignId?: string | null;
   customerId?: string | null;
   email?: string | null;
+  ipAddress?: string | null;
   userAgent?: string | null;
   platform?: string | null;
   browser?: string | null;
@@ -253,7 +257,7 @@ type IngestionJobType = 'pixel_event' | 'shopify_order_create';
 type PixelIngestionPayload = {
   shopDomain: string;
   externalId: string;
-  eventType: 'page_view' | 'product_view' | 'add_to_cart' | 'checkout_start';
+  eventType: 'page_view' | 'product_view' | 'add_to_cart' | 'checkout_start' | 'checkout_complete';
   pageUrl?: string | null;
   productId?: string | null;
   cartToken?: string | null;
@@ -265,6 +269,9 @@ type OrderCreateIngestionPayload = {
   shopDomain: string;
   orderId: string;
   externalId?: string | null;
+  cartToken?: string | null;
+  clientId?: string | null;
+  browserIp?: string | null;
   customerId?: string | null;
   email?: string | null;
   firstName?: string | null;
@@ -600,10 +607,13 @@ const ensureSchema = async () => {
       await sql`CREATE TABLE IF NOT EXISTS merchant_settings (
         shop_domain TEXT PRIMARY KEY REFERENCES merchants(shop_domain) ON DELETE CASCADE,
         attribution_model TEXT NOT NULL DEFAULT 'impression',
-        click_window_days INTEGER NOT NULL DEFAULT 2,
-        impression_window_days INTEGER NOT NULL DEFAULT 3,
+        attribution_credit_mode TEXT NOT NULL DEFAULT 'last_touch',
+        click_window_days INTEGER NOT NULL DEFAULT 7,
+        impression_window_days INTEGER NOT NULL DEFAULT 7,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+
+      await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS attribution_credit_mode TEXT NOT NULL DEFAULT 'last_touch'`;
 
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_prompt_type TEXT NOT NULL DEFAULT 'custom'`;
       await sql`ALTER TABLE merchant_settings ADD COLUMN IF NOT EXISTS opt_in_title TEXT`;
@@ -682,10 +692,14 @@ const ensureSchema = async () => {
         fcm_message_id TEXT,
         delivered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         clicked_at TIMESTAMPTZ,
+        user_agent TEXT,
+        ip_address TEXT,
         converted_at TIMESTAMPTZ,
         order_id TEXT,
         revenue_cents INTEGER NOT NULL DEFAULT 0
       )`;
+      await sql`ALTER TABLE automation_deliveries ADD COLUMN IF NOT EXISTS user_agent TEXT`;
+      await sql`ALTER TABLE automation_deliveries ADD COLUMN IF NOT EXISTS ip_address TEXT`;
 
       await sql`CREATE TABLE IF NOT EXISTS automation_clicks (
         id BIGSERIAL PRIMARY KEY,
@@ -814,6 +828,16 @@ const ensureSchema = async () => {
         processed_at TIMESTAMPTZ
       )`;
 
+      await sql`CREATE TABLE IF NOT EXISTS cron_heartbeats (
+        id TEXT PRIMARY KEY,
+        job_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        error_message TEXT,
+        metadata JSONB
+      )`;
+
       await sql`CREATE TABLE IF NOT EXISTS campaign_schedules (
         id TEXT PRIMARY KEY,
         campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -926,6 +950,7 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_due ON ingestion_jobs(status, due_at)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_shop_type ON ingestion_jobs(shop_domain, job_type, status, due_at)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_ingestion_jobs_dedupe ON ingestion_jobs(shop_domain, job_type, dedupe_key) WHERE dedupe_key IS NOT NULL`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_cron_heartbeats_job_started ON cron_heartbeats(job_name, started_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_schedules_send_at ON campaign_schedules(send_at) WHERE send_at IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_smart_delivery_metrics_shop ON smart_delivery_metrics(shop_domain)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
@@ -934,6 +959,7 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_rule_time ON automation_deliveries(shop_domain, rule_key, delivered_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_external_time ON automation_deliveries(shop_domain, external_id, delivered_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_user_agent_time ON automation_deliveries(shop_domain, user_agent, delivered_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_clicks_shop_rule_time ON automation_clicks(shop_domain, rule_key, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_clicks_shop_external_time ON automation_clicks(shop_domain, external_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_customers_shop_email ON shopify_customers(shop_domain, email)`;
@@ -995,7 +1021,63 @@ const buildCampaignClickTrackingUrl = (
     return '';
   }
 
-  const trackingBase = env.NEXT_PUBLIC_APP_URL || env.SHOPIFY_ROOT_APP_URL || env.SHOPIFY_APP_URL;
+  const resolveTrackingBase = () => {
+    const rawCandidates = [
+      env.SHOPIFY_APP_URL,
+      env.NEXT_PUBLIC_APP_URL,
+      env.SHOPIFY_ROOT_APP_URL,
+      'https://push-eagle-dashboard.vercel.app',
+    ];
+
+    const candidates: string[] = [];
+    for (const raw of rawCandidates) {
+      const value = String(raw ?? '').trim();
+      if (!value) {
+        continue;
+      }
+      try {
+        const parsed = new URL(value);
+        if (!/^https?:$/i.test(parsed.protocol)) {
+          continue;
+        }
+        const normalized = parsed.toString().replace(/\/$/, '');
+        if (!candidates.includes(normalized)) {
+          candidates.push(normalized);
+        }
+
+        if (parsed.hostname === 'push-eagle.vercel.app') {
+          const dashboardVariant = `${parsed.protocol}//push-eagle-dashboard.vercel.app`;
+          if (!candidates.includes(dashboardVariant)) {
+            candidates.push(dashboardVariant);
+          }
+        }
+      } catch {
+        // Ignore invalid tracking base candidates.
+      }
+    }
+
+    const dashboardCandidate = candidates.find((item) => {
+      try {
+        return new URL(item).hostname.includes('dashboard');
+      } catch {
+        return false;
+      }
+    });
+    if (dashboardCandidate) {
+      return dashboardCandidate;
+    }
+
+    const nonLocalCandidate = candidates.find((item) => {
+      try {
+        return new URL(item).hostname !== 'localhost';
+      } catch {
+        return false;
+      }
+    });
+    return nonLocalCandidate || candidates[0] || '';
+  };
+
+  const trackingBase = resolveTrackingBase();
 
   try {
     const trackerBase = new URL('/api/track/click', trackingBase);
@@ -1065,7 +1147,63 @@ const buildAutomationClickTrackingUrl = (
     return '';
   }
 
-  const trackingBase = env.NEXT_PUBLIC_APP_URL || env.SHOPIFY_ROOT_APP_URL || env.SHOPIFY_APP_URL;
+  const resolveTrackingBase = () => {
+    const rawCandidates = [
+      env.SHOPIFY_APP_URL,
+      env.NEXT_PUBLIC_APP_URL,
+      env.SHOPIFY_ROOT_APP_URL,
+      'https://push-eagle-dashboard.vercel.app',
+    ];
+
+    const candidates: string[] = [];
+    for (const raw of rawCandidates) {
+      const value = String(raw ?? '').trim();
+      if (!value) {
+        continue;
+      }
+      try {
+        const parsed = new URL(value);
+        if (!/^https?:$/i.test(parsed.protocol)) {
+          continue;
+        }
+        const normalized = parsed.toString().replace(/\/$/, '');
+        if (!candidates.includes(normalized)) {
+          candidates.push(normalized);
+        }
+
+        if (parsed.hostname === 'push-eagle.vercel.app') {
+          const dashboardVariant = `${parsed.protocol}//push-eagle-dashboard.vercel.app`;
+          if (!candidates.includes(dashboardVariant)) {
+            candidates.push(dashboardVariant);
+          }
+        }
+      } catch {
+        // Ignore invalid tracking base candidates.
+      }
+    }
+
+    const dashboardCandidate = candidates.find((item) => {
+      try {
+        return new URL(item).hostname.includes('dashboard');
+      } catch {
+        return false;
+      }
+    });
+    if (dashboardCandidate) {
+      return dashboardCandidate;
+    }
+
+    const nonLocalCandidate = candidates.find((item) => {
+      try {
+        return new URL(item).hostname !== 'localhost';
+      } catch {
+        return false;
+      }
+    });
+    return nonLocalCandidate || candidates[0] || '';
+  };
+
+  const trackingBase = resolveTrackingBase();
 
   try {
     const trackerBase = new URL('/api/track/automation-click', trackingBase);
@@ -2171,6 +2309,14 @@ const listAutomationTargets = async (input: { shopDomain: string; externalId?: s
         WHERE t.shop_domain = ${input.shopDomain}
           AND s.id = ${input.subscriberId}
           AND t.status = 'active'
+          AND (
+            COALESCE(t.token_type, 'fcm') <> 'vapid'
+            OR (
+              COALESCE(t.vapid_endpoint, '') <> ''
+              AND COALESCE(t.vapid_p256dh, '') <> ''
+              AND COALESCE(t.vapid_auth, '') <> ''
+            )
+          )
       )
       SELECT token_id, subscriber_id, external_id
       FROM ranked
@@ -2191,6 +2337,14 @@ const listAutomationTargets = async (input: { shopDomain: string; externalId?: s
         WHERE t.shop_domain = ${input.shopDomain}
           AND s.external_id = ${input.externalId ?? ''}
           AND t.status = 'active'
+          AND (
+            COALESCE(t.token_type, 'fcm') <> 'vapid'
+            OR (
+              COALESCE(t.vapid_endpoint, '') <> ''
+              AND COALESCE(t.vapid_p256dh, '') <> ''
+              AND COALESCE(t.vapid_auth, '') <> ''
+            )
+          )
       )
       SELECT token_id, subscriber_id, external_id
       FROM ranked
@@ -2204,10 +2358,356 @@ const listAutomationTargets = async (input: { shopDomain: string; externalId?: s
   }));
 };
 
+const listAutomationTargetsByExternalIds = async (shopDomain: string, externalIds: string[]) => {
+  if (externalIds.length === 0) {
+    return [] as Array<{ tokenId: number; subscriberId: number | null; externalId: string | null }>;
+  }
+
+  const sql = getNeonSql();
+  const rows = await sql`
+    WITH ranked AS (
+      SELECT
+        t.id AS token_id,
+        s.id AS subscriber_id,
+        s.external_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY s.external_id
+          ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+        ) AS rn
+      FROM subscriber_tokens t
+      JOIN subscribers s ON s.id = t.subscriber_id
+      WHERE t.shop_domain = ${shopDomain}
+        AND s.external_id = ANY(${externalIds})
+        AND t.status = 'active'
+        AND (
+          COALESCE(t.token_type, 'fcm') <> 'vapid'
+          OR (
+            COALESCE(t.vapid_endpoint, '') <> ''
+            AND COALESCE(t.vapid_p256dh, '') <> ''
+            AND COALESCE(t.vapid_auth, '') <> ''
+          )
+        )
+    )
+    SELECT token_id, subscriber_id, external_id
+    FROM ranked
+    WHERE rn = 1
+  `;
+
+  return rows.map((row) => ({
+    tokenId: Number(row.token_id),
+    subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
+    externalId: row.external_id ? String(row.external_id) : null,
+  }));
+};
+
+const listAutomationTargetsByClientId = async (shopDomain: string, clientId: string) => {
+  const normalizedClientId = String(clientId || '').trim();
+  if (!normalizedClientId) {
+    return [] as Array<{ tokenId: number; subscriberId: number | null; externalId: string | null }>;
+  }
+
+  const sql = getNeonSql();
+  const rows = await sql`
+    WITH ranked AS (
+      SELECT
+        t.id AS token_id,
+        s.id AS subscriber_id,
+        s.external_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY s.id
+          ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+        ) AS rn
+      FROM subscriber_tokens t
+      JOIN subscribers s ON s.id = t.subscriber_id
+      WHERE t.shop_domain = ${shopDomain}
+        AND s.shop_domain = ${shopDomain}
+        AND t.status = 'active'
+        AND (
+          COALESCE(t.token_type, 'fcm') <> 'vapid'
+          OR (
+            COALESCE(t.vapid_endpoint, '') <> ''
+            AND COALESCE(t.vapid_p256dh, '') <> ''
+            AND COALESCE(t.vapid_auth, '') <> ''
+          )
+        )
+        AND (
+          COALESCE(s.device_context ->> 'clientId', '') = ${normalizedClientId}
+          OR COALESCE(s.device_context ->> 'shopifyAnalyticsClientId', '') = ${normalizedClientId}
+        )
+    )
+    SELECT token_id, subscriber_id, external_id
+    FROM ranked
+    WHERE rn = 1
+  `;
+
+  return rows.map((row) => ({
+    tokenId: Number(row.token_id),
+    subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
+    externalId: row.external_id ? String(row.external_id) : null,
+  }));
+};
+
+const normalizeClientId = (metadata?: Record<string, unknown> | null) => {
+  const raw = metadata && typeof metadata.clientId === 'string'
+    ? metadata.clientId
+    : metadata && typeof metadata.shopifyAnalyticsClientId === 'string'
+      ? metadata.shopifyAnalyticsClientId
+      : '';
+  const value = raw.trim();
+  return value.length > 0 ? value : null;
+};
+
+const externalIdPriority = (externalId: string) => {
+  if (externalId.startsWith('anon:')) return 0;
+  if (externalId.startsWith('shopify_customer:')) return 1;
+  if (externalId.startsWith('email:')) return 2;
+  if (externalId.startsWith('cart:')) return 3;
+  if (externalId.startsWith('px:')) return 4;
+  return 5;
+};
+
+const buildExternalIdAliases = (input: {
+  shopDomain: string;
+  externalId?: string | null;
+  cartToken?: string | null;
+  clientId?: string | null;
+}) => {
+  const aliases = new Set<string>();
+
+  const addAlias = (value?: string | null) => {
+    const normalized = value == null ? '' : String(value).trim();
+    if (normalized) {
+      aliases.add(normalized);
+    }
+  };
+
+  const normalizedShopDomain = String(input.shopDomain || '').trim().toLowerCase();
+  const normalizedExternalId = input.externalId?.trim() || null;
+  const normalizedCartToken = input.cartToken?.trim() || null;
+  const normalizedClientId = input.clientId?.trim() || null;
+
+  addAlias(normalizedExternalId);
+
+  if (normalizedCartToken) {
+    addAlias(normalizedCartToken);
+    addAlias(`cart:${normalizedCartToken}`);
+    if (normalizedShopDomain) {
+      addAlias(`cart:${normalizedShopDomain}:${normalizedCartToken}`);
+    }
+  }
+
+  if (normalizedClientId) {
+    addAlias(normalizedClientId);
+    addAlias(`px:${normalizedClientId}`);
+    if (normalizedShopDomain) {
+      addAlias(`px:${normalizedShopDomain}:${normalizedClientId}`);
+    }
+  }
+
+  if (normalizedExternalId) {
+    const cartPrefix = normalizedShopDomain ? `cart:${normalizedShopDomain}:` : 'cart:';
+    if (normalizedExternalId.startsWith(cartPrefix)) {
+      const extractedCartToken = normalizedExternalId.slice(cartPrefix.length).trim();
+      if (extractedCartToken) {
+        addAlias(extractedCartToken);
+        addAlias(`cart:${extractedCartToken}`);
+      }
+    }
+
+    const pxPrefix = normalizedShopDomain ? `px:${normalizedShopDomain}:` : 'px:';
+    if (normalizedExternalId.startsWith(pxPrefix)) {
+      const extractedClientId = normalizedExternalId.slice(pxPrefix.length).trim();
+      if (extractedClientId) {
+        addAlias(extractedClientId);
+        addAlias(`px:${extractedClientId}`);
+      }
+    }
+  }
+
+  return Array.from(aliases);
+};
+
+const resolveAutomationExternalIds = async (input: {
+  shopDomain: string;
+  externalId?: string | null;
+  cartToken?: string | null;
+  clientId?: string | null;
+}) => {
+  const externalIdAliases = buildExternalIdAliases(input);
+  const normalizedExternalId = input.externalId?.trim() || null;
+  const normalizedCartToken = input.cartToken?.trim() || null;
+  const normalizedClientId = input.clientId?.trim() || null;
+
+  const sql = getNeonSql();
+  const windowStart = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+
+  const cartRows = normalizedCartToken
+    ? await sql`
+      WITH cart_related AS (
+        SELECT
+          external_id,
+          created_at,
+          COALESCE(metadata ->> 'clientId', metadata ->> 'shopifyAnalyticsClientId', '') AS client_id
+        FROM subscriber_activity_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND cart_token = ${normalizedCartToken}
+          AND created_at >= ${windowStart}
+
+        UNION ALL
+
+        SELECT
+          external_id,
+          created_at,
+          COALESCE(client_id, '') AS client_id
+        FROM pixel_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND cart_token = ${normalizedCartToken}
+          AND created_at >= ${windowStart}
+      ),
+      stitched AS (
+        SELECT external_id, created_at, client_id
+        FROM cart_related
+
+        UNION ALL
+
+        SELECT
+          e.external_id,
+          e.created_at,
+          COALESCE(e.metadata ->> 'clientId', e.metadata ->> 'shopifyAnalyticsClientId', '') AS client_id
+        FROM subscriber_activity_events e
+        WHERE e.shop_domain = ${input.shopDomain}
+          AND e.created_at >= ${windowStart}
+          AND COALESCE(e.metadata ->> 'clientId', e.metadata ->> 'shopifyAnalyticsClientId', '') = ANY(
+            ARRAY(SELECT DISTINCT client_id FROM cart_related WHERE client_id <> '')
+          )
+
+        UNION ALL
+
+        SELECT
+          p.external_id,
+          p.created_at,
+          COALESCE(p.client_id, '') AS client_id
+        FROM pixel_events p
+        WHERE p.shop_domain = ${input.shopDomain}
+          AND p.created_at >= ${windowStart}
+          AND COALESCE(p.client_id, '') = ANY(
+            ARRAY(SELECT DISTINCT client_id FROM cart_related WHERE client_id <> '')
+          )
+      )
+      SELECT external_id, created_at, client_id
+      FROM stitched
+      WHERE external_id IS NOT NULL
+        AND external_id <> ''
+      ORDER BY created_at DESC
+      LIMIT 100
+    `
+    : [];
+
+  const cartRelatedClientIds = Array.from(
+    new Set(
+      cartRows
+        .map((row) => (row.client_id ? String(row.client_id).trim() : ''))
+        .filter((value) => value.length > 0),
+    ),
+  );
+
+  const fallbackClientIds = Array.from(
+    new Set(
+      [normalizedClientId, ...cartRelatedClientIds].filter((value): value is string => Boolean(value)),
+    ),
+  );
+
+  const clientRows = normalizedClientId
+    ? await sql`
+      SELECT external_id, created_at
+      FROM (
+        SELECT external_id, created_at
+        FROM subscriber_activity_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND COALESCE(metadata ->> 'clientId', metadata ->> 'shopifyAnalyticsClientId', '') = ${normalizedClientId}
+          AND created_at >= ${windowStart}
+
+        UNION ALL
+
+        SELECT external_id, created_at
+        FROM pixel_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND COALESCE(client_id, '') = ${normalizedClientId}
+          AND created_at >= ${windowStart}
+      ) stitched
+      WHERE external_id IS NOT NULL
+        AND external_id <> ''
+      ORDER BY created_at DESC
+      LIMIT 100
+    `
+    : [];
+
+  const aliasRows = externalIdAliases.length > 0
+    ? await sql`
+      SELECT DISTINCT s.external_id
+      FROM subscribers s
+      JOIN subscriber_tokens t ON t.subscriber_id = s.id
+      WHERE s.shop_domain = ${input.shopDomain}
+        AND s.external_id = ANY(${externalIdAliases})
+        AND t.shop_domain = ${input.shopDomain}
+        AND t.status = 'active'
+      LIMIT 100
+    `
+    : [];
+
+  // Fallback: if we have a clientId, find subscribers who share that clientId via device context.
+  // This provides a reliable identity link when pixel events come before cart registration.
+  const clientIdSubscriberFallback =
+    fallbackClientIds.length > 0 && aliasRows.length === 0
+      ? await sql`
+        SELECT DISTINCT s.external_id
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id
+        WHERE s.shop_domain = ${input.shopDomain}
+          AND t.shop_domain = ${input.shopDomain}
+          AND t.status = 'active'
+          AND (
+            COALESCE(s.device_context ->> 'clientId', '') = ANY(${fallbackClientIds})
+            OR COALESCE(s.device_context ->> 'shopifyAnalyticsClientId', '') = ANY(${fallbackClientIds})
+            OR EXISTS (
+              SELECT 1 FROM pixel_events
+              WHERE pixel_events.shop_domain = ${input.shopDomain}
+                AND COALESCE(pixel_events.client_id, '') = ANY(${fallbackClientIds})
+                AND COALESCE(pixel_events.external_id, '') = s.external_id
+                LIMIT 1
+            )
+          )
+        ORDER BY t.last_seen_at DESC NULLS LAST, s.last_seen_at DESC NULLS LAST
+        LIMIT 50
+      `
+      : [];
+
+  const candidates = Array.from(
+    new Set(
+      [
+        ...externalIdAliases,
+        normalizedExternalId,
+        ...aliasRows.map((row) => (row.external_id ? String(row.external_id) : null)),
+        ...cartRows.map((row) => (row.external_id ? String(row.external_id) : null)),
+        ...clientRows.map((row) => (row.external_id ? String(row.external_id) : null)),
+        ...clientIdSubscriberFallback.map((row) => (row.external_id ? String(row.external_id) : null)),
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
+
+  return candidates.sort((a, b) => {
+    const priorityDelta = externalIdPriority(a) - externalIdPriority(b);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return a.localeCompare(b);
+  });
+};
+
 const enqueueAutomationForTargets = async (input: {
   shopDomain: string;
   ruleKey: AutomationRuleKey;
-  targets: Array<{ tokenId: number; subscriberId: number | null }>;
+  targets: Array<{ tokenId: number; subscriberId: number | null; externalId?: string | null }>;
   dedupeKeyBase: string;
   dueAt?: Date;
   payload: AutomationJobPayload;
@@ -2223,6 +2723,7 @@ const enqueueAutomationForTargets = async (input: {
       payload: {
         ...input.payload,
         ruleKey: input.ruleKey,
+        externalId: target.externalId ?? input.payload.externalId ?? null,
       },
     });
   }
@@ -2241,6 +2742,14 @@ const hasRecentActivity = async (input: {
   }
 
   const sql = getNeonSql();
+
+  let identityFilter = sql``;
+  if (input.productId) {
+    identityFilter = sql`AND product_id = ${input.productId}`;
+  } else if (input.cartToken) {
+    identityFilter = sql`AND cart_token = ${input.cartToken}`;
+  }
+
   const rows = await sql`
     SELECT id
     FROM subscriber_activity_events
@@ -2248,11 +2757,7 @@ const hasRecentActivity = async (input: {
       AND external_id = ${input.externalId}
       AND event_type = ANY(${input.eventTypes})
       AND created_at > ${new Date(input.since)}
-      AND (
-        (${input.productId ?? null} IS NULL AND ${input.cartToken ?? null} IS NULL)
-        OR (${input.productId ?? null} IS NOT NULL AND product_id = ${input.productId ?? null})
-        OR (${input.cartToken ?? null} IS NOT NULL AND cart_token = ${input.cartToken ?? null})
-      )
+      ${identityFilter}
     LIMIT 1
   `;
 
@@ -2265,22 +2770,42 @@ const hasRecentOrder = async (input: {
   customerId?: string | null;
   since?: string | null;
 }) => {
-  if (!input.since || (!input.externalId && !input.customerId)) {
+  const externalId = input.externalId?.trim() || null;
+  const customerId = input.customerId?.trim() || null;
+
+  if (!input.since || (!externalId && !customerId)) {
     return false;
   }
 
   const sql = getNeonSql();
-  const rows = await sql`
-    SELECT id
-    FROM shopify_orders
-    WHERE shop_domain = ${input.shopDomain}
-      AND created_at > ${new Date(input.since)}
-      AND (
-        (${input.externalId ?? null} IS NOT NULL AND external_id = ${input.externalId ?? null})
-        OR (${input.customerId ?? null} IS NOT NULL AND customer_id = ${input.customerId ?? null})
-      )
-    LIMIT 1
-  `;
+  const since = new Date(input.since);
+
+  const rows = externalId && customerId
+    ? await sql`
+      SELECT id
+      FROM shopify_orders
+      WHERE shop_domain = ${input.shopDomain}
+        AND created_at > ${since}
+        AND (external_id = ${externalId} OR customer_id = ${customerId})
+      LIMIT 1
+    `
+    : externalId
+      ? await sql`
+        SELECT id
+        FROM shopify_orders
+        WHERE shop_domain = ${input.shopDomain}
+          AND created_at > ${since}
+          AND external_id = ${externalId}
+        LIMIT 1
+      `
+      : await sql`
+        SELECT id
+        FROM shopify_orders
+        WHERE shop_domain = ${input.shopDomain}
+          AND created_at > ${since}
+          AND customer_id = ${customerId}
+        LIMIT 1
+      `;
 
   return rows.length > 0;
 };
@@ -2446,6 +2971,48 @@ export const enqueueAutomationJob = async (input: {
   return rows[0] ? String(rows[0].id) : null;
 };
 
+export const startCronHeartbeat = async (jobName: string, metadata?: Record<string, unknown> | null) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const heartbeatId = randomUUID();
+
+  await sql`
+    INSERT INTO cron_heartbeats (id, job_name, status, started_at, metadata)
+    VALUES (
+      ${heartbeatId},
+      ${jobName},
+      'running',
+      NOW(),
+      ${JSON.stringify(metadata ?? {})}::jsonb
+    )
+  `;
+
+  return heartbeatId;
+};
+
+export const completeCronHeartbeat = async (input: {
+  heartbeatId: string;
+  ok: boolean;
+  errorMessage?: string | null;
+  metadata?: Record<string, unknown> | null;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  await sql`
+    UPDATE cron_heartbeats
+    SET
+      status = ${input.ok ? 'ok' : 'error'},
+      completed_at = NOW(),
+      error_message = ${input.errorMessage ?? null},
+      metadata = CASE
+        WHEN ${JSON.stringify(input.metadata ?? null)}::jsonb IS NULL THEN metadata
+        ELSE ${JSON.stringify(input.metadata ?? {})}::jsonb
+      END
+    WHERE id = ${input.heartbeatId}
+  `;
+};
+
 /**
  * Immediately process the pending welcome_subscriber job for the given tokenId.
  * Called right after upsertSubscriberToken so the welcome notification fires
@@ -2507,8 +3074,26 @@ export const enqueueIngestionJob = async (input: {
     ON CONFLICT DO NOTHING
     RETURNING id
   `;
+  if (rows[0]) {
+    return String(rows[0].id);
+  }
 
-  return rows[0] ? String(rows[0].id) : null;
+  if (!input.dedupeKey) {
+    return null;
+  }
+
+  const existingRows = await sql`
+    SELECT id
+    FROM ingestion_jobs
+    WHERE shop_domain = ${input.shopDomain}
+      AND job_type = ${input.jobType}
+      AND dedupe_key = ${input.dedupeKey}
+      AND status IN ('pending', 'processing')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+
+  return existingRows[0] ? String(existingRows[0].id) : null;
 };
 
 export const listDueIngestionJobs = async (limit = 500, shardCount = 1, shardIndex = 0) => {
@@ -2589,9 +3174,44 @@ export const processIngestionJob = async (jobId: string) => {
         cartToken: payload.cartToken,
         metadata: {
           ...(payload.metadata ?? {}),
+          clientId: payload.clientId ?? null,
           pixelEventId,
         },
       });
+
+      if (payload.eventType === 'checkout_complete') {
+        const metadata = (payload.metadata ?? {}) as Record<string, unknown>;
+        const rawOrderId = metadata.orderId ? String(metadata.orderId).trim() : '';
+        const orderId = rawOrderId ? rawOrderId.split('/').pop() || rawOrderId : '';
+        const totalPriceCentsRaw = Number(metadata.checkoutTotalPriceCents ?? 0);
+        const totalPriceCents = Number.isFinite(totalPriceCentsRaw) && totalPriceCentsRaw >= 0
+          ? Math.round(totalPriceCentsRaw)
+          : 0;
+
+        if (orderId) {
+          const occurredAtRaw = metadata.timestamp ? String(metadata.timestamp) : null;
+          const occurredAt = occurredAtRaw && !Number.isNaN(Date.parse(occurredAtRaw)) ? occurredAtRaw : null;
+
+          await upsertShopifyOrderEvent({
+            shopDomain: payload.shopDomain,
+            orderId,
+            externalId: payload.externalId,
+            totalPriceCents,
+            createdAt: occurredAt,
+            lineItems: [],
+          });
+
+          await recordAttributedConversion({
+            shopDomain: payload.shopDomain,
+            orderId,
+            revenueCents: totalPriceCents,
+            occurredAt,
+            externalId: payload.externalId,
+            cartToken: payload.cartToken ?? null,
+            clientId: payload.clientId ?? null,
+          });
+        }
+      }
     } else if (claim.job_type === 'shopify_order_create') {
       const payload = claim.payload as OrderCreateIngestionPayload;
 
@@ -2622,9 +3242,12 @@ export const processIngestionJob = async (jobId: string) => {
         revenueCents: payload.totalPriceCents,
         occurredAt: payload.createdAt ?? null,
         externalId: payload.externalId ?? null,
+        cartToken: payload.cartToken ?? null,
+        clientId: payload.clientId ?? null,
         customerId: payload.customerId ?? null,
         email: payload.email ?? null,
         campaignId: getCampaignIdFromLandingSite(payload.landingSite),
+        ipAddress: payload.browserIp ?? null,
         userAgent: payload.userAgent ?? null,
         browser: payload.userAgent ?? null,
         country: null,
@@ -2702,7 +3325,7 @@ export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIn
     UPDATE automation_jobs
     SET status = 'pending', updated_at = NOW()
     WHERE status = 'processing'
-      AND updated_at < NOW() - INTERVAL '10 minutes'
+      AND updated_at < NOW() - INTERVAL '2 minutes'
   `;
 
   const rows = await sql`
@@ -2710,6 +3333,52 @@ export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIn
     FROM automation_jobs j
     LEFT JOIN subscriber_tokens t ON t.id = j.token_id
     WHERE j.status = 'pending'
+      AND j.due_at <= NOW()
+      AND (
+        ${safeShardCount} = 1
+        OR MOD(ABS(hashtext(j.id)), ${safeShardCount}) = ${safeShardIndex}
+      )
+    ORDER BY j.due_at ASC
+    LIMIT ${limit}
+  `;
+
+  return rows as Array<{
+    id: string;
+    shop_domain: string;
+    rule_key: string;
+    token_id: number | null;
+    subscriber_id: number | null;
+    payload: AutomationJobPayload;
+    fcm_token: string | null;
+  }>;
+};
+
+export const listDueAutomationJobsByRule = async (
+  ruleKey: AutomationRuleKey,
+  limit = 100,
+  shardCount = 1,
+  shardIndex = 0,
+) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
+  const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
+
+  // If a worker crashed mid-flight, move stale processing jobs for this rule back to pending.
+  await sql`
+    UPDATE automation_jobs
+    SET status = 'pending', updated_at = NOW()
+    WHERE status = 'processing'
+      AND rule_key = ${ruleKey}
+      AND updated_at < NOW() - INTERVAL '2 minutes'
+  `;
+
+  const rows = await sql`
+    SELECT j.id, j.shop_domain, j.rule_key, j.token_id, j.subscriber_id, j.payload, t.fcm_token
+    FROM automation_jobs j
+    LEFT JOIN subscriber_tokens t ON t.id = j.token_id
+    WHERE j.status = 'pending'
+      AND j.rule_key = ${ruleKey}
       AND j.due_at <= NOW()
       AND (
         ${safeShardCount} = 1
@@ -2795,7 +3464,7 @@ export const processAutomationJob = async (jobId: string) => {
   }
 
   const tokenRows = await sql`
-    SELECT fcm_token, token_type, vapid_endpoint, vapid_p256dh, vapid_auth, status
+    SELECT fcm_token, token_type, vapid_endpoint, vapid_p256dh, vapid_auth, status, user_agent
     FROM subscriber_tokens
     WHERE id = ${claim.token_id ?? 0}
     LIMIT 1
@@ -2808,11 +3477,19 @@ export const processAutomationJob = async (jobId: string) => {
 
   if ((!token || tokenStatus !== 'active') && claim.subscriber_id) {
     const fallbackTokenRows = await sql`
-      SELECT id, fcm_token, token_type, vapid_endpoint, vapid_p256dh, vapid_auth, status
+      SELECT id, fcm_token, token_type, vapid_endpoint, vapid_p256dh, vapid_auth, status, user_agent
       FROM subscriber_tokens
       WHERE shop_domain = ${claim.shop_domain}
         AND subscriber_id = ${claim.subscriber_id}
         AND status = 'active'
+        AND (
+          COALESCE(token_type, 'fcm') <> 'vapid'
+          OR (
+            COALESCE(vapid_endpoint, '') <> ''
+            AND COALESCE(vapid_p256dh, '') <> ''
+            AND COALESCE(vapid_auth, '') <> ''
+          )
+        )
       ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC
       LIMIT 1
     `;
@@ -2828,12 +3505,20 @@ export const processAutomationJob = async (jobId: string) => {
 
   if ((!token || tokenStatus !== 'active') && claim.payload?.externalId) {
     const fallbackByExternalRows = await sql`
-      SELECT t.id, t.fcm_token, t.token_type, t.vapid_endpoint, t.vapid_p256dh, t.vapid_auth, t.status
+      SELECT t.id, t.fcm_token, t.token_type, t.vapid_endpoint, t.vapid_p256dh, t.vapid_auth, t.status, t.user_agent
       FROM subscriber_tokens t
       JOIN subscribers s ON s.id = t.subscriber_id
       WHERE t.shop_domain = ${claim.shop_domain}
         AND s.external_id = ${String(claim.payload.externalId)}
         AND t.status = 'active'
+        AND (
+          COALESCE(t.token_type, 'fcm') <> 'vapid'
+          OR (
+            COALESCE(t.vapid_endpoint, '') <> ''
+            AND COALESCE(t.vapid_p256dh, '') <> ''
+            AND COALESCE(t.vapid_auth, '') <> ''
+          )
+        )
       ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC
       LIMIT 1
     `;
@@ -2855,14 +3540,24 @@ export const processAutomationJob = async (jobId: string) => {
       ? 'Missing active token.'
       : 'Missing active token. Waiting for token refresh.';
 
-    await sql`
-      UPDATE automation_jobs
-      SET status = ${shouldFail ? 'failed' : 'pending'},
-          error_message = ${errorMessage},
-          due_at = CASE WHEN ${shouldFail} THEN due_at ELSE NOW() + INTERVAL '1 minute' END,
-          updated_at = NOW()
-      WHERE id = ${jobId}
-    `;
+    if (shouldFail) {
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'failed',
+            error_message = ${errorMessage},
+            updated_at = NOW()
+        WHERE id = ${jobId}
+      `;
+    } else {
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'pending',
+            error_message = ${errorMessage},
+            due_at = NOW() + INTERVAL '1 minute',
+            updated_at = NOW()
+        WHERE id = ${jobId}
+      `;
+    }
     return { processed: false, error: errorMessage };
   }
 
@@ -2915,6 +3610,7 @@ export const processAutomationJob = async (jobId: string) => {
     if (claim.rule_key === 'welcome_subscriber' && payloadStepKey) {
       const welcomeConfig = parseWelcomeRuleConfig(ruleRows[0]?.config ?? null);
       const step = welcomeConfig.steps[payloadStepKey as WelcomeStepKey];
+      const welcomeStepOrder: WelcomeStepKey[] = ['reminder-1', 'reminder-2', 'reminder-3'];
 
       if (!step?.enabled) {
         await sql`
@@ -3013,6 +3709,79 @@ export const processAutomationJob = async (jobId: string) => {
         }
       }
 
+      const currentStepIndex = welcomeStepOrder.indexOf(payloadStepKey as WelcomeStepKey);
+      if (currentStepIndex > 0) {
+        const previousStepKey = welcomeStepOrder[currentStepIndex - 1];
+        const payloadExternalIdForOrdering = payload.externalId == null ? '' : String(payload.externalId);
+
+        const previousDeliveredRows = payloadExternalIdForOrdering
+          ? await sql`
+            SELECT d.id
+            FROM automation_deliveries d
+            JOIN automation_jobs j ON j.id = d.automation_job_id
+            WHERE d.shop_domain = ${claim.shop_domain}
+              AND d.rule_key = 'welcome_subscriber'
+              AND d.external_id = ${payloadExternalIdForOrdering}
+              AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+            ORDER BY d.delivered_at DESC
+            LIMIT 1
+          `
+          : claim.subscriber_id
+            ? await sql`
+              SELECT d.id
+              FROM automation_deliveries d
+              JOIN automation_jobs j ON j.id = d.automation_job_id
+              WHERE d.shop_domain = ${claim.shop_domain}
+                AND d.rule_key = 'welcome_subscriber'
+                AND d.subscriber_id = ${claim.subscriber_id}
+                AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+              ORDER BY d.delivered_at DESC
+              LIMIT 1
+            `
+            : [];
+
+        if (!previousDeliveredRows[0]?.id) {
+          const previousPendingRows = payloadExternalIdForOrdering
+            ? await sql`
+              SELECT id
+              FROM automation_jobs
+              WHERE shop_domain = ${claim.shop_domain}
+                AND rule_key = 'welcome_subscriber'
+                AND payload ->> 'externalId' = ${payloadExternalIdForOrdering}
+                AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                AND status IN ('pending', 'processing', 'sent')
+              ORDER BY created_at ASC
+              LIMIT 1
+            `
+            : claim.subscriber_id
+              ? await sql`
+                SELECT id
+                FROM automation_jobs
+                WHERE shop_domain = ${claim.shop_domain}
+                  AND rule_key = 'welcome_subscriber'
+                  AND subscriber_id = ${claim.subscriber_id}
+                  AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                  AND status IN ('pending', 'processing', 'sent')
+                ORDER BY created_at ASC
+                LIMIT 1
+              `
+              : [];
+
+          if (previousPendingRows[0]?.id) {
+            const waitMessage = `Waiting for previous welcome step (${previousStepKey}) before sending ${payloadStepKey}.`;
+            await sql`
+              UPDATE automation_jobs
+              SET status = 'pending',
+                  error_message = ${waitMessage},
+                  due_at = NOW() + INTERVAL '90 seconds',
+                  updated_at = NOW()
+              WHERE id = ${jobId}
+            `;
+            return { processed: false, error: waitMessage };
+          }
+        }
+      }
+
       const tokenDeliveryRows = await sql`
         SELECT d.automation_job_id
         FROM automation_deliveries d
@@ -3061,6 +3830,13 @@ export const processAutomationJob = async (jobId: string) => {
     if (claim.rule_key === 'cart_abandonment_30m' && payloadStepKey) {
       const cartConfig = parseCartRuleConfig(ruleRows[0]?.config ?? null);
       const step = cartConfig.steps[payloadStepKey as CartStepKey];
+      const cartStepOrder: CartStepKey[] = ['cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3'];
+      const payloadExternalId = payload.externalId == null ? '' : String(payload.externalId);
+      const payloadCartToken = payload.cartToken == null ? '' : String(payload.cartToken);
+      const payloadTriggeredAtRaw = payload.triggeredAt == null ? '' : String(payload.triggeredAt);
+      const payloadTriggeredAt = payloadTriggeredAtRaw && !Number.isNaN(Date.parse(payloadTriggeredAtRaw))
+        ? new Date(payloadTriggeredAtRaw)
+        : null;
 
       if (!step?.enabled) {
         await sql`
@@ -3087,6 +3863,371 @@ export const processAutomationJob = async (jobId: string) => {
           actionButtons: step.actionButtons ?? [],
         },
       };
+
+      const checkoutCompletedRows = payloadExternalId && payloadCartToken
+        ? await sql`
+          SELECT id
+          FROM subscriber_activity_events
+          WHERE shop_domain = ${claim.shop_domain}
+            AND event_type = 'checkout_complete'
+            AND (external_id = ${payloadExternalId} OR cart_token = ${payloadCartToken})
+            ${payloadTriggeredAt ? sql`AND created_at >= ${payloadTriggeredAt}` : sql``}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `
+        : payloadExternalId
+          ? await sql`
+            SELECT id
+            FROM subscriber_activity_events
+            WHERE shop_domain = ${claim.shop_domain}
+              AND event_type = 'checkout_complete'
+              AND external_id = ${payloadExternalId}
+              ${payloadTriggeredAt ? sql`AND created_at >= ${payloadTriggeredAt}` : sql``}
+            ORDER BY created_at DESC
+            LIMIT 1
+          `
+          : payloadCartToken
+            ? await sql`
+              SELECT id
+              FROM subscriber_activity_events
+              WHERE shop_domain = ${claim.shop_domain}
+                AND event_type = 'checkout_complete'
+                AND cart_token = ${payloadCartToken}
+                ${payloadTriggeredAt ? sql`AND created_at >= ${payloadTriggeredAt}` : sql``}
+              ORDER BY created_at DESC
+              LIMIT 1
+            `
+            : [];
+
+      if (checkoutCompletedRows[0]?.id) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Cart recovered before reminder send.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        return { processed: false, error: 'Cart recovered before reminder send.' };
+      }
+
+      const stepIndex = cartStepOrder.indexOf(payloadStepKey as CartStepKey);
+      if (stepIndex > 0) {
+        const previousStepKey = cartStepOrder[stepIndex - 1];
+        const hasIdentityForStepOrdering = Boolean(payloadExternalId || payloadCartToken || claim.subscriber_id);
+        const previousStepDeliveryRows = payloadExternalId && payloadCartToken && claim.subscriber_id
+          ? await sql`
+            SELECT d.automation_job_id
+            FROM automation_deliveries d
+            JOIN automation_jobs j ON j.id = d.automation_job_id
+            WHERE d.shop_domain = ${claim.shop_domain}
+              AND d.rule_key = 'cart_abandonment_30m'
+              AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+              AND (
+                d.external_id = ${payloadExternalId}
+                OR j.payload ->> 'cartToken' = ${payloadCartToken}
+                OR d.subscriber_id = ${claim.subscriber_id}
+              )
+            ORDER BY d.delivered_at DESC
+            LIMIT 1
+          `
+          : payloadExternalId && payloadCartToken
+            ? await sql`
+              SELECT d.automation_job_id
+              FROM automation_deliveries d
+              JOIN automation_jobs j ON j.id = d.automation_job_id
+              WHERE d.shop_domain = ${claim.shop_domain}
+                AND d.rule_key = 'cart_abandonment_30m'
+                AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                AND (d.external_id = ${payloadExternalId} OR j.payload ->> 'cartToken' = ${payloadCartToken})
+              ORDER BY d.delivered_at DESC
+              LIMIT 1
+            `
+            : payloadExternalId && claim.subscriber_id
+              ? await sql`
+                SELECT d.automation_job_id
+                FROM automation_deliveries d
+                JOIN automation_jobs j ON j.id = d.automation_job_id
+                WHERE d.shop_domain = ${claim.shop_domain}
+                  AND d.rule_key = 'cart_abandonment_30m'
+                  AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                  AND (d.external_id = ${payloadExternalId} OR d.subscriber_id = ${claim.subscriber_id})
+                ORDER BY d.delivered_at DESC
+                LIMIT 1
+              `
+              : payloadCartToken && claim.subscriber_id
+                ? await sql`
+                  SELECT d.automation_job_id
+                  FROM automation_deliveries d
+                  JOIN automation_jobs j ON j.id = d.automation_job_id
+                  WHERE d.shop_domain = ${claim.shop_domain}
+                    AND d.rule_key = 'cart_abandonment_30m'
+                    AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                    AND (j.payload ->> 'cartToken' = ${payloadCartToken} OR d.subscriber_id = ${claim.subscriber_id})
+                  ORDER BY d.delivered_at DESC
+                  LIMIT 1
+                `
+                : payloadExternalId
+                  ? await sql`
+                    SELECT d.automation_job_id
+                    FROM automation_deliveries d
+                    JOIN automation_jobs j ON j.id = d.automation_job_id
+                    WHERE d.shop_domain = ${claim.shop_domain}
+                      AND d.rule_key = 'cart_abandonment_30m'
+                      AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                      AND d.external_id = ${payloadExternalId}
+                    ORDER BY d.delivered_at DESC
+                    LIMIT 1
+                  `
+                  : payloadCartToken
+                    ? await sql`
+                      SELECT d.automation_job_id
+                      FROM automation_deliveries d
+                      JOIN automation_jobs j ON j.id = d.automation_job_id
+                      WHERE d.shop_domain = ${claim.shop_domain}
+                        AND d.rule_key = 'cart_abandonment_30m'
+                        AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                        AND j.payload ->> 'cartToken' = ${payloadCartToken}
+                      ORDER BY d.delivered_at DESC
+                      LIMIT 1
+                    `
+                    : claim.subscriber_id
+                      ? await sql`
+                        SELECT d.automation_job_id
+                        FROM automation_deliveries d
+                        JOIN automation_jobs j ON j.id = d.automation_job_id
+                        WHERE d.shop_domain = ${claim.shop_domain}
+                          AND d.rule_key = 'cart_abandonment_30m'
+                          AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                          AND d.subscriber_id = ${claim.subscriber_id}
+                        ORDER BY d.delivered_at DESC
+                        LIMIT 1
+                      `
+                      : [];
+
+        if (!previousStepDeliveryRows[0]?.automation_job_id && hasIdentityForStepOrdering) {
+          const previousStepJobRows = payloadExternalId && payloadCartToken && claim.subscriber_id
+            ? await sql`
+              SELECT status, attempts, error_message
+              FROM automation_jobs
+              WHERE shop_domain = ${claim.shop_domain}
+                AND rule_key = 'cart_abandonment_30m'
+                AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                AND (
+                  payload ->> 'externalId' = ${payloadExternalId}
+                  OR payload ->> 'cartToken' = ${payloadCartToken}
+                  OR subscriber_id = ${claim.subscriber_id}
+                )
+              ORDER BY created_at DESC
+              LIMIT 1
+            `
+            : payloadExternalId && payloadCartToken
+              ? await sql`
+                SELECT status, attempts, error_message
+                FROM automation_jobs
+                WHERE shop_domain = ${claim.shop_domain}
+                  AND rule_key = 'cart_abandonment_30m'
+                  AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                  AND (
+                    payload ->> 'externalId' = ${payloadExternalId}
+                    OR payload ->> 'cartToken' = ${payloadCartToken}
+                  )
+                ORDER BY created_at DESC
+                LIMIT 1
+              `
+              : payloadExternalId && claim.subscriber_id
+                ? await sql`
+                  SELECT status, attempts, error_message
+                  FROM automation_jobs
+                  WHERE shop_domain = ${claim.shop_domain}
+                    AND rule_key = 'cart_abandonment_30m'
+                    AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                    AND (
+                      payload ->> 'externalId' = ${payloadExternalId}
+                      OR subscriber_id = ${claim.subscriber_id}
+                    )
+                  ORDER BY created_at DESC
+                  LIMIT 1
+                `
+                : payloadCartToken && claim.subscriber_id
+                  ? await sql`
+                    SELECT status, attempts, error_message
+                    FROM automation_jobs
+                    WHERE shop_domain = ${claim.shop_domain}
+                      AND rule_key = 'cart_abandonment_30m'
+                      AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                      AND (
+                        payload ->> 'cartToken' = ${payloadCartToken}
+                        OR subscriber_id = ${claim.subscriber_id}
+                      )
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                  `
+                  : payloadExternalId
+                    ? await sql`
+                      SELECT status, attempts, error_message
+                      FROM automation_jobs
+                      WHERE shop_domain = ${claim.shop_domain}
+                        AND rule_key = 'cart_abandonment_30m'
+                        AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                        AND payload ->> 'externalId' = ${payloadExternalId}
+                      ORDER BY created_at DESC
+                      LIMIT 1
+                    `
+                    : payloadCartToken
+                      ? await sql`
+                        SELECT status, attempts, error_message
+                        FROM automation_jobs
+                        WHERE shop_domain = ${claim.shop_domain}
+                          AND rule_key = 'cart_abandonment_30m'
+                          AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                          AND payload ->> 'cartToken' = ${payloadCartToken}
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                      `
+                      : claim.subscriber_id
+                        ? await sql`
+                          SELECT status, attempts, error_message
+                          FROM automation_jobs
+                          WHERE shop_domain = ${claim.shop_domain}
+                            AND rule_key = 'cart_abandonment_30m'
+                            AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                            AND subscriber_id = ${claim.subscriber_id}
+                          ORDER BY created_at DESC
+                          LIMIT 1
+                        `
+                        : [];
+
+          const previousStepStatus = previousStepJobRows[0]?.status == null
+            ? ''
+            : String(previousStepJobRows[0].status).toLowerCase();
+          const previousStepAttempts = Number(previousStepJobRows[0]?.attempts ?? 0);
+          const previousStepError = String(previousStepJobRows[0]?.error_message ?? '').trim();
+          const previousStepLooksStuck =
+            previousStepStatus === 'pending'
+            && previousStepAttempts >= 3
+            && previousStepError.length > 0;
+
+          if ((previousStepStatus === 'pending' && !previousStepLooksStuck) || previousStepStatus === 'processing' || previousStepStatus === 'sent') {
+            const waitMessage = `Waiting for previous cart reminder step (${previousStepKey}) before sending ${payloadStepKey}.`;
+            await sql`
+              UPDATE automation_jobs
+              SET status = 'pending',
+                  error_message = ${waitMessage},
+                  due_at = NOW() + INTERVAL '1 minute',
+                  updated_at = NOW()
+              WHERE id = ${jobId}
+            `;
+            return { processed: false, error: waitMessage };
+          }
+
+          if (previousStepStatus === 'skipped' || previousStepStatus === 'failed') {
+            const skipMessage = `Skipping ${payloadStepKey} because previous cart reminder step (${previousStepKey}) did not deliver.`;
+            await sql`
+              UPDATE automation_jobs
+              SET status = 'skipped', error_message = ${skipMessage}, updated_at = NOW()
+              WHERE id = ${jobId}
+            `;
+            return { processed: false, error: skipMessage };
+          }
+        }
+      }
+
+      const existingStepDeliveryRows = payloadExternalId && payloadCartToken && claim.subscriber_id
+        ? await sql`
+          SELECT d.automation_job_id
+          FROM automation_deliveries d
+          JOIN automation_jobs j ON j.id = d.automation_job_id
+          WHERE d.shop_domain = ${claim.shop_domain}
+            AND d.rule_key = 'cart_abandonment_30m'
+            AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+            AND (
+              d.external_id = ${payloadExternalId}
+              OR j.payload ->> 'cartToken' = ${payloadCartToken}
+              OR d.subscriber_id = ${claim.subscriber_id}
+            )
+          ORDER BY d.delivered_at DESC
+          LIMIT 1
+        `
+        : payloadExternalId && payloadCartToken
+          ? await sql`
+            SELECT d.automation_job_id
+            FROM automation_deliveries d
+            JOIN automation_jobs j ON j.id = d.automation_job_id
+            WHERE d.shop_domain = ${claim.shop_domain}
+              AND d.rule_key = 'cart_abandonment_30m'
+              AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+              AND (d.external_id = ${payloadExternalId} OR j.payload ->> 'cartToken' = ${payloadCartToken})
+            ORDER BY d.delivered_at DESC
+            LIMIT 1
+          `
+          : payloadExternalId && claim.subscriber_id
+            ? await sql`
+              SELECT d.automation_job_id
+              FROM automation_deliveries d
+              JOIN automation_jobs j ON j.id = d.automation_job_id
+              WHERE d.shop_domain = ${claim.shop_domain}
+                AND d.rule_key = 'cart_abandonment_30m'
+                AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+                AND (d.external_id = ${payloadExternalId} OR d.subscriber_id = ${claim.subscriber_id})
+              ORDER BY d.delivered_at DESC
+              LIMIT 1
+            `
+            : payloadCartToken && claim.subscriber_id
+              ? await sql`
+                SELECT d.automation_job_id
+                FROM automation_deliveries d
+                JOIN automation_jobs j ON j.id = d.automation_job_id
+                WHERE d.shop_domain = ${claim.shop_domain}
+                  AND d.rule_key = 'cart_abandonment_30m'
+                  AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+                  AND (j.payload ->> 'cartToken' = ${payloadCartToken} OR d.subscriber_id = ${claim.subscriber_id})
+                ORDER BY d.delivered_at DESC
+                LIMIT 1
+              `
+              : payloadExternalId
+                ? await sql`
+                  SELECT d.automation_job_id
+                  FROM automation_deliveries d
+                  JOIN automation_jobs j ON j.id = d.automation_job_id
+                  WHERE d.shop_domain = ${claim.shop_domain}
+                    AND d.rule_key = 'cart_abandonment_30m'
+                    AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+                    AND d.external_id = ${payloadExternalId}
+                  ORDER BY d.delivered_at DESC
+                  LIMIT 1
+                `
+                : payloadCartToken
+                  ? await sql`
+                    SELECT d.automation_job_id
+                    FROM automation_deliveries d
+                    JOIN automation_jobs j ON j.id = d.automation_job_id
+                    WHERE d.shop_domain = ${claim.shop_domain}
+                      AND d.rule_key = 'cart_abandonment_30m'
+                      AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+                      AND j.payload ->> 'cartToken' = ${payloadCartToken}
+                    ORDER BY d.delivered_at DESC
+                    LIMIT 1
+                  `
+                  : claim.subscriber_id
+                    ? await sql`
+                      SELECT d.automation_job_id
+                      FROM automation_deliveries d
+                      JOIN automation_jobs j ON j.id = d.automation_job_id
+                      WHERE d.shop_domain = ${claim.shop_domain}
+                        AND d.rule_key = 'cart_abandonment_30m'
+                        AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+                        AND d.subscriber_id = ${claim.subscriber_id}
+                      ORDER BY d.delivered_at DESC
+                      LIMIT 1
+                    `
+                    : [];
+
+      if (existingStepDeliveryRows[0]?.automation_job_id) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = 'Cart reminder already delivered for this step.', updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+        return { processed: false, error: 'Cart reminder already delivered for this step.' };
+      }
     }
 
     if (claim.rule_key === 'browse_abandonment_15m' && payloadStepKey) {
@@ -3320,22 +4461,13 @@ export const processAutomationJob = async (jobId: string) => {
       const messaging = getFirebaseAdminMessaging();
       const message = {
         token,
-        notification: {
-          title: payload.title,
-          body: payload.body,
-          imageUrl: payload.imageUrl ?? undefined,
-        },
-        webpush: {
-          fcmOptions: { link: trackedTargetUrl ?? undefined },
-          notification: {
-            icon: payload.iconUrl ?? undefined,
-            image: payload.imageUrl ?? undefined,
-            actions: automationActions.length > 0 ? automationActions : undefined,
-          },
-        },
         data: {
           source: 'automation',
           ruleKey: String(payload.ruleKey ?? ''),
+          title: payload.title ?? 'Push Eagle',
+          body: payload.body ?? '',
+          icon: payload.iconUrl ?? '',
+          image: payload.imageUrl ?? '',
           url: trackedTargetUrl ?? payload.targetUrl ?? '',
           button1Url: automationButton1Url ?? '',
           button2Url: automationButton2Url ?? '',
@@ -3365,7 +4497,9 @@ export const processAutomationJob = async (jobId: string) => {
         token_id,
         external_id,
         target_url,
-        fcm_message_id
+        fcm_message_id,
+        user_agent,
+        ip_address
       )
       VALUES (
         ${claim.id},
@@ -3375,18 +4509,21 @@ export const processAutomationJob = async (jobId: string) => {
         ${deliveryTokenId},
         ${payload.externalId ?? null},
         ${payload.targetUrl ?? null},
-        ${fcmMessageId}
+        ${fcmMessageId},
+        ${activeTokenRow?.user_agent ? String(activeTokenRow.user_agent) : null},
+        ${null}
       )
     `;
 
     return { processed: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to send automation message.';
+    const retryInterval = claim.rule_key === 'welcome_subscriber' ? '1 minute' : '5 minutes';
     await sql`
       UPDATE automation_jobs
       SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
           error_message = ${message},
-          due_at = CASE WHEN attempts >= 5 THEN due_at ELSE NOW() + INTERVAL '5 minutes' END,
+          due_at = CASE WHEN attempts >= 5 THEN due_at ELSE NOW() + ${retryInterval}::interval END,
           updated_at = NOW()
       WHERE id = ${jobId}
     `;
@@ -3398,7 +4535,7 @@ export const processAutomationJob = async (jobId: string) => {
 export const recordSubscriberActivity = async (input: {
   shopDomain: string;
   externalId: string;
-  eventType: 'page_view' | 'product_view' | 'add_to_cart' | 'checkout_start';
+  eventType: 'page_view' | 'product_view' | 'add_to_cart' | 'checkout_start' | 'checkout_complete';
   pageUrl?: string | null;
   productId?: string | null;
   cartToken?: string | null;
@@ -3502,7 +4639,25 @@ export const recordSubscriberActivity = async (input: {
     const rule = await getRuleConfig(input.shopDomain, 'cart_abandonment_30m');
     if (rule.enabled) {
       const cartConfig = parseCartRuleConfig(rule.config);
-      const targets = await listAutomationTargets({ shopDomain: input.shopDomain, externalId: input.externalId });
+      const clientId = normalizeClientId(input.metadata);
+      let targets = await listAutomationTargets({ shopDomain: input.shopDomain, externalId: input.externalId });
+
+      if (targets.length === 0) {
+        const externalIdCandidates = await resolveAutomationExternalIds({
+          shopDomain: input.shopDomain,
+          externalId: input.externalId,
+          cartToken: input.cartToken,
+          clientId,
+        });
+
+        if (externalIdCandidates.length > 0) {
+          targets = await listAutomationTargetsByExternalIds(input.shopDomain, externalIdCandidates);
+        }
+      }
+
+      if (targets.length === 0 && clientId) {
+        targets = await listAutomationTargetsByClientId(input.shopDomain, clientId);
+      }
 
       for (const stepKey of Object.keys(cartConfig.steps) as CartStepKey[]) {
         const step = cartConfig.steps[stepKey];
@@ -4902,7 +6057,12 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
         continue;
       }
 
-      const dueAt = new Date(now + step.delayMinutes * 60_000);
+      // Small scheduler-boundary compensation so minute-level cron polling does
+      // not systematically deliver delayed reminders one minute late.
+      const adjustedDelayMs = step.delayMinutes > 0
+        ? Math.max(0, step.delayMinutes * 60_000 - 45_000)
+        : 0;
+      const dueAt = new Date(now + adjustedDelayMs);
 
       const jobId = await enqueueAutomationJob({
         shopDomain: input.shopDomain,
@@ -5969,7 +7129,7 @@ export const getAttributionSettings = async (shopDomain: string) => {
   `;
 
   const settingsRows = await sql`
-    SELECT attribution_model, click_window_days, impression_window_days
+    SELECT attribution_model, attribution_credit_mode, click_window_days, impression_window_days
     FROM merchant_settings
     WHERE shop_domain = ${shopDomain}
     LIMIT 1
@@ -5977,8 +7137,9 @@ export const getAttributionSettings = async (shopDomain: string) => {
 
   return {
     attributionModel: (settingsRows[0]?.attribution_model as 'click' | 'impression') ?? 'impression',
-    clickWindowDays: Number(settingsRows[0]?.click_window_days ?? 2),
-    impressionWindowDays: Number(settingsRows[0]?.impression_window_days ?? 3),
+    attributionCreditMode: (settingsRows[0]?.attribution_credit_mode as 'last_touch' | 'all_touches') ?? 'last_touch',
+    clickWindowDays: Number(settingsRows[0]?.click_window_days ?? 7),
+    impressionWindowDays: Number(settingsRows[0]?.impression_window_days ?? 7),
   };
 };
 
@@ -6160,10 +7321,18 @@ export const updateAttributionSettings = async (input: UpdateAttributionSettings
   await ensureMerchant(input.shopDomain);
 
   await sql`
-    INSERT INTO merchant_settings (shop_domain, attribution_model, click_window_days, impression_window_days, updated_at)
+    INSERT INTO merchant_settings (
+      shop_domain,
+      attribution_model,
+      attribution_credit_mode,
+      click_window_days,
+      impression_window_days,
+      updated_at
+    )
     VALUES (
       ${input.shopDomain},
       ${input.attributionModel},
+      ${input.attributionCreditMode},
       ${input.clickWindowDays},
       ${input.impressionWindowDays},
       NOW()
@@ -6171,6 +7340,7 @@ export const updateAttributionSettings = async (input: UpdateAttributionSettings
     ON CONFLICT (shop_domain)
     DO UPDATE SET
       attribution_model = EXCLUDED.attribution_model,
+      attribution_credit_mode = EXCLUDED.attribution_credit_mode,
       click_window_days = EXCLUDED.click_window_days,
       impression_window_days = EXCLUDED.impression_window_days,
       updated_at = NOW()
@@ -6380,7 +7550,7 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
     WHERE shop_domain = ${shopDomain}
       AND rule_key = 'welcome_subscriber'
       AND status = 'processing'
-      AND updated_at < NOW() - INTERVAL '10 minutes'
+        AND updated_at < NOW() - INTERVAL '2 minutes'
       AND COALESCE(payload -> 'metadata' ->> 'stepKey', '') IN ('reminder-2', 'reminder-3')
   `;
 
@@ -6478,7 +7648,7 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
     inferredIssues.push('Some delayed jobs are failed; review recent error_message values and token_status.');
   }
   if (summary.staleProcessing > 0) {
-    inferredIssues.push('Stale processing jobs detected (>10m); worker interruption/backpressure likely occurred.');
+    inferredIssues.push('Stale processing jobs detected (>2m); worker interruption/backpressure likely occurred.');
   }
   if (summary.reminder2.sent === 0 && summary.reminder2.pending === 0 && summary.reminder2.failed === 0) {
     inferredIssues.push('No reminder-2 jobs found; welcome step enqueue path may not be creating delayed jobs.');
@@ -6570,15 +7740,57 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
   const stepConfig = {
     'reminder-2': {
       enabled: Boolean(welcomeConfig.steps['reminder-2'].enabled),
+      delayMinutes: Number(welcomeConfig.steps['reminder-2'].delayMinutes ?? 0),
       targetUrl: welcomeConfig.steps['reminder-2'].targetUrl ?? null,
       actionButtons: welcomeConfig.steps['reminder-2'].actionButtons ?? [],
     },
     'reminder-3': {
       enabled: Boolean(welcomeConfig.steps['reminder-3'].enabled),
+      delayMinutes: Number(welcomeConfig.steps['reminder-3'].delayMinutes ?? 0),
       targetUrl: welcomeConfig.steps['reminder-3'].targetUrl ?? null,
       actionButtons: welcomeConfig.steps['reminder-3'].actionButtons ?? [],
     },
   };
+
+  const lagSamples = (recentRows as Array<Record<string, unknown>>)
+    .filter((row) => (String(row.step_key ?? '') === 'reminder-2' || String(row.step_key ?? '') === 'reminder-3') && row.sent_at && row.due_at)
+    .map((row) => {
+      const sentAt = new Date(String(row.sent_at)).getTime();
+      const dueAt = new Date(String(row.due_at)).getTime();
+      const lagMinutes = Math.max(0, Math.round(((sentAt - dueAt) / 60000) * 100) / 100);
+      return {
+        stepKey: String(row.step_key ?? ''),
+        lagMinutes,
+      };
+    })
+    .filter((sample) => Number.isFinite(sample.lagMinutes));
+
+  const lagMinutesByStep = {
+    reminder2: lagSamples.filter((sample) => sample.stepKey === 'reminder-2').map((sample) => sample.lagMinutes),
+    reminder3: lagSamples.filter((sample) => sample.stepKey === 'reminder-3').map((sample) => sample.lagMinutes),
+  };
+
+  const average = (values: number[]) => {
+    if (values.length === 0) {
+      return null;
+    }
+    return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 100) / 100;
+  };
+
+  const max = (values: number[]) => {
+    if (values.length === 0) {
+      return null;
+    }
+    return Math.round(Math.max(...values) * 100) / 100;
+  };
+
+  const delayedReminder2 = lagMinutesByStep.reminder2.filter((value) => value >= 2).length;
+  const delayedReminder3 = lagMinutesByStep.reminder3.filter((value) => value >= 2).length;
+  if (delayedReminder2 > 0 || delayedReminder3 > 0) {
+    inferredIssues.push(
+      `Observed delayed sends: reminder-2 delayed >=2m ${delayedReminder2} times, reminder-3 delayed >=2m ${delayedReminder3} times.`,
+    );
+  }
 
   for (const stepKey of ['reminder-2', 'reminder-3'] as const) {
     const buttons = stepConfig[stepKey].actionButtons;
@@ -6606,6 +7818,18 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
     checkedAt: new Date().toISOString(),
     summary,
     stepConfig,
+    sendLagDiagnostics: {
+      reminder2: {
+        sampleCount: lagMinutesByStep.reminder2.length,
+        averageLagMinutes: average(lagMinutesByStep.reminder2),
+        maxLagMinutes: max(lagMinutesByStep.reminder2),
+      },
+      reminder3: {
+        sampleCount: lagMinutesByStep.reminder3.length,
+        averageLagMinutes: average(lagMinutesByStep.reminder3),
+        maxLagMinutes: max(lagMinutesByStep.reminder3),
+      },
+    },
     recentErrorsByStep,
     reminderMedia,
     inferredIssues,
@@ -6714,6 +7938,7 @@ export const trackCampaignClick = async (input: TrackCampaignClickInput) => {
 export const trackAutomationClick = async (input: TrackAutomationClickInput) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const normalizedExternalId = input.externalId?.trim() || null;
 
   const subscriberRows = input.externalId
     ? await sql`
@@ -6757,7 +7982,7 @@ export const trackAutomationClick = async (input: TrackAutomationClickInput) => 
       FROM automation_deliveries
       WHERE shop_domain = ${input.shopDomain}
         AND rule_key = ${input.ruleKey}
-        AND (${input.externalId ?? null} IS NULL OR external_id = ${input.externalId ?? null})
+        ${normalizedExternalId ? sql`AND external_id = ${normalizedExternalId}` : sql``}
         AND clicked_at IS NULL
       ORDER BY delivered_at DESC
       LIMIT 1
@@ -6773,14 +7998,246 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
   const occurredAt = input.occurredAt ? new Date(input.occurredAt) : new Date();
 
   const normalizedEmail = input.email?.trim().toLowerCase() ?? null;
+  const normalizedCustomerId = input.customerId?.trim() || null;
+  const externalIdCartToken = (() => {
+    const external = String(input.externalId ?? '').trim();
+    if (!external.startsWith('cart:')) {
+      return null;
+    }
+
+    const parts = external.split(':');
+    return parts.length >= 3 ? parts.slice(2).join(':') : null;
+  })();
+  const resolvedCartToken = input.cartToken?.trim() || externalIdCartToken;
   const emailExternalId = normalizedEmail
     ? `email:${createHash('sha256').update(normalizedEmail).digest('hex').slice(0, 24)}`
     : null;
-  const customerExternalId = input.customerId?.trim() ? `shopify_customer:${input.customerId.trim()}` : null;
+  const customerExternalId = normalizedCustomerId ? `shopify_customer:${normalizedCustomerId}` : null;
+
+  const linkedExternalRows = await (() => {
+    if (normalizedCustomerId && normalizedEmail) {
+      return sql`
+        SELECT external_id
+        FROM shopify_customers
+        WHERE shop_domain = ${input.shopDomain}
+          AND external_id IS NOT NULL
+          AND (customer_id = ${normalizedCustomerId} OR LOWER(email) = ${normalizedEmail})
+        ORDER BY updated_at DESC
+        LIMIT 25
+      `;
+    }
+    if (normalizedCustomerId) {
+      return sql`
+        SELECT external_id
+        FROM shopify_customers
+        WHERE shop_domain = ${input.shopDomain}
+          AND external_id IS NOT NULL
+          AND customer_id = ${normalizedCustomerId}
+        ORDER BY updated_at DESC
+        LIMIT 25
+      `;
+    }
+    if (normalizedEmail) {
+      return sql`
+        SELECT external_id
+        FROM shopify_customers
+        WHERE shop_domain = ${input.shopDomain}
+          AND external_id IS NOT NULL
+          AND LOWER(email) = ${normalizedEmail}
+        ORDER BY updated_at DESC
+        LIMIT 25
+      `;
+    }
+    return Promise.resolve([] as Array<{ external_id: string | null }>);
+  })();
+
+  const historicalOrderExternalRows = await (() => {
+    if (normalizedCustomerId && normalizedEmail) {
+      return sql`
+        SELECT external_id
+        FROM shopify_orders
+        WHERE shop_domain = ${input.shopDomain}
+          AND external_id IS NOT NULL
+          AND external_id <> ''
+          AND (customer_id = ${normalizedCustomerId} OR LOWER(email) = ${normalizedEmail})
+        ORDER BY created_at DESC
+        LIMIT 25
+      `;
+    }
+    if (normalizedCustomerId) {
+      return sql`
+        SELECT external_id
+        FROM shopify_orders
+        WHERE shop_domain = ${input.shopDomain}
+          AND external_id IS NOT NULL
+          AND external_id <> ''
+          AND customer_id = ${normalizedCustomerId}
+        ORDER BY created_at DESC
+        LIMIT 25
+      `;
+    }
+    if (normalizedEmail) {
+      return sql`
+        SELECT external_id
+        FROM shopify_orders
+        WHERE shop_domain = ${input.shopDomain}
+          AND external_id IS NOT NULL
+          AND external_id <> ''
+          AND LOWER(email) = ${normalizedEmail}
+        ORDER BY created_at DESC
+        LIMIT 25
+      `;
+    }
+    return Promise.resolve([] as Array<{ external_id: string | null }>);
+  })();
+
+  const cartExternalRows = resolvedCartToken
+    ? await sql`
+      WITH cart_related AS (
+        SELECT
+          external_id,
+          created_at,
+          COALESCE(metadata ->> 'clientId', '') AS client_id
+        FROM subscriber_activity_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND cart_token = ${resolvedCartToken}
+          AND created_at >= ${new Date(occurredAt.getTime() - 14 * 24 * 60 * 60 * 1000)}
+
+        UNION ALL
+
+        SELECT
+          external_id,
+          created_at,
+          COALESCE(client_id, '') AS client_id
+        FROM pixel_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND cart_token = ${resolvedCartToken}
+          AND created_at >= ${new Date(occurredAt.getTime() - 14 * 24 * 60 * 60 * 1000)}
+      ),
+      stitched AS (
+        SELECT external_id, created_at
+        FROM cart_related
+
+        UNION ALL
+
+        SELECT e.external_id, e.created_at
+        FROM subscriber_activity_events e
+        WHERE e.shop_domain = ${input.shopDomain}
+          AND e.created_at >= ${new Date(occurredAt.getTime() - 14 * 24 * 60 * 60 * 1000)}
+          AND COALESCE(e.metadata ->> 'clientId', '') = ANY(
+            ARRAY(SELECT DISTINCT client_id FROM cart_related WHERE client_id <> '')
+          )
+
+        UNION ALL
+
+        SELECT p.external_id, p.created_at
+        FROM pixel_events p
+        WHERE p.shop_domain = ${input.shopDomain}
+          AND p.created_at >= ${new Date(occurredAt.getTime() - 14 * 24 * 60 * 60 * 1000)}
+          AND COALESCE(p.client_id, '') = ANY(
+            ARRAY(SELECT DISTINCT client_id FROM cart_related WHERE client_id <> '')
+          )
+      )
+      SELECT external_id
+      FROM stitched
+      WHERE external_id IS NOT NULL
+        AND external_id <> ''
+      ORDER BY
+        CASE
+          WHEN external_id LIKE 'anon:%' THEN 0
+          WHEN external_id LIKE 'shopify_customer:%' THEN 1
+          WHEN external_id LIKE 'email:%' THEN 2
+          WHEN external_id LIKE 'cart:%' THEN 3
+          WHEN external_id LIKE 'px:%' THEN 4
+          ELSE 5
+        END,
+        created_at DESC
+      LIMIT 50
+    `
+    : [];
+
+  const clientExternalRows = input.clientId
+    ? await sql`
+      SELECT external_id
+      FROM (
+        SELECT external_id, created_at
+        FROM subscriber_activity_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND COALESCE(metadata ->> 'clientId', '') = ${input.clientId}
+          AND created_at >= ${new Date(occurredAt.getTime() - 14 * 24 * 60 * 60 * 1000)}
+
+        UNION ALL
+
+        SELECT external_id, created_at
+        FROM pixel_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND COALESCE(client_id, '') = ${input.clientId}
+          AND created_at >= ${new Date(occurredAt.getTime() - 14 * 24 * 60 * 60 * 1000)}
+      ) stitched
+      WHERE external_id IS NOT NULL
+        AND external_id <> ''
+      ORDER BY created_at DESC
+      LIMIT 50
+    `
+    : [];
+
+  const fingerprintExternalRows = await (() => {
+    const ip = input.ipAddress?.trim() || null;
+    const ua = input.userAgent?.trim() || null;
+    if (!ip || !ua) {
+      return Promise.resolve([] as Array<{ external_id: string | null }>);
+    }
+
+    return sql`
+      SELECT external_id
+      FROM (
+        SELECT external_id, created_at
+        FROM pixel_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND COALESCE(metadata ->> 'requestIp', '') = ${ip}
+          AND COALESCE(metadata ->> 'requestUserAgent', '') = ${ua}
+          AND created_at >= ${new Date(occurredAt.getTime() - 7 * 24 * 60 * 60 * 1000)}
+
+        UNION ALL
+
+        SELECT external_id, created_at
+        FROM subscriber_activity_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND COALESCE(metadata ->> 'requestIp', '') = ${ip}
+          AND COALESCE(metadata ->> 'requestUserAgent', '') = ${ua}
+          AND created_at >= ${new Date(occurredAt.getTime() - 7 * 24 * 60 * 60 * 1000)}
+      ) stitched
+      WHERE external_id IS NOT NULL
+        AND external_id <> ''
+        AND (
+          external_id LIKE 'anon:%'
+          OR external_id LIKE 'cart:%'
+          OR external_id LIKE 'px:%'
+        )
+      ORDER BY
+        CASE
+          WHEN external_id LIKE 'anon:%' THEN 0
+          WHEN external_id LIKE 'cart:%' THEN 1
+          WHEN external_id LIKE 'px:%' THEN 2
+          ELSE 3
+        END,
+        created_at DESC
+      LIMIT 50
+    `;
+  })();
 
   const externalIdCandidates = Array.from(
     new Set(
-      [input.externalId?.trim() ?? null, customerExternalId, emailExternalId].filter((value): value is string => Boolean(value)),
+      [
+        input.externalId?.trim() ?? null,
+        customerExternalId,
+        emailExternalId,
+        ...linkedExternalRows.map((row) => (row.external_id ? String(row.external_id) : null)),
+        ...historicalOrderExternalRows.map((row) => (row.external_id ? String(row.external_id) : null)),
+        ...cartExternalRows.map((row) => (row.external_id ? String(row.external_id) : null)),
+        ...clientExternalRows.map((row) => (row.external_id ? String(row.external_id) : null)),
+        ...fingerprintExternalRows.map((row) => (row.external_id ? String(row.external_id) : null)),
+      ].filter((value): value is string => Boolean(value)),
     ),
   );
 
@@ -6818,143 +8275,561 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     return { attributed: true, campaignId: null, model: settings.attributionModel };
   }
 
-  if (settings.attributionModel === 'click') {
-    const clickWindowHours = Math.max(1, settings.clickWindowDays) * 24;
-    const clickCandidates = externalIdCandidates.length > 0
+  type CampaignTouch = {
+    id: number;
+    campaignId: string;
+    touchedAt: Date;
+    table: 'campaign_clicks' | 'campaign_deliveries';
+  };
+  type AutomationTouch = {
+    id: number;
+    ruleKey: string;
+    touchedAt: Date;
+    table: 'automation_clicks' | 'automation_deliveries';
+  };
+
+  const automationRuleKeyFromCampaign = (() => {
+    const value = String(input.campaignId ?? '').trim();
+    if (!value) {
+      return null;
+    }
+
+    const allowedRuleKeys = new Set<AutomationRuleKey>([
+      'welcome_subscriber',
+      'browse_abandonment_15m',
+      'cart_abandonment_30m',
+      'checkout_abandonment_30m',
+      'shipping_notifications',
+      'back_in_stock',
+      'price_drop',
+      'win_back_7d',
+      'post_purchase_followup',
+    ]);
+
+    return allowedRuleKeys.has(value as AutomationRuleKey) ? (value as AutomationRuleKey) : null;
+  })();
+
+  const fetchAutomationFingerprintFallback = async (ruleKey?: AutomationRuleKey | null) => {
+    const ipAddress = input.ipAddress?.trim() || null;
+    const userAgent = input.userAgent?.trim() || null;
+
+    if (!ipAddress && !userAgent) {
+      return [] as AutomationTouch[];
+    }
+
+    let rows: Array<{ id: number | string; rule_key: string; clicked_at: string | Date }> = [];
+
+    if (ipAddress && userAgent) {
+      rows = ruleKey
+        ? await sql`
+          SELECT id, rule_key, clicked_at
+          FROM automation_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND rule_key = ${ruleKey}
+            AND ip_address = ${ipAddress}
+            AND user_agent = ${userAgent}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>
+        : await sql`
+          SELECT id, rule_key, clicked_at
+          FROM automation_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND ip_address = ${ipAddress}
+            AND user_agent = ${userAgent}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>;
+    } else if (ipAddress) {
+      rows = ruleKey
+        ? await sql`
+          SELECT id, rule_key, clicked_at
+          FROM automation_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND rule_key = ${ruleKey}
+            AND ip_address = ${ipAddress}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>
+        : await sql`
+          SELECT id, rule_key, clicked_at
+          FROM automation_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND ip_address = ${ipAddress}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>;
+    } else if (userAgent) {
+      rows = ruleKey
+        ? await sql`
+          SELECT id, rule_key, clicked_at
+          FROM automation_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND rule_key = ${ruleKey}
+            AND user_agent = ${userAgent}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>
+        : await sql`
+          SELECT id, rule_key, clicked_at
+          FROM automation_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND user_agent = ${userAgent}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>;
+    }
+
+    return rows.map((row) => ({
+      id: Number(row.id),
+      ruleKey: String(row.rule_key),
+      touchedAt: new Date(String(row.clicked_at)),
+      table: 'automation_clicks' as const,
+    }));
+  };
+
+  const fetchAutomationDeliveryFingerprintFallback = async (ruleKey?: AutomationRuleKey | null) => {
+    const userAgent = input.userAgent?.trim() || null;
+    if (!userAgent) {
+      return [] as AutomationTouch[];
+    }
+
+    const rows = ruleKey
       ? await sql`
-        SELECT c.id, c.campaign_id
+        SELECT id, rule_key, delivered_at
+        FROM automation_deliveries
+        WHERE shop_domain = ${input.shopDomain}
+          AND delivered_at >= ${windowStart}
+          AND rule_key = ${ruleKey}
+          AND user_agent = ${userAgent}
+        ORDER BY delivered_at DESC
+        LIMIT 20
+      `
+      : await sql`
+        SELECT id, rule_key, delivered_at
+        FROM automation_deliveries
+        WHERE shop_domain = ${input.shopDomain}
+          AND delivered_at >= ${windowStart}
+          AND user_agent = ${userAgent}
+        ORDER BY delivered_at DESC
+        LIMIT 20
+      `;
+
+    return rows.map((row) => ({
+      id: Number(row.id),
+      ruleKey: String(row.rule_key),
+      touchedAt: new Date(String(row.delivered_at)),
+      table: 'automation_deliveries' as const,
+    }));
+  };
+
+  const windowDays = settings.attributionModel === 'click'
+    ? Math.max(1, settings.clickWindowDays)
+    : Math.max(1, settings.impressionWindowDays);
+  const windowStart = new Date(occurredAt.getTime() - windowDays * 24 * 60 * 60 * 1000);
+
+  let campaignTouches: CampaignTouch[] = [];
+  let automationTouches: AutomationTouch[] = [];
+
+  if (settings.attributionModel === 'click') {
+    campaignTouches = externalIdCandidates.length > 0
+      ? (await sql`
+        SELECT c.id, c.campaign_id, c.clicked_at
         FROM campaign_clicks c
         JOIN subscribers s ON s.id = c.subscriber_id
         WHERE c.shop_domain = ${input.shopDomain}
           AND s.external_id = ANY(${externalIdCandidates})
-          AND c.clicked_at >= ${new Date(occurredAt.getTime() - clickWindowHours * 60 * 60 * 1000)}
+          AND c.clicked_at >= ${windowStart}
         ORDER BY c.clicked_at DESC
-        LIMIT 1
-      `
+      `).map((row) => ({
+        id: Number(row.id),
+        campaignId: String(row.campaign_id),
+        touchedAt: new Date(String(row.clicked_at)),
+        table: 'campaign_clicks' as const,
+      }))
       : [];
 
-    const matchedClick = clickCandidates[0];
-    const matchedCampaignId = (matchedClick?.campaign_id as string | undefined) ?? input.campaignId ?? null;
+    automationTouches = externalIdCandidates.length > 0
+      ? (await sql`
+        SELECT id, rule_key, clicked_at
+        FROM automation_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND external_id = ANY(${externalIdCandidates})
+          AND clicked_at >= ${windowStart}
+        ORDER BY clicked_at DESC
+      `).map((row) => ({
+        id: Number(row.id),
+        ruleKey: String(row.rule_key),
+        touchedAt: new Date(String(row.clicked_at)),
+        table: 'automation_clicks' as const,
+      }))
+      : [];
 
-    if (!matchedCampaignId) {
-      return { attributed: false };
+    if (automationTouches.length === 0) {
+      if (automationRuleKeyFromCampaign) {
+        automationTouches = await fetchAutomationFingerprintFallback(automationRuleKeyFromCampaign);
+      }
+      if (automationTouches.length === 0) {
+        automationTouches = await fetchAutomationFingerprintFallback();
+      }
+    }
+  } else {
+    const campaignClickTouches = externalIdCandidates.length > 0
+      ? (await sql`
+        SELECT c.id, c.campaign_id, c.clicked_at
+        FROM campaign_clicks c
+        JOIN subscribers s ON s.id = c.subscriber_id
+        WHERE c.shop_domain = ${input.shopDomain}
+          AND s.external_id = ANY(${externalIdCandidates})
+          AND c.clicked_at >= ${windowStart}
+        ORDER BY c.clicked_at DESC
+      `).map((row) => ({
+        id: Number(row.id),
+        campaignId: String(row.campaign_id),
+        touchedAt: new Date(String(row.clicked_at)),
+        table: 'campaign_clicks' as const,
+      }))
+      : [];
+
+    const campaignImpressionTouches = externalIdCandidates.length > 0
+      ? (await sql`
+        SELECT d.id, d.campaign_id, d.delivered_at
+        FROM campaign_deliveries d
+        JOIN subscribers s ON s.id = d.subscriber_id
+        WHERE d.shop_domain = ${input.shopDomain}
+          AND s.external_id = ANY(${externalIdCandidates})
+          AND d.delivered_at >= ${windowStart}
+        ORDER BY d.delivered_at DESC
+      `).map((row) => ({
+        id: Number(row.id),
+        campaignId: String(row.campaign_id),
+        touchedAt: new Date(String(row.delivered_at)),
+        table: 'campaign_deliveries' as const,
+      }))
+      : [];
+
+    campaignTouches = [...campaignClickTouches, ...campaignImpressionTouches]
+      .sort((a, b) => b.touchedAt.getTime() - a.touchedAt.getTime());
+
+    if (campaignTouches.length === 0 && input.campaignId) {
+      const fallbackRows = await sql`
+        SELECT d.id, d.campaign_id, d.delivered_at
+        FROM campaign_deliveries d
+        WHERE d.shop_domain = ${input.shopDomain}
+          AND d.campaign_id = ${input.campaignId}
+          AND d.delivered_at >= ${windowStart}
+        ORDER BY d.delivered_at DESC
+      `;
+      campaignTouches = fallbackRows.map((row) => ({
+        id: Number(row.id),
+        campaignId: String(row.campaign_id),
+        touchedAt: new Date(String(row.delivered_at)),
+        table: 'campaign_deliveries' as const,
+      }));
     }
 
-    if (matchedClick?.id) {
-      await sql`
+    const automationClickTouches = externalIdCandidates.length > 0
+      ? (await sql`
+        SELECT id, rule_key, clicked_at
+        FROM automation_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND external_id = ANY(${externalIdCandidates})
+          AND clicked_at >= ${windowStart}
+        ORDER BY clicked_at DESC
+      `).map((row) => ({
+        id: Number(row.id),
+        ruleKey: String(row.rule_key),
+        touchedAt: new Date(String(row.clicked_at)),
+        table: 'automation_clicks' as const,
+      }))
+      : [];
+
+    const automationImpressionTouches = externalIdCandidates.length > 0
+      ? (await sql`
+        SELECT id, rule_key, delivered_at
+        FROM automation_deliveries
+        WHERE shop_domain = ${input.shopDomain}
+          AND external_id = ANY(${externalIdCandidates})
+          AND delivered_at >= ${windowStart}
+        ORDER BY delivered_at DESC
+      `).map((row) => ({
+        id: Number(row.id),
+        ruleKey: String(row.rule_key),
+        touchedAt: new Date(String(row.delivered_at)),
+        table: 'automation_deliveries' as const,
+      }))
+      : [];
+
+    automationTouches = [...automationClickTouches, ...automationImpressionTouches]
+      .sort((a, b) => b.touchedAt.getTime() - a.touchedAt.getTime());
+
+    if (automationTouches.length === 0) {
+      if (automationRuleKeyFromCampaign) {
+        automationTouches = await fetchAutomationDeliveryFingerprintFallback(automationRuleKeyFromCampaign);
+      }
+      if (automationTouches.length === 0) {
+        automationTouches = await fetchAutomationDeliveryFingerprintFallback();
+      }
+    }
+
+    if (automationTouches.length === 0) {
+      if (automationRuleKeyFromCampaign) {
+        automationTouches = await fetchAutomationFingerprintFallback(automationRuleKeyFromCampaign);
+      }
+      if (automationTouches.length === 0) {
+        automationTouches = await fetchAutomationFingerprintFallback();
+      }
+    }
+  }
+
+  const campaignById = new Map<string, CampaignTouch>();
+  for (const touch of campaignTouches) {
+    if (!campaignById.has(touch.campaignId)) {
+      campaignById.set(touch.campaignId, touch);
+    }
+  }
+
+  const automationByRule = new Map<string, AutomationTouch>();
+  for (const touch of automationTouches) {
+    if (!automationByRule.has(touch.ruleKey)) {
+      automationByRule.set(touch.ruleKey, touch);
+    }
+  }
+
+  let selectedCampaignTouches = Array.from(campaignById.values());
+  let selectedAutomationTouches = Array.from(automationByRule.values());
+
+  if (settings.attributionCreditMode === 'last_touch') {
+    const lastCampaignTouch = selectedCampaignTouches[0] ?? null;
+    const lastAutomationTouch = selectedAutomationTouches[0] ?? null;
+
+    if (lastCampaignTouch && lastAutomationTouch) {
+      if (lastCampaignTouch.touchedAt >= lastAutomationTouch.touchedAt) {
+        selectedAutomationTouches = [];
+        selectedCampaignTouches = [lastCampaignTouch];
+      } else {
+        selectedCampaignTouches = [];
+        selectedAutomationTouches = [lastAutomationTouch];
+      }
+    } else if (lastCampaignTouch) {
+      selectedCampaignTouches = [lastCampaignTouch];
+      selectedAutomationTouches = [];
+    } else if (lastAutomationTouch) {
+      selectedCampaignTouches = [];
+      selectedAutomationTouches = [lastAutomationTouch];
+    }
+  }
+
+  if (selectedCampaignTouches.length === 0 && selectedAutomationTouches.length === 0) {
+    return { attributed: false };
+  }
+
+  for (const touch of selectedCampaignTouches) {
+    if (touch.table === 'campaign_clicks') {
+      const updatedRows = await sql`
         UPDATE campaign_clicks
         SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
-        WHERE id = ${Number(matchedClick.id)}
+        WHERE id = ${touch.id}
           AND order_id IS NULL
+        RETURNING id
       `;
-    }
 
-    await sql`
-      UPDATE campaigns
-      SET revenue_cents = revenue_cents + ${input.revenueCents}
-      WHERE id = ${matchedCampaignId} AND shop_domain = ${input.shopDomain}
-    `;
-
-    return { attributed: true, campaignId: matchedCampaignId, model: 'click' as const };
-  }
-
-  const automationClickWindowHours = Math.max(1, settings.clickWindowDays) * 24;
-  const automationClickCandidates = externalIdCandidates.length > 0
-    ? await sql`
-      SELECT id, rule_key
-      FROM automation_clicks
-      WHERE shop_domain = ${input.shopDomain}
-        AND external_id = ANY(${externalIdCandidates})
-        AND clicked_at >= ${new Date(occurredAt.getTime() - automationClickWindowHours * 60 * 60 * 1000)}
-      ORDER BY clicked_at DESC
-      LIMIT 1
-    `
-    : [];
-
-  if (automationClickCandidates[0]?.id) {
-    await sql`
-      UPDATE automation_clicks
-      SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
-      WHERE id = ${Number(automationClickCandidates[0].id)}
-        AND order_id IS NULL
-    `;
-
-    return { attributed: true, campaignId: null, model: 'click' as const };
-  }
-
-  const impressionWindowHours = Math.max(1, settings.impressionWindowDays) * 24;
-  const deliveryCandidates = externalIdCandidates.length > 0
-    ? await sql`
-      SELECT d.id, d.campaign_id
-      FROM campaign_deliveries d
-      JOIN subscribers s ON s.id = d.subscriber_id
-      WHERE d.shop_domain = ${input.shopDomain}
-        AND s.external_id = ANY(${externalIdCandidates})
-        AND d.delivered_at >= ${new Date(occurredAt.getTime() - impressionWindowHours * 60 * 60 * 1000)}
-      ORDER BY d.delivered_at DESC
-      LIMIT 1
-    `
-    : [];
-
-  const matchedDelivery = deliveryCandidates[0];
-  const fallbackCampaignDelivery = !matchedDelivery && input.campaignId
-    ? await sql`
-      SELECT d.id, d.campaign_id
-      FROM campaign_deliveries d
-      WHERE d.shop_domain = ${input.shopDomain}
-        AND d.campaign_id = ${input.campaignId}
-        AND d.delivered_at >= ${new Date(occurredAt.getTime() - impressionWindowHours * 60 * 60 * 1000)}
-      ORDER BY d.delivered_at DESC
-      LIMIT 1
-    `
-    : [];
-
-  const matched = matchedDelivery ?? fallbackCampaignDelivery[0];
-  const matchedCampaignId = (matched?.campaign_id as string | undefined) ?? input.campaignId ?? null;
-
-  const automationDeliveryCandidates = externalIdCandidates.length > 0
-    ? await sql`
-      SELECT id, rule_key
-      FROM automation_deliveries
-      WHERE shop_domain = ${input.shopDomain}
-        AND external_id = ANY(${externalIdCandidates})
-        AND delivered_at >= ${new Date(occurredAt.getTime() - impressionWindowHours * 60 * 60 * 1000)}
-      ORDER BY delivered_at DESC
-      LIMIT 1
-    `
-    : [];
-
-  if (matchedCampaignId) {
-    if (matched?.id) {
-      await sql`
+      if (!updatedRows[0]?.id) {
+        await sql`
+          INSERT INTO campaign_clicks (
+            campaign_id,
+            shop_domain,
+            subscriber_id,
+            target_url,
+            clicked_at,
+            order_id,
+            converted_at,
+            revenue_cents,
+            user_agent,
+            ip_address,
+            external_id,
+            referrer
+          )
+          SELECT
+            campaign_id,
+            shop_domain,
+            subscriber_id,
+            target_url,
+            clicked_at,
+            ${input.orderId},
+            ${occurredAt},
+            ${input.revenueCents},
+            user_agent,
+            ip_address,
+            external_id,
+            referrer
+          FROM campaign_clicks
+          WHERE id = ${touch.id}
+          LIMIT 1
+        `;
+      }
+    } else {
+      const updatedRows = await sql`
         UPDATE campaign_deliveries
         SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
-        WHERE id = ${Number(matched.id)}
+        WHERE id = ${touch.id}
           AND order_id IS NULL
+        RETURNING id
       `;
+
+      if (!updatedRows[0]?.id) {
+        await sql`
+          INSERT INTO campaign_deliveries (
+            campaign_id,
+            shop_domain,
+            subscriber_id,
+            target_url,
+            sent_at,
+            delivered_at,
+            clicked_at,
+            order_id,
+            converted_at,
+            revenue_cents,
+            fcm_message_id,
+            user_agent,
+            ip_address
+          )
+          SELECT
+            campaign_id,
+            shop_domain,
+            subscriber_id,
+            target_url,
+            sent_at,
+            delivered_at,
+            clicked_at,
+            ${input.orderId},
+            ${occurredAt},
+            ${input.revenueCents},
+            fcm_message_id,
+            user_agent,
+            ip_address
+          FROM campaign_deliveries
+          WHERE id = ${touch.id}
+          LIMIT 1
+        `;
+      }
     }
 
     await sql`
       UPDATE campaigns
       SET revenue_cents = revenue_cents + ${input.revenueCents}
-      WHERE id = ${matchedCampaignId} AND shop_domain = ${input.shopDomain}
+      WHERE id = ${touch.campaignId}
+        AND shop_domain = ${input.shopDomain}
     `;
-
-    return { attributed: true, campaignId: matchedCampaignId, model: 'impression' as const };
   }
 
-  if (automationDeliveryCandidates[0]?.id) {
-    await sql`
-      UPDATE automation_deliveries
-      SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
-      WHERE id = ${Number(automationDeliveryCandidates[0].id)}
-        AND order_id IS NULL
-    `;
+  for (const touch of selectedAutomationTouches) {
+    if (touch.table === 'automation_clicks') {
+      const updatedRows = await sql`
+        UPDATE automation_clicks
+        SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
+        WHERE id = ${touch.id}
+          AND order_id IS NULL
+        RETURNING id
+      `;
 
-    return { attributed: true, campaignId: null, model: 'impression' as const };
+      if (!updatedRows[0]?.id) {
+        await sql`
+          INSERT INTO automation_clicks (
+            rule_key,
+            shop_domain,
+            subscriber_id,
+            external_id,
+            target_url,
+            clicked_at,
+            user_agent,
+            ip_address,
+            referrer,
+            order_id,
+            converted_at,
+            revenue_cents
+          )
+          SELECT
+            rule_key,
+            shop_domain,
+            subscriber_id,
+            external_id,
+            target_url,
+            clicked_at,
+            user_agent,
+            ip_address,
+            referrer,
+            ${input.orderId},
+            ${occurredAt},
+            ${input.revenueCents}
+          FROM automation_clicks
+          WHERE id = ${touch.id}
+          LIMIT 1
+        `;
+      }
+    } else {
+      const updatedRows = await sql`
+        UPDATE automation_deliveries
+        SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
+        WHERE id = ${touch.id}
+          AND order_id IS NULL
+        RETURNING id
+      `;
+
+      if (!updatedRows[0]?.id) {
+        await sql`
+          INSERT INTO automation_deliveries (
+            automation_job_id,
+            rule_key,
+            shop_domain,
+            subscriber_id,
+            token_id,
+            external_id,
+            target_url,
+            fcm_message_id,
+            delivered_at,
+            clicked_at,
+            user_agent,
+            ip_address,
+            order_id,
+            converted_at,
+            revenue_cents
+          )
+          SELECT
+            NULL,
+            rule_key,
+            shop_domain,
+            subscriber_id,
+            token_id,
+            external_id,
+            target_url,
+            fcm_message_id,
+            delivered_at,
+            clicked_at,
+            user_agent,
+            ip_address,
+            ${input.orderId},
+            ${occurredAt},
+            ${input.revenueCents}
+          FROM automation_deliveries
+          WHERE id = ${touch.id}
+          LIMIT 1
+        `;
+      }
+    }
   }
 
-  return { attributed: false };
+  return {
+    attributed: true,
+    campaignId: selectedCampaignTouches[0]?.campaignId ?? null,
+    model: settings.attributionModel,
+  };
 };
 
 export const registerWebhookEvent = async (input: RegisterWebhookEventInput) => {

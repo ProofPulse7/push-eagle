@@ -9,6 +9,7 @@ export const runtime = 'nodejs';
 const updateSchema = z.object({
   shopDomain: z.string().optional(),
   attributionModel: z.enum(['click', 'impression']),
+  attributionCreditMode: z.enum(['last_touch', 'all_touches']),
   clickWindowDays: z.coerce.number().int().min(1).max(30),
   impressionWindowDays: z.coerce.number().int().min(1).max(30),
 });
@@ -31,6 +32,7 @@ export async function PUT(request: Request) {
     const settings = await updateAttributionSettings({
       shopDomain,
       attributionModel: body.attributionModel,
+      attributionCreditMode: body.attributionCreditMode,
       clickWindowDays: body.clickWindowDays,
       impressionWindowDays: body.impressionWindowDays,
     });

@@ -13,7 +13,7 @@ const schema = z.object({
   externalId: z.string().min(6).optional(),
   clientId: z.string().optional().nullable(),
   eventName: z.string().optional(),
-  eventType: z.enum(['page_view', 'product_view', 'add_to_cart', 'checkout_start']),
+  eventType: z.enum(['page_view', 'product_view', 'add_to_cart', 'checkout_start', 'checkout_complete']),
   pageUrl: z.string().optional().nullable(),
   productId: z.string().optional().nullable(),
   cartToken: z.string().optional().nullable(),
@@ -24,6 +24,14 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Domain',
+};
+
+const getRequestIp = (request: Request) => {
+  const forwarded = request.headers.get('x-forwarded-for') ?? '';
+  if (forwarded) {
+    return forwarded.split(',')[0]?.trim() || null;
+  }
+  return request.headers.get('x-real-ip')?.trim() || null;
 };
 
 const deriveExternalId = (shopDomain: string, body: z.infer<typeof schema>) => {
@@ -63,6 +71,9 @@ export async function POST(request: Request) {
       );
     }
 
+    const requestUserAgent = request.headers.get('user-agent')?.trim() || null;
+    const requestIp = getRequestIp(request);
+
     const payload = {
       shopDomain,
       externalId,
@@ -74,6 +85,8 @@ export async function POST(request: Request) {
       metadata: {
         ...(body.metadata ?? {}),
         pixelEventName: body.eventName ?? null,
+        requestUserAgent,
+        requestIp,
       },
     };
 

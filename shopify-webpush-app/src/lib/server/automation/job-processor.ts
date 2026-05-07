@@ -62,9 +62,10 @@ export const processAutomationJobs = async (options: ProcessJobsOptions = {}) =>
         aj.payload,
         aj.attempts,
         st.fcm_token,
-        st.platform
+        s.platform
       FROM automation_jobs aj
       JOIN subscriber_tokens st ON st.id = aj.token_id
+      LEFT JOIN subscribers s ON s.id = aj.subscriber_id
       WHERE aj.status = 'pending'
         AND aj.due_at <= NOW()
         AND aj.attempts < ${maxRetries}

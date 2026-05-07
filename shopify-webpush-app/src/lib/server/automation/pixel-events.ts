@@ -10,7 +10,7 @@ import { getNeonSql } from '@/lib/integrations/database/neon';
 export type PixelEvent = {
   shopDomain: string;
   externalId: string;
-  eventType: 'page_view' | 'product_view' | 'add_to_cart' | 'checkout_start';
+  eventType: 'page_view' | 'product_view' | 'add_to_cart' | 'checkout_start' | 'checkout_complete';
   pageUrl?: string | null;
   productId?: string | null;
   cartToken?: string | null;

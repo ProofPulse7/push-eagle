@@ -70,7 +70,7 @@ export async function GET(request: Request) {
     const existingCookieId = cookieStore.get(cookieName)?.value ?? null;
     // Honor a validated storefront-provided external id first to keep identity stable
     // across proxy/direct bootstrap paths and avoid duplicate welcome sequences.
-    const externalId = customerExternalId ?? requestedExternalId ?? existingCookieId ?? getAnonymousExternalId();
+    const externalId = requestedExternalId ?? existingCookieId ?? customerExternalId ?? getAnonymousExternalId();
 
     const response = NextResponse.json({
       ok: true,

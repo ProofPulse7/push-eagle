@@ -19,6 +19,7 @@ const schema = z.object({
   vapidP256dh: z.string().optional().nullable(),
   vapidAuth: z.string().optional().nullable(),
   externalId: z.string().optional().nullable(),
+  clientId: z.string().optional().nullable(),
   browser: z.string().optional().nullable(),
   platform: z.string().optional().nullable(),
   locale: z.string().optional().nullable(),
@@ -132,6 +133,7 @@ export async function POST(request: Request) {
     const externalId = body.externalId?.trim()
       ? body.externalId.trim()
       : createHash('sha256').update(`${shopDomain}:${body.token}`).digest('hex').slice(0, 24);
+    const clientId = body.clientId?.trim() ? body.clientId.trim() : null;
 
     const browser = body.browser
       ?? (typeof body.deviceContext?.browserName === 'string' ? body.deviceContext.browserName : undefined)
@@ -150,6 +152,11 @@ export async function POST(request: Request) {
       ?? (typeof body.deviceContext?.city === 'string' ? body.deviceContext.city : undefined)
       ?? requestGeo.city;
 
+    const enrichedDeviceContext = {
+      ...(body.deviceContext ?? {}),
+      clientId,
+    };
+
     const saved = await upsertSubscriberToken({
       shopDomain,
       externalId,
@@ -164,7 +171,7 @@ export async function POST(request: Request) {
       country,
       city,
       userAgent,
-      deviceContext: body.deviceContext ?? null,
+      deviceContext: enrichedDeviceContext,
     });
 
     return NextResponse.json(

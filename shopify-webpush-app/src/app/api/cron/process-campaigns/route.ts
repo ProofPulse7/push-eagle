@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
-import { listDueScheduledCampaigns, listQueuedCampaigns, sendCampaign } from '@/lib/server/data/store';
+import { completeCronHeartbeat, listDueScheduledCampaigns, listQueuedCampaigns, sendCampaign, startCronHeartbeat } from '@/lib/server/data/store';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -33,6 +33,7 @@ const parsePositiveInt = (value: string | null, fallback: number, min: number, m
 };
 
 export async function GET(request: Request) {
+  let heartbeatId: string | null = null;
   try {
     if (!isAuthorized(request)) {
       return NextResponse.json({ ok: false, error: 'Unauthorized cron request.' }, { status: 401 });
@@ -44,6 +45,14 @@ export async function GET(request: Request) {
     const maxCampaigns = parsePositiveInt(url.searchParams.get('maxCampaigns'), 25, 1, 250);
     const maxBatches = parsePositiveInt(url.searchParams.get('maxBatches'), 20, 1, 2000);
     const workerId = request.headers.get('x-worker-id') ?? `worker-${shardIndex}`;
+
+    heartbeatId = await startCronHeartbeat('process_campaigns', {
+      shardCount,
+      shardIndex,
+      maxCampaigns,
+      maxBatches,
+      workerId,
+    });
 
     const dueCampaigns = await listDueScheduledCampaigns(maxCampaigns, shardCount, shardIndex);
     const queuedCampaigns = await listQueuedCampaigns(maxCampaigns, shardCount, shardIndex);
@@ -77,7 +86,7 @@ export async function GET(request: Request) {
       }
     }
 
-    return NextResponse.json({
+    const responsePayload = {
       ok: true,
       workerId,
       shardCount,
@@ -90,9 +99,30 @@ export async function GET(request: Request) {
       processedCount: processed.filter((item) => !item.error).length,
       failedCount: processed.filter((item) => Boolean(item.error)).length,
       processed,
-    });
+    };
+
+    if (heartbeatId) {
+      await completeCronHeartbeat({
+        heartbeatId,
+        ok: true,
+        metadata: {
+          candidateCount: uniqueCandidates.length,
+          processedCount: responsePayload.processedCount,
+          failedCount: responsePayload.failedCount,
+        },
+      });
+    }
+
+    return NextResponse.json(responsePayload);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to process scheduled campaigns.';
+    if (heartbeatId) {
+      await completeCronHeartbeat({
+        heartbeatId,
+        ok: false,
+        errorMessage: message,
+      });
+    }
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }

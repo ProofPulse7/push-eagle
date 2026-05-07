@@ -15,9 +15,8 @@ const firebaseConfig = {
 
 firebase.initializeApp(firebaseConfig);
 
-// Retrieve an instance of Firebase Messaging so that it can handle background
-// messages.
-const messaging = firebase.messaging();
+// Ensure Firebase messaging is initialized in this worker context.
+firebase.messaging();
 
 const sendTrackingBeacon = (trackUrl) => {
   if (!trackUrl) {
@@ -55,38 +54,6 @@ const buildPushEagleActions = (payload) => {
   return fallbackActions;
 };
 
-messaging.onBackgroundMessage(function(payload) {
-  console.log('Received background message ', payload);
-  // Customize notification here
-  const notificationTitle = payload.notification?.title || 'Push Eagle';
-
-  const actions = buildPushEagleActions(payload);
-
-  const url = payload.fcmOptions?.link || payload.data?.url || '/';
-  const button1Url = payload.data?.button1Url || url;
-  const button2Url = payload.data?.button2Url || '';
-  const trackPrimaryUrl = payload.data?.trackPrimaryUrl || '';
-  const trackButton1Url = payload.data?.trackButton1Url || '';
-  const trackButton2Url = payload.data?.trackButton2Url || '';
-
-  const notificationOptions = {
-    body: payload.notification?.body,
-    icon: payload.notification?.icon,
-    image: payload.notification?.image,
-    actions: actions.length > 0 ? actions : undefined,
-    data: {
-      url,
-      button1Url,
-      button2Url,
-      trackPrimaryUrl,
-      trackButton1Url,
-      trackButton2Url,
-    },
-  };
-
-  self.registration.showNotification(notificationTitle, notificationOptions);
-});
-
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
 
@@ -106,4 +73,39 @@ self.addEventListener('notificationclick', function(event) {
 
   clients.openWindow(targetUrl);
   event.waitUntil(sendTrackingBeacon(trackUrl));
+});
+
+// Unified renderer for both Firebase and VAPID/native web push payloads.
+self.addEventListener('push', function(event) {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (_error) {
+    payload = {};
+  }
+
+  const title = payload.data?.title || payload.title || payload.notification?.title || 'Push Eagle';
+  const url = payload.fcmOptions?.link || payload.url || payload.data?.url || '/';
+  const button1Url = payload.data?.button1Url || url;
+  const button2Url = payload.data?.button2Url || '';
+  const trackPrimaryUrl = payload.data?.trackPrimaryUrl || '';
+  const trackButton1Url = payload.data?.trackButton1Url || '';
+  const trackButton2Url = payload.data?.trackButton2Url || '';
+
+  const options = {
+    body: payload.data?.body || payload.body || payload.notification?.body,
+    icon: payload.data?.icon || payload.icon || payload.notification?.icon,
+    image: payload.data?.image || payload.image || payload.notification?.image,
+    actions: buildPushEagleActions(payload),
+    data: {
+      url,
+      button1Url,
+      button2Url,
+      trackPrimaryUrl,
+      trackButton1Url,
+      trackButton2Url,
+    },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
 });

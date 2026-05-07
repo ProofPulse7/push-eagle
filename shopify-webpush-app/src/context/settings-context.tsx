@@ -14,6 +14,8 @@ interface SettingsContextType {
     setLogo: (logo: ImageValue) => void;
     attributionModel: 'click' | 'impression';
     setAttributionModel: (value: 'click' | 'impression') => void;
+    attributionCreditMode: 'last_touch' | 'all_touches';
+    setAttributionCreditMode: (value: 'last_touch' | 'all_touches') => void;
     clickWindowDays: number;
     setClickWindowDays: (value: number) => void;
     impressionWindowDays: number;
@@ -35,8 +37,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const [shopDomain, setShopDomainState] = useState('');
     const [logo, setLogoState] = useState<ImageValue>({ file: null, preview: null });
     const [attributionModel, setAttributionModelState] = useState<'click' | 'impression'>('impression');
-    const [clickWindowDays, setClickWindowDaysState] = useState(2);
-    const [impressionWindowDays, setImpressionWindowDaysState] = useState(3);
+    const [attributionCreditMode, setAttributionCreditModeState] = useState<'last_touch' | 'all_touches'>('last_touch');
+    const [clickWindowDays, setClickWindowDaysState] = useState(7);
+    const [impressionWindowDays, setImpressionWindowDaysState] = useState(7);
 
     useEffect(() => {
         // Load settings from localStorage when the component mounts on the client
@@ -67,6 +70,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         const savedAttributionModel = localStorage.getItem('attributionModel');
         if (savedAttributionModel === 'click' || savedAttributionModel === 'impression') {
             setAttributionModelState(savedAttributionModel);
+        }
+        const savedAttributionCreditMode = localStorage.getItem('attributionCreditMode');
+        if (savedAttributionCreditMode === 'last_touch' || savedAttributionCreditMode === 'all_touches') {
+            setAttributionCreditModeState(savedAttributionCreditMode);
         }
         const savedClickWindowDays = Number(localStorage.getItem('clickWindowDays'));
         if (Number.isFinite(savedClickWindowDays) && savedClickWindowDays > 0) {
@@ -152,6 +159,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         localStorage.setItem('attributionModel', value);
     };
 
+    const setAttributionCreditMode = (value: 'last_touch' | 'all_touches') => {
+        setAttributionCreditModeState(value);
+        localStorage.setItem('attributionCreditMode', value);
+    };
+
     const setClickWindowDays = (value: number) => {
         setClickWindowDaysState(value);
         localStorage.setItem('clickWindowDays', String(value));
@@ -171,6 +183,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         setLogo,
         attributionModel,
         setAttributionModel,
+        attributionCreditMode,
+        setAttributionCreditMode,
         clickWindowDays,
         setClickWindowDays,
         impressionWindowDays,

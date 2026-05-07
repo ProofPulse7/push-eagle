@@ -12,45 +12,104 @@ automatically_update_urls_on_dev = true
 api_version = "2026-07"
 
   [[webhooks.subscriptions]]
-  topics = [ "app/uninstalled" ]
-  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/app-uninstalled"
+  topics = [ "checkouts/create", "checkouts/update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/checkouts-update"
+  include_fields = [
+  "id",
+  "token",
+  "abandoned_checkout_url",
+  "updated_at",
+  "email",
+  "customer.id",
+  "line_items.product_id",
+  "line_items.variant_id",
+  "line_items.quantity",
+  "line_items.url",
+  "note_attributes"
+]
 
   [[webhooks.subscriptions]]
-  topics = [ "app/scopes_update" ]
-  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/app-scopes-update"
+  topics = [ "inventory_levels/update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/inventory-levels-update"
+  include_fields = [
+  "inventory_item_id",
+  "available",
+  "updated_at",
+  "location_id"
+]
+
+  [[webhooks.subscriptions]]
+  topics = [ "carts/update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/carts-update"
+  include_fields = [
+  "id",
+  "token",
+  "updated_at",
+  "attributes",
+  "note_attributes",
+  "line_items.product_id",
+  "line_items.variant_id",
+  "line_items.quantity",
+  "line_items.url"
+]
 
   [[webhooks.subscriptions]]
   topics = [ "orders/create" ]
   uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/orders-create"
 
   [[webhooks.subscriptions]]
-  topics = [ "carts/update" ]
-  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/carts-update"
-  include_fields = [ "id", "token", "updated_at", "attributes", "note_attributes", "line_items.product_id", "line_items.variant_id", "line_items.quantity", "line_items.url" ]
-
-  [[webhooks.subscriptions]]
-  topics = [ "checkouts/create", "checkouts/update" ]
-  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/checkouts-update"
-  include_fields = [ "id", "token", "abandoned_checkout_url", "updated_at", "email", "customer.id", "line_items.product_id", "line_items.variant_id", "line_items.quantity", "line_items.url", "note_attributes" ]
+  topics = [ "fulfillments/update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/fulfillments-update"
+  include_fields = [
+  "id",
+  "order_id",
+  "status",
+  "shipment_status",
+  "tracking_company",
+  "tracking_numbers",
+  "tracking_urls",
+  "updated_at"
+]
 
   [[webhooks.subscriptions]]
   topics = [ "products/update" ]
   uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/products-update"
-  include_fields = [ "id", "title", "handle", "updated_at", "image.src", "variants.id", "variants.title", "variants.price", "variants.compare_at_price", "variants.inventory_item_id" ]
+  include_fields = [
+  "id",
+  "title",
+  "handle",
+  "updated_at",
+  "image.src",
+  "variants.id",
+  "variants.title",
+  "variants.price",
+  "variants.compare_at_price",
+  "variants.inventory_item_id"
+]
 
   [[webhooks.subscriptions]]
-  topics = [ "inventory_levels/update" ]
-  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/inventory-levels-update"
-  include_fields = [ "inventory_item_id", "available", "updated_at", "location_id" ]
+  uri = "https://push-eagle.vercel.app/webhooks/customers/data_request"
+  compliance_topics = [ "customers/data_request" ]
 
   [[webhooks.subscriptions]]
-  topics = [ "fulfillments/update" ]
-  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/fulfillments-update"
-  include_fields = [ "id", "order_id", "status", "shipment_status", "tracking_company", "tracking_numbers", "tracking_urls", "updated_at" ]
+  uri = "https://push-eagle.vercel.app/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "https://push-eagle.vercel.app/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/app-scopes-update"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/app-uninstalled"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,write_customers,read_orders,read_products,read_inventory,read_fulfillments,write_products,read_discounts,write_discounts,read_marketing_events,write_marketing_events,read_customer_events,write_pixels,read_themes,write_themes,write_files,read_metaobjects,write_metaobjects,read_metaobject_definitions,write_metaobject_definitions,read_locales,write_locales,write_app_proxy"
+scopes = "read_customer_events,read_customers,read_discounts,read_fulfillments,read_inventory,read_locales,read_marketing_events,read_metaobject_definitions,read_metaobjects,read_orders,read_products,read_themes,write_app_proxy,write_customers,write_discounts,write_files,write_locales,write_marketing_events,write_metaobject_definitions,write_metaobjects,write_pixels,write_products,write_themes"
 
 [auth]
 redirect_urls = [
@@ -65,18 +124,6 @@ redirect_urls = [
 url = "https://push-eagle-dashboard.vercel.app/api/storefront"
 subpath = "push-eagle"
 prefix = "apps"
-
-  [[webhooks.subscriptions]]
-  uri = "https://push-eagle.vercel.app/webhooks/customers/data_request"
-  compliance_topics = [ "customers/data_request" ]
-
-  [[webhooks.subscriptions]]
-  uri = "https://push-eagle.vercel.app/webhooks/customers/redact"
-  compliance_topics = [ "customers/redact" ]
-
-  [[webhooks.subscriptions]]
-  uri = "https://push-eagle.vercel.app/webhooks/shop/redact"
-  compliance_topics = [ "shop/redact" ]
 
 [product.metafields.app.demo_info]
 type = "single_line_text_field"

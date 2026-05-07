@@ -73,6 +73,8 @@ export default function SettingsPage() {
         setLogo,
         attributionModel,
         setAttributionModel,
+        attributionCreditMode,
+        setAttributionCreditMode,
         clickWindowDays,
         setClickWindowDays,
         impressionWindowDays,
@@ -108,6 +110,7 @@ export default function SettingsPage() {
                     return;
                 }
                 setAttributionModel(data.attributionModel);
+                setAttributionCreditMode(data.attributionCreditMode ?? 'last_touch');
                 setClickWindowDays(data.clickWindowDays);
                 setImpressionWindowDays(data.impressionWindowDays);
             })
@@ -116,7 +119,7 @@ export default function SettingsPage() {
         return () => {
             isMounted = false;
         };
-    }, [shopDomain, setAttributionModel, setClickWindowDays, setImpressionWindowDays]);
+    }, [shopDomain, setAttributionModel, setAttributionCreditMode, setClickWindowDays, setImpressionWindowDays]);
 
     useEffect(() => {
         if (!shopDomain) {
@@ -248,6 +251,7 @@ export default function SettingsPage() {
             body: JSON.stringify({
                 shopDomain,
                 attributionModel,
+                attributionCreditMode,
                 clickWindowDays,
                 impressionWindowDays,
             }),
@@ -725,6 +729,18 @@ export default function SettingsPage() {
                                 <SelectContent>
                                     <SelectItem value="impression">By Impression</SelectItem>
                                     <SelectItem value="click">By Clicks</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="max-w-xs space-y-2">
+                            <Label>Revenue Credit Mode</Label>
+                            <Select value={attributionCreditMode} onValueChange={(value) => setAttributionCreditMode(value as 'last_touch' | 'all_touches')}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select credit mode" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="last_touch">Credit latest touch only</SelectItem>
+                                    <SelectItem value="all_touches">Credit all touched flows</SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>

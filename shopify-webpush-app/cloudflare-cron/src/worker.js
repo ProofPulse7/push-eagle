@@ -28,6 +28,8 @@ const runCampaignShard = async (env, shardIndex, shardCount, maxCampaigns, maxBa
     headers: {
       Authorization: `Bearer ${env.CRON_SECRET}`,
       'x-automation-secret': env.CRON_SECRET,
+      'x-vercel-cron': '1',
+      'user-agent': 'vercel-cron/1.0',
       'x-worker-id': `cf-${shardIndex}`,
     },
   });
@@ -62,6 +64,8 @@ const runAutomationShard = async (env, shardIndex, shardCount, maxJobs) => {
     headers: {
       Authorization: `Bearer ${env.CRON_SECRET}`,
       'x-automation-secret': env.CRON_SECRET,
+      'x-vercel-cron': '1',
+      'user-agent': 'vercel-cron/1.0',
       'x-worker-id': `cf-auto-${shardIndex}`,
     },
   });
@@ -83,6 +87,43 @@ const runAutomationShard = async (env, shardIndex, shardCount, maxJobs) => {
   };
 };
 
+const runAbandonedCartShard = async (env, shardIndex, shardCount, maxJobs) => {
+  const baseUrl = env.PROCESS_ABANDONED_CART_URL || env.PROCESS_AUTOMATIONS_URL;
+  const url = buildShardUrl(baseUrl, {
+    shardIndex,
+    shardCount,
+    maxJobs,
+    maxConcurrent: toInt(env.MAX_ABANDONED_CART_CONCURRENT, 80, 1, 200),
+  });
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${env.CRON_SECRET}`,
+      'x-automation-secret': env.CRON_SECRET,
+      'x-vercel-cron': '1',
+      'user-agent': 'vercel-cron/1.0',
+      'x-worker-id': `cf-cart-${shardIndex}`,
+    },
+  });
+
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch (_error) {
+    payload = { raw: text.slice(0, 500) };
+  }
+
+  return {
+    jobType: 'abandoned-cart',
+    shardIndex,
+    ok: response.ok,
+    status: response.status,
+    payload,
+  };
+};
+
 const runIngestionShard = async (env, shardIndex, shardCount, limit) => {
   const url = buildShardUrl(env.PROCESS_INGESTION_URL, {
     shardIndex,
@@ -96,6 +137,8 @@ const runIngestionShard = async (env, shardIndex, shardCount, limit) => {
     headers: {
       Authorization: `Bearer ${env.CRON_SECRET}`,
       'x-automation-secret': env.CRON_SECRET,
+      'x-vercel-cron': '1',
+      'user-agent': 'vercel-cron/1.0',
       'x-worker-id': `cf-ingest-${shardIndex}`,
     },
   });
@@ -122,9 +165,11 @@ export default {
     const campaignShards = toInt(env.CAMPAIGN_SHARDS, 4, 1, 64);
     const automationShards = toInt(env.AUTOMATION_SHARDS, 6, 1, 64);
     const ingestionShards = toInt(env.INGESTION_SHARDS, 4, 1, 64);
+    const abandonedCartShards = toInt(env.ABANDONED_CART_SHARDS, 2, 1, 64);
     const maxCampaigns = toInt(env.MAX_CAMPAIGNS, 25, 1, 250);
     const maxBatches = toInt(env.MAX_BATCHES, 20, 1, 2000);
     const maxAutomationJobs = toInt(env.MAX_AUTOMATION_JOBS, 200, 1, 2000);
+    const maxAbandonedCartJobs = toInt(env.MAX_ABANDONED_CART_JOBS, 200, 1, 2000);
     const maxIngestionJobs = toInt(env.MAX_INGESTION_JOBS, 1000, 1, 5000);
 
     const jobs = [];
@@ -134,6 +179,10 @@ export default {
 
     for (let shardIndex = 0; shardIndex < automationShards; shardIndex += 1) {
       jobs.push(runAutomationShard(env, shardIndex, automationShards, maxAutomationJobs));
+    }
+
+    for (let shardIndex = 0; shardIndex < abandonedCartShards; shardIndex += 1) {
+      jobs.push(runAbandonedCartShard(env, shardIndex, abandonedCartShards, maxAbandonedCartJobs));
     }
 
     for (let shardIndex = 0; shardIndex < ingestionShards; shardIndex += 1) {
@@ -147,9 +196,11 @@ export default {
     const campaignShards = toInt(env.CAMPAIGN_SHARDS, 4, 1, 64);
     const automationShards = toInt(env.AUTOMATION_SHARDS, 6, 1, 64);
     const ingestionShards = toInt(env.INGESTION_SHARDS, 4, 1, 64);
+    const abandonedCartShards = toInt(env.ABANDONED_CART_SHARDS, 2, 1, 64);
     const maxCampaigns = toInt(env.MAX_CAMPAIGNS, 25, 1, 250);
     const maxBatches = toInt(env.MAX_BATCHES, 20, 1, 2000);
     const maxAutomationJobs = toInt(env.MAX_AUTOMATION_JOBS, 200, 1, 2000);
+    const maxAbandonedCartJobs = toInt(env.MAX_ABANDONED_CART_JOBS, 200, 1, 2000);
     const maxIngestionJobs = toInt(env.MAX_INGESTION_JOBS, 1000, 1, 5000);
 
     const campaignRuns = Array.from({ length: campaignShards }, (_, shardIndex) =>
@@ -158,17 +209,21 @@ export default {
     const automationRuns = Array.from({ length: automationShards }, (_, shardIndex) =>
       runAutomationShard(env, shardIndex, automationShards, maxAutomationJobs),
     );
+    const abandonedCartRuns = Array.from({ length: abandonedCartShards }, (_, shardIndex) =>
+      runAbandonedCartShard(env, shardIndex, abandonedCartShards, maxAbandonedCartJobs),
+    );
     const ingestionRuns = Array.from({ length: ingestionShards }, (_, shardIndex) =>
       runIngestionShard(env, shardIndex, ingestionShards, maxIngestionJobs),
     );
 
-    const results = await Promise.all([...campaignRuns, ...automationRuns, ...ingestionRuns]);
+    const results = await Promise.all([...campaignRuns, ...automationRuns, ...abandonedCartRuns, ...ingestionRuns]);
 
     return new Response(JSON.stringify({
       ok: true,
       shards: {
         campaigns: campaignShards,
         automations: automationShards,
+        abandonedCart: abandonedCartShards,
         ingestion: ingestionShards,
       },
       results,
