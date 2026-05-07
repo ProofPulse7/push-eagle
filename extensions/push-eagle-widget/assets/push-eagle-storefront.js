@@ -45,27 +45,130 @@
   var BROWSER_PROMPT_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
   var IOS_HOME_SCREEN_POLL_MS = 1000;
 
-  // Global event queue to buffer activity events that occur before bootstrap completes.
-  // This prevents loss of early add-to-cart events (within 5-10 seconds of page load).
-  var __activityEventQueue = [];
-  var __bootReady = false;
-
-  function enqueueActivityEvent(eventType, metadata) {
-    __activityEventQueue.push({ eventType: eventType, metadata: metadata });
-  }
-
-  function flushActivityEventQueue(boot) {
-    if (!boot || !__activityEventQueue || __activityEventQueue.length === 0) {
+  function queuePreBootstrapCartSignal(details, source) {
+    if (window.__pushEaglePreCartCaptureDisabled) {
       return;
     }
-    var queue = __activityEventQueue.slice();
-    __activityEventQueue = [];
-    for (var i = 0; i < queue.length; i += 1) {
-      try {
-        sendActivityEvent(boot, queue[i].eventType, queue[i].metadata);
-      } catch (_e) {}
+
+    if (!Array.isArray(window.__pushEaglePreCartSignals)) {
+      window.__pushEaglePreCartSignals = [];
+    }
+
+    var queue = window.__pushEaglePreCartSignals;
+    if (queue.length >= 20) {
+      queue.shift();
+    }
+
+    queue.push({
+      details: {
+        productId: details && details.productId ? details.productId : null,
+        variantId: details && details.variantId ? details.variantId : null,
+        quantity: details && Number.isFinite(Number(details.quantity)) ? Number(details.quantity) : 1,
+      },
+      source: source || 'pre_bootstrap',
+      queuedAt: Date.now(),
+    });
+  }
+
+  function parsePreBootstrapCartBody(body) {
+    var parsed = { variantId: null, quantity: 1 };
+    if (!body) {
+      return parsed;
+    }
+
+    try {
+      if (typeof body === 'string') {
+        var trimmed = body.trim();
+        if (trimmed.indexOf('{') === 0) {
+          var json = JSON.parse(trimmed);
+          parsed.variantId = json && json.id ? String(json.id) : null;
+          parsed.quantity = json && json.quantity ? Number(json.quantity) : 1;
+          return parsed;
+        }
+
+        var formData = new URLSearchParams(trimmed);
+        parsed.variantId = formData.get('id');
+        parsed.quantity = Number(formData.get('quantity') || '1');
+        return parsed;
+      }
+
+      if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+        parsed.variantId = body.get('id');
+        parsed.quantity = Number(body.get('quantity') || '1');
+        return parsed;
+      }
+
+      if (typeof FormData !== 'undefined' && body instanceof FormData) {
+        parsed.variantId = body.get('id');
+        parsed.quantity = Number(body.get('quantity') || '1');
+        return parsed;
+      }
+    } catch (_parseError) {}
+
+    return parsed;
+  }
+
+  function installPreBootstrapCartCapture() {
+    if (window.__pushEaglePreCartCaptureInstalled) {
+      return;
+    }
+    window.__pushEaglePreCartCaptureInstalled = true;
+
+    document.addEventListener('submit', function (event) {
+      if (window.__pushEaglePreCartCaptureDisabled) {
+        return;
+      }
+
+      var form = event.target;
+      if (!form || !form.getAttribute) {
+        return;
+      }
+
+      var action = String(form.getAttribute('action') || '').toLowerCase();
+      if (action.indexOf('/cart/add') === -1) {
+        return;
+      }
+
+      var variantInput = form.querySelector('[name="id"]');
+      var quantityInput = form.querySelector('[name="quantity"]');
+      queuePreBootstrapCartSignal({
+        variantId: variantInput ? variantInput.value : null,
+        quantity: quantityInput ? Number(quantityInput.value || '1') : 1,
+      }, 'pre_bootstrap_form_submit');
+    }, true);
+
+    if (typeof window.fetch === 'function' && !window.__pushEaglePreCartFetchWrapped) {
+      window.__pushEaglePreCartFetchWrapped = true;
+      var preOriginalFetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        var requestUrl = '';
+        try {
+          requestUrl = typeof input === 'string'
+            ? input
+            : (input && input.url ? String(input.url) : '');
+        } catch (_requestUrlError) {
+          requestUrl = '';
+        }
+
+        var parsedBody = parsePreBootstrapCartBody(init && Object.prototype.hasOwnProperty.call(init, 'body') ? init.body : null);
+
+        return preOriginalFetch(input, init).then(function (response) {
+          if (!window.__pushEaglePreCartCaptureDisabled
+            && response
+            && response.ok
+            && String(requestUrl || '').toLowerCase().indexOf('/cart/add') !== -1) {
+            queuePreBootstrapCartSignal({
+              variantId: parsedBody.variantId,
+              quantity: parsedBody.quantity,
+            }, 'pre_bootstrap_fetch_cart_add');
+          }
+          return response;
+        });
+      };
     }
   }
+
+  installPreBootstrapCartCapture();
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
@@ -373,10 +476,6 @@
 
   async function sendActivityEvent(boot, eventType, metadata) {
     if (!boot || !boot.activityEndpoint || !boot.shopDomain || !boot.externalId) {
-      // Queue event if bootstrap hasn't completed yet and boot object exists
-      if (!__bootReady && boot && boot.shopDomain && !boot.activityEndpoint) {
-        enqueueActivityEvent(eventType, metadata);
-      }
       return;
     }
 
@@ -408,10 +507,21 @@
       };
       payload.metadata.clientId = boot.clientId || null;
       payload.metadata.shopifyAnalyticsClientId = getShopifyAnalyticsClientId();
-      var endpoints = [boot.activityEndpoint];
-
-      if (boot.activityFallbackEndpoint && endpoints.indexOf(boot.activityFallbackEndpoint) === -1) {
-        endpoints.push(boot.activityFallbackEndpoint);
+      var endpoints = [];
+      if (boot.bootstrapSource === 'proxy') {
+        if (boot.activityEndpoint) {
+          endpoints.push(boot.activityEndpoint);
+        }
+        if (boot.activityFallbackEndpoint && endpoints.indexOf(boot.activityFallbackEndpoint) === -1) {
+          endpoints.push(boot.activityFallbackEndpoint);
+        }
+      } else {
+        if (boot.activityFallbackEndpoint) {
+          endpoints.push(boot.activityFallbackEndpoint);
+        }
+        if (boot.activityEndpoint && endpoints.indexOf(boot.activityEndpoint) === -1) {
+          endpoints.push(boot.activityEndpoint);
+        }
       }
 
       for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {
@@ -572,6 +682,19 @@
           });
         });
       }, 1200);
+    }
+
+    if (Array.isArray(window.__pushEaglePreCartSignals) && window.__pushEaglePreCartSignals.length > 0) {
+      var pendingSignals = window.__pushEaglePreCartSignals.slice();
+      window.__pushEaglePreCartSignals = [];
+      window.__pushEaglePreCartCaptureDisabled = true;
+
+      for (var pendingIndex = 0; pendingIndex < pendingSignals.length; pendingIndex += 1) {
+        var signal = pendingSignals[pendingIndex] || {};
+        reportAddToCart(signal.details || {}, signal.source || 'pre_bootstrap_queue');
+      }
+    } else {
+      window.__pushEaglePreCartCaptureDisabled = true;
     }
 
     document.addEventListener('submit', function (event) {
@@ -1860,12 +1983,24 @@
       };
 
       var primaryTokenEndpoint = boot.tokenEndpoint || runtimeConfig.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH;
-      var tokenEndpoints = [primaryTokenEndpoint];
+      var directTokenEndpoint = runtimeConfig.appUrl
+        ? runtimeConfig.appUrl.replace(/\/$/, '') + '/api/storefront/token?shop=' + encodeURIComponent(boot.shopDomain)
+        : '';
+      var tokenEndpoints = [];
 
-      if (runtimeConfig.appUrl) {
-        var directTokenEndpoint = runtimeConfig.appUrl.replace(/\/$/, '') + '/api/storefront/token?shop=' + encodeURIComponent(boot.shopDomain);
-        if (tokenEndpoints.indexOf(directTokenEndpoint) === -1) {
+      if (boot.bootstrapSource === 'proxy') {
+        if (primaryTokenEndpoint) {
+          tokenEndpoints.push(primaryTokenEndpoint);
+        }
+        if (directTokenEndpoint && tokenEndpoints.indexOf(directTokenEndpoint) === -1) {
           tokenEndpoints.push(directTokenEndpoint);
+        }
+      } else {
+        if (directTokenEndpoint) {
+          tokenEndpoints.push(directTokenEndpoint);
+        }
+        if (primaryTokenEndpoint && tokenEndpoints.indexOf(primaryTokenEndpoint) === -1) {
+          tokenEndpoints.push(primaryTokenEndpoint);
         }
       }
 
@@ -2089,8 +2224,6 @@
     }
 
     var boot = await bootstrap(config);
-    __bootReady = true;
-    flushActivityEventQueue(boot);
     syncExternalIdToCart(
       boot && boot.externalId ? boot.externalId : null,
       boot && boot.clientId ? boot.clientId : getOrCreateStableClientId(config.shopDomain),

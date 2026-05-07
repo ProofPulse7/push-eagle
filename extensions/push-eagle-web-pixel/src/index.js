@@ -166,7 +166,26 @@ const mapEventType = (name) => {
   return null;
 };
 
+const getPrivacySnapshot = (init) => {
+  const snapshot = init?.customerPrivacy || pick(init, 'context.customerPrivacy') || null;
+  if (!snapshot || typeof snapshot !== 'object') {
+    return null;
+  }
+
+  return snapshot;
+};
+
 register(({ analytics, settings, init }) => {
+  if (!analytics || typeof analytics.subscribe !== 'function') {
+    return;
+  }
+
+  // In strict sandbox, privacy context can be unavailable transiently.
+  // Avoid subscribing until a valid snapshot exists to prevent runtime flag errors.
+  if (!getPrivacySnapshot(init)) {
+    return;
+  }
+
   const initialShopDomain = getShopDomain(init);
   const endpointPath = normalizePath(settings?.endpointPath);
 
