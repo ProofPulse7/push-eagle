@@ -1848,6 +1848,11 @@
       if (localSwPath && swCandidates.indexOf(localSwPath) === -1) {
         swCandidates.push(localSwPath);
       }
+      // Add direct Vercel endpoint as final fallback if not already in candidates
+      var directVercelSwPath = normalizeServiceWorkerPath((config && config.appUrl) ? config.appUrl + '/api/storefront/sw/direct' : null);
+      if (directVercelSwPath && swCandidates.indexOf(directVercelSwPath) === -1) {
+        swCandidates.push(directVercelSwPath);
+      }
 
       var registration;
       var lastSwError = null;
