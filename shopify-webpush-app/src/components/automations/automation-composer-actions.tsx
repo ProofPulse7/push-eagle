@@ -174,38 +174,23 @@ export const AutomationComposerActions = ({
         setIsSaving(true);
         setSaveStatus('Saving...');
         try {
-            const isCartAutomation = automationRuleKey === 'cart_abandonment_30m';
             const [logoUrl, windowsHeroUrl, macHeroUrl, androidHeroUrl] = await Promise.all([
                 resolveAutomationMediaUrl(logo.preview, shopDomain),
-                isCartAutomation ? Promise.resolve(null) : resolveAutomationMediaUrl(windowsHero.preview, shopDomain),
-                isCartAutomation ? Promise.resolve(null) : resolveAutomationMediaUrl(macHero.preview, shopDomain),
-                isCartAutomation ? Promise.resolve(null) : resolveAutomationMediaUrl(androidHero.preview, shopDomain),
+                resolveAutomationMediaUrl(windowsHero.preview, shopDomain),
+                resolveAutomationMediaUrl(macHero.preview, shopDomain),
+                resolveAutomationMediaUrl(androidHero.preview, shopDomain),
             ]);
-
-            const normalizedPrimaryLink = normalizeAutomationLink(primaryLink) || '/cart';
-            const normalizedButtons = isCartAutomation
-                ? [
-                    {
-                        title: String(actionButtons?.[0]?.title ?? '').trim() || 'Checkout',
-                        link: String(actionButtons?.[0]?.link ?? '').trim() || normalizedPrimaryLink,
-                    },
-                    {
-                        title: String(actionButtons?.[1]?.title ?? '').trim() || 'Continue Shopping',
-                        link: String(actionButtons?.[1]?.link ?? '').trim() || '/',
-                    },
-                ]
-                : actionButtons;
 
             const stepPatch = {
                 title,
                 body: message,
-                targetUrl: normalizedPrimaryLink,
+                targetUrl: normalizeAutomationLink(primaryLink),
                 iconUrl: logoUrl,
-                imageUrl: isCartAutomation ? null : macHeroUrl,
-                windowsImageUrl: isCartAutomation ? null : windowsHeroUrl,
-                macosImageUrl: isCartAutomation ? null : macHeroUrl,
-                androidImageUrl: isCartAutomation ? null : androidHeroUrl,
-                actionButtons: normalizedButtons,
+                imageUrl: macHeroUrl,
+                windowsImageUrl: windowsHeroUrl,
+                macosImageUrl: macHeroUrl,
+                androidImageUrl: androidHeroUrl,
+                actionButtons,
             };
 
             const saveResponse = await fetch('/api/automations/rules', {

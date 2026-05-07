@@ -1534,69 +1534,10 @@ const resolveAutomationDestination = async (shopDomain: string, payload: Automat
   const fallbackLogo = rows[0]?.brand_logo_url ?? rows[0]?.opt_in_logo_url ?? null;
   const iconUrl = toHttpUrlOrNull(payload.iconUrl ?? null, storeBase)
     ?? toHttpUrlOrNull(fallbackLogo ? String(fallbackLogo) : null, storeBase);
-  let imageUrl = toHttpUrlOrNull(payload.imageUrl ?? null, storeBase);
+  const imageUrl = toHttpUrlOrNull(payload.imageUrl ?? null, storeBase);
   const windowsImageUrl = toHttpUrlOrNull(payload.windowsImageUrl ?? null, storeBase);
   const macosImageUrl = toHttpUrlOrNull(payload.macosImageUrl ?? null, storeBase);
   const androidImageUrl = toHttpUrlOrNull(payload.androidImageUrl ?? null, storeBase);
-
-  if (!imageUrl && payload.ruleKey === 'cart_abandonment_30m') {
-    const normalizedExternalId = payload.externalId ? String(payload.externalId).trim() : '';
-    const normalizedCartToken = payload.cartToken ? String(payload.cartToken).trim() : '';
-
-    if (normalizedExternalId || normalizedCartToken) {
-      const cartSignalRows = await sql`
-        SELECT
-          COALESCE(metadata ->> 'variantId', '') AS variant_id,
-          COALESCE(product_id, '') AS product_id
-        FROM subscriber_activity_events
-        WHERE shop_domain = ${shopDomain}
-          AND event_type = 'add_to_cart'
-          AND (
-            ${normalizedExternalId ? sql`external_id = ${normalizedExternalId}` : sql`FALSE`}
-            OR ${normalizedCartToken ? sql`cart_token = ${normalizedCartToken}` : sql`FALSE`}
-          )
-        ORDER BY created_at DESC
-        LIMIT 1
-      `;
-
-      const variantId = cartSignalRows[0]?.variant_id ? String(cartSignalRows[0].variant_id).trim() : '';
-      const productId = cartSignalRows[0]?.product_id ? String(cartSignalRows[0].product_id).trim() : '';
-
-      const variantImageRows = variantId
-        ? await sql`
-          SELECT image_url
-          FROM shopify_product_variants
-          WHERE shop_domain = ${shopDomain}
-            AND variant_id = ${variantId}
-            AND image_url IS NOT NULL
-            AND image_url <> ''
-          ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC
-          LIMIT 1
-        `
-        : [];
-
-      const productImageRows = !variantImageRows[0]?.image_url && productId
-        ? await sql`
-          SELECT image_url
-          FROM shopify_product_variants
-          WHERE shop_domain = ${shopDomain}
-            AND product_id = ${productId}
-            AND image_url IS NOT NULL
-            AND image_url <> ''
-          ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC
-          LIMIT 1
-        `
-        : [];
-
-      const resolvedCartImage = variantImageRows[0]?.image_url
-        ? String(variantImageRows[0].image_url)
-        : (productImageRows[0]?.image_url ? String(productImageRows[0].image_url) : '');
-
-      if (resolvedCartImage) {
-        imageUrl = toHttpUrlOrNull(resolvedCartImage, storeBase);
-      }
-    }
-  }
 
   const rawActionButtons = Array.isArray((payload.metadata ?? {}).actionButtons)
     ? ((payload.metadata ?? {}).actionButtons as Array<Record<string, unknown>>)

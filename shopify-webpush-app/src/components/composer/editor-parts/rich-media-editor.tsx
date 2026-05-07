@@ -85,8 +85,6 @@ export const RichMediaEditor = ({
     showAndroidWarning,
     handleImageUpload,
     setEditingState,
-    locked = false,
-    lockedMessage,
 }: {
     windowsHero: ImageValue; setWindowsHero: (val: ImageValue) => void;
     macHero: ImageValue; setMacHero: (val: ImageValue) => void;
@@ -96,20 +94,7 @@ export const RichMediaEditor = ({
     showAndroidWarning: boolean;
     handleImageUpload: (file: File | undefined, imageType: 'windows' | 'mac' | 'android' | 'logo') => void;
     setEditingState: (state: { url: string, aspect: number, type: string } | null) => void;
-    locked?: boolean;
-    lockedMessage?: string;
 }) => {
-    if (locked) {
-        return (
-            <div className="space-y-4 border-t pt-6 mt-4 p-4">
-                <h3 className="text-base font-medium">Hero image</h3>
-                <p className="text-xs text-muted-foreground">
-                    {lockedMessage || 'PushEagle will automatically use the product image for this push notification.'}
-                </p>
-            </div>
-        );
-    }
-
     return (
         <div className="space-y-4 border-t pt-6 mt-4 p-4">
             <h3 className="text-base font-medium">Rich Media</h3>
