@@ -2,6 +2,7 @@
   var DEFAULT_PROXY_BOOTSTRAP_PATH = '/apps/push-eagle/bootstrap';
   var DEFAULT_PROXY_SERVICE_WORKER_PATH = '/apps/push-eagle/sw.js';
   var DEFAULT_PROXY_TOKEN_PATH = '/apps/push-eagle/token';
+  var DEFAULT_LOCAL_SERVICE_WORKER_PATH = '';
   var roots = document.querySelectorAll('[data-push-eagle-root]');
   if (!roots || roots.length === 0) {
     return;
@@ -1581,22 +1582,7 @@
     var bootstrapSource = 'proxy';
     var resolvedProxyBootstrapPath = bootstrapPaths[0];
 
-    for (var pathIndex = 0; pathIndex < bootstrapPaths.length; pathIndex += 1) {
-      var bootstrapUrl = bootstrapPaths[pathIndex];
-      var requestUrl = bootstrapUrl
-        + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&')
-        + '_pe_ts=' + String(Date.now())
-        + '&externalId=' + encodeURIComponent(existingExternalId);
-
-      data = await tryBootstrapFetch(requestUrl, config.shopDomain, true);
-      if (data && data.ok) {
-        resolvedProxyBootstrapPath = bootstrapUrl;
-        break;
-      }
-    }
-
-    // If proxy failed (404 or non-JSON from Shopify), fall back to the direct app URL (cross-origin, no credentials)
-    if (!data && config.appUrl) {
+    if (config.appUrl) {
       var directUrl = config.appUrl.replace(/\/$/, '') + '/api/storefront/bootstrap'
         + '?shop=' + encodeURIComponent(config.shopDomain)
         + '&_pe_ts=' + String(Date.now())
@@ -1604,6 +1590,22 @@
       data = await tryBootstrapFetch(directUrl, config.shopDomain, false);
       if (data && data.ok) {
         bootstrapSource = 'direct';
+      }
+    }
+
+    if (!data) {
+      for (var pathIndex = 0; pathIndex < bootstrapPaths.length; pathIndex += 1) {
+        var bootstrapUrl = bootstrapPaths[pathIndex];
+        var requestUrl = bootstrapUrl
+          + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&')
+          + '_pe_ts=' + String(Date.now())
+          + '&externalId=' + encodeURIComponent(existingExternalId);
+
+        data = await tryBootstrapFetch(requestUrl, config.shopDomain, true);
+        if (data && data.ok) {
+          resolvedProxyBootstrapPath = bootstrapUrl;
+          break;
+        }
       }
     }
 
@@ -1620,6 +1622,7 @@
           data.activityEndpoint = data.activityEndpoint || (directBase + '/api/storefront/activity');
           data.iosHomeScreenEndpoint = data.iosHomeScreenEndpoint || (directBase + '/api/storefront/ios-home-screen');
         }
+        data.serviceWorkerPath = config.localServiceWorkerPath || data.serviceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH;
       }
       if (!data.externalId) {
         data.externalId = existingExternalId;
@@ -1649,13 +1652,22 @@
 
           var cachedDirectBase = config.appUrl ? config.appUrl.replace(/\/$/, '') : '';
           if (!cachedBoot.tokenEndpoint) {
-            cachedBoot.tokenEndpoint = config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH;
+            cachedBoot.tokenEndpoint = cachedDirectBase
+              ? (cachedDirectBase + '/api/storefront/token?shop=' + encodeURIComponent(config.shopDomain))
+              : (config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH);
           }
           if (!cachedBoot.activityEndpoint) {
-            cachedBoot.activityEndpoint = (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity');
+            cachedBoot.activityEndpoint = cachedDirectBase
+              ? (cachedDirectBase + '/api/storefront/activity')
+              : (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity');
           }
           if (!cachedBoot.iosHomeScreenEndpoint) {
-            cachedBoot.iosHomeScreenEndpoint = (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen');
+            cachedBoot.iosHomeScreenEndpoint = cachedDirectBase
+              ? (cachedDirectBase + '/api/storefront/ios-home-screen')
+              : (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen');
+          }
+          if (!cachedBoot.serviceWorkerPath) {
+            cachedBoot.serviceWorkerPath = config.localServiceWorkerPath || config.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH;
           }
           if (!cachedBoot.activityFallbackEndpoint && cachedDirectBase) {
             cachedBoot.activityFallbackEndpoint = cachedDirectBase + '/api/storefront/activity';
@@ -1681,11 +1693,18 @@
       externalId: existingExternalId,
       clientId: getOrCreateStableClientId(config.shopDomain),
       bootstrapSource: 'fallback',
-      tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
-      activityEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity'),
+      tokenEndpoint: config.appUrl
+        ? config.appUrl.replace(/\/$/, '') + '/api/storefront/token?shop=' + encodeURIComponent(config.shopDomain)
+        : (config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH),
+      activityEndpoint: config.appUrl
+        ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity'
+        : (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity'),
       activityFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity' : '',
-      iosHomeScreenEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen'),
+      iosHomeScreenEndpoint: config.appUrl
+        ? config.appUrl.replace(/\/$/, '') + '/api/storefront/ios-home-screen'
+        : (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen'),
       iosHomeScreenFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/ios-home-screen' : '',
+      serviceWorkerPath: config.localServiceWorkerPath || config.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH,
       optIn: defaultOptInSettings,
       firebase: fallbackFirebaseConfig
     };
@@ -1704,17 +1723,14 @@
       var response = await fetch(url, fetchOptions);
       var contentType = response.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
-        console.error('[PushEagle] Bootstrap non-JSON response', response.status, url);
         return null;
       }
       var data = await response.json();
       if (response.ok && data && data.ok) {
         return data;
       }
-      console.error('[PushEagle] Bootstrap error response', response.status, data);
       return null;
     } catch (_error) {
-      console.error('[PushEagle] Bootstrap fetch failed', url, _error);
       return null;
     }
   }
@@ -1823,43 +1839,43 @@
         messaging = null;
       }
 
-      var swPath = normalizeServiceWorkerPath((boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH);
-      var swScope = deriveServiceWorkerScope(swPath);
+      var swCandidates = [];
+      var primarySwPath = normalizeServiceWorkerPath((boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH);
+      if (primarySwPath) {
+        swCandidates.push(primarySwPath);
+      }
+      var localSwPath = normalizeServiceWorkerPath(runtimeConfig.localServiceWorkerPath || DEFAULT_LOCAL_SERVICE_WORKER_PATH);
+      if (localSwPath && swCandidates.indexOf(localSwPath) === -1) {
+        swCandidates.push(localSwPath);
+      }
+
       var registration;
+      var lastSwError = null;
 
-      try {
-        registration = await navigator.serviceWorker.register(swPath, { scope: swScope });
-      } catch (_scopedRegisterError) {
+      for (var swIndex = 0; swIndex < swCandidates.length; swIndex += 1) {
+        var swPath = swCandidates[swIndex];
+        var swScope = deriveServiceWorkerScope(swPath);
+
         try {
-          // Fallback to default scope derived from script directory for stricter browser/proxy combinations.
-          registration = await navigator.serviceWorker.register(swPath);
-        } catch (swRegisterError) {
-          var reusedExistingRegistration = false;
           try {
-            var existingRegistrations = await navigator.serviceWorker.getRegistrations();
-            for (var r = 0; r < existingRegistrations.length; r += 1) {
-              var existing = existingRegistrations[r];
-              if (existing && typeof existing.scope === 'string' && existing.scope.indexOf('/apps/push-eagle/') !== -1) {
-                registration = existing;
-                reusedExistingRegistration = true;
-                break;
-              }
-            }
-            if (!reusedExistingRegistration) {
-              throw swRegisterError;
-            }
-          } catch (_existingRegistrationLookupError) {
-            throw swRegisterError;
+            registration = await navigator.serviceWorker.register(swPath, { scope: swScope });
+          } catch (_scopedRegisterError) {
+            registration = await navigator.serviceWorker.register(swPath);
           }
-
-          if (!reusedExistingRegistration) {
-            var swMessage = swRegisterError && swRegisterError.message ? String(swRegisterError.message) : '';
-            if (/404|bad http response|script/i.test(swMessage)) {
-              return { ok: false, reason: 'sw-script-missing', message: swMessage };
-            }
-            throw swRegisterError;
+          if (registration) {
+            break;
           }
+        } catch (swRegisterError) {
+          lastSwError = swRegisterError;
         }
+      }
+
+      if (!registration) {
+        var swMessage = lastSwError && lastSwError.message ? String(lastSwError.message) : '';
+        if (/404|bad http response|script/i.test(swMessage)) {
+          return { ok: false, reason: 'sw-script-missing', message: swMessage };
+        }
+        throw lastSwError || new Error('Service worker registration failed');
       }
 
       try {
@@ -2194,6 +2210,7 @@
       shopDomain: root.dataset.shopDomain || '',
       proxyBootstrapPath: root.dataset.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH,
       proxyServiceWorkerPath: root.dataset.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH,
+      localServiceWorkerPath: root.dataset.localServiceWorkerPath || DEFAULT_LOCAL_SERVICE_WORKER_PATH,
       proxyTokenPath: root.dataset.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
       displayTrigger: root.dataset.displayTrigger || 'auto',
       manualSelector: root.dataset.manualSelector || '[data-push-eagle-open]',
