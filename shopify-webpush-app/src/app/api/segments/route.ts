@@ -45,7 +45,10 @@ export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
     const segments = await listSegments(shopDomain);
-    return NextResponse.json({ ok: true, segments });
+    return NextResponse.json(
+      { ok: true, segments },
+      { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=60' } },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to list segments.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

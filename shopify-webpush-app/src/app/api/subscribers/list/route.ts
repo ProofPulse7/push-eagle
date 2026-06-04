@@ -24,11 +24,14 @@ export async function GET(request: Request) {
 
     const data = await listSubscribers(shopDomain, parsed.limit, parsed.offset, parsed.sort);
 
-    return NextResponse.json({
-      ok: true,
-      shopDomain,
-      ...data,
-    });
+    return NextResponse.json(
+      {
+        ok: true,
+        shopDomain,
+        ...data,
+      },
+      { headers: { 'Cache-Control': 'private, max-age=10, stale-while-revalidate=30' } },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch subscriber list.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

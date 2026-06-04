@@ -15,7 +15,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Skeleton } from "../ui/skeleton";
 import { Progress } from "../ui/progress";
 import { formatCurrency } from "@/lib/utils";
-import { useSettings } from "@/context/settings-context";
+import { useCampaigns } from '@/hooks/queries/use-app-queries';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 
 type Campaign = {
     id: string;
@@ -49,11 +50,11 @@ const TableSkeleton = () => (
 )
 
 export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined }) {
+    const shopDomain = useShopDomain();
+    const { data, isLoading, isError, error: queryError } = useCampaigns();
     const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-    const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState('sent');
-    const { shopDomain } = useSettings();
 
     const fetchDeliveryStats = async (campaignId: string) => {
         try {
@@ -118,33 +119,21 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
     };
 
     useEffect(() => {
-        const fetchCampaigns = async () => {
-            setLoading(true);
-            setError(null);
-            try {
-                if (!shopDomain) {
-                    setCampaigns([]);
-                    return;
-                }
+        if (!data?.campaigns) {
+            if (!shopDomain) setCampaigns([]);
+            return;
+        }
+        setCampaigns((data.campaigns as unknown[]).map(mapApiCampaign));
+        setError(null);
+    }, [data, shopDomain]);
 
-                const response = await fetch(`/api/campaigns?shop=${encodeURIComponent(shopDomain)}`);
-                const data = await response.json();
+    useEffect(() => {
+        if (isError) {
+            setError(queryError instanceof Error ? queryError.message : 'Failed to load campaigns.');
+        }
+    }, [isError, queryError]);
 
-                if (!response.ok || !data?.ok) {
-                    throw new Error(data?.error ?? 'Failed to load campaigns.');
-                }
-
-                setCampaigns((data.campaigns ?? []).map(mapApiCampaign));
-            } catch (error) {
-                setCampaigns([]);
-                setError(error instanceof Error ? error.message : 'Failed to load campaigns.');
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchCampaigns();
-    }, [shopDomain]);
+    const loading = isLoading && !data;
 
     // Update stats for sending campaigns every 10 seconds
     useEffect(() => {

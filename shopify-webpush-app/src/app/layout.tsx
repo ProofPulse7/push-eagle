@@ -7,6 +7,10 @@ import { AppLayout } from '@/components/layout/app-layout';
 import { ThemeProvider } from '@/components/theme-provider';
 import { FirebaseClientInit } from '@/components/firebase/firebase-client-init';
 import { SettingsProvider } from '@/context/settings-context';
+import { AppBootstrapLoader } from '@/components/providers/app-bootstrap-loader';
+import { AppSetupGate } from '@/components/providers/app-setup-gate';
+import { QueryProvider } from '@/components/providers/query-provider';
+import { SettingsCacheSync } from '@/components/providers/settings-cache-sync';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -49,11 +53,18 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <SettingsProvider>
-            <FirebaseClientInit />
-            <AppLayout>{children}</AppLayout>
-            <Toaster />
-          </SettingsProvider>
+          <QueryProvider>
+            <SettingsProvider>
+              <AppSetupGate>
+                <AppBootstrapLoader>
+                  <SettingsCacheSync />
+                  <FirebaseClientInit />
+                  <AppLayout>{children}</AppLayout>
+                  <Toaster />
+                </AppBootstrapLoader>
+              </AppSetupGate>
+            </SettingsProvider>
+          </QueryProvider>
         </ThemeProvider>
       </body>
     </html>

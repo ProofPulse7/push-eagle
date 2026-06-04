@@ -1,7 +1,9 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
+import { useSegments } from '@/hooks/queries/use-app-queries';
+import { PageLoadingShell } from '@/components/ui/loading-ui';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -268,7 +270,7 @@ const AddAttributeDialog = ({
 
 export default function SegmentsPage() {
   const { shopDomain } = useSettings();
-  const [segments, setSegments] = useState(initialSegments);
+  const { data: segmentsData, isLoading, isFetching } = useSegments();
   const [resolvedShopDomain, setResolvedShopDomain] = useState('');
   const [customAttributes, setCustomAttributes] = useState(initialCustomAttributes);
   const [currentPage, setCurrentPage] = useState(1);
@@ -283,36 +285,20 @@ export default function SegmentsPage() {
     setResolvedShopDomain(candidate);
   }, [shopDomain]);
 
-  useEffect(() => {
-    if (!resolvedShopDomain) {
-      return;
+  const segments = useMemo(() => {
+    const rows = segmentsData?.segments;
+    if (!Array.isArray(rows)) {
+      return initialSegments;
     }
 
-    const loadSegments = async () => {
-      try {
-        const response = await fetch(`/api/segments?shop=${encodeURIComponent(resolvedShopDomain)}`, { cache: 'no-store' });
-        const json = await response.json();
-
-        if (!response.ok || !json?.ok) {
-          throw new Error(json?.error ?? 'Failed to load segments.');
-        }
-
-        setSegments(
-          ((json.segments || []) as SegmentApiRow[]).map((segment) => ({
-            id: String(segment.id),
-            name: String(segment.name),
-            type: String(segment.type ?? 'Dynamic'),
-            subscribers: Number(segment.subscriberCount ?? 0).toLocaleString(),
-            criteria: String(segment.criteria ?? 'Custom audience criteria'),
-          })),
-        );
-      } catch (error) {
-        console.error('Failed to load segments', error);
-      }
-    };
-
-    void loadSegments();
-  }, [resolvedShopDomain]);
+    return (rows as SegmentApiRow[]).map((segment) => ({
+      id: String(segment.id),
+      name: String(segment.name),
+      type: String(segment.type ?? 'Dynamic'),
+      subscribers: Number(segment.subscriberCount ?? 0).toLocaleString(),
+      criteria: String(segment.criteria ?? 'Custom audience criteria'),
+    }));
+  }, [segmentsData]);
 
   const paginatedAttributes = customAttributes.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
@@ -338,6 +324,12 @@ export default function SegmentsPage() {
 
 
   return (
+    <PageLoadingShell
+      title="Segments"
+      isLoading={isLoading}
+      hasData={Boolean(segmentsData)}
+      isFetching={isFetching}
+    >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
       <div className="flex items-center justify-between">
         <div>
@@ -483,5 +475,6 @@ export default function SegmentsPage() {
       />
 
     </div>
+    </PageLoadingShell>
   );
 }

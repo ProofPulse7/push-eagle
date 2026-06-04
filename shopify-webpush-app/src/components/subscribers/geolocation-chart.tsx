@@ -1,12 +1,13 @@
 
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatNumber } from '@/lib/utils';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '../ui/progress';
-import { useSettings } from '@/context/settings-context';
+import { useSubscribersOverview } from '@/hooks/queries/use-app-queries';
+import { Skeleton } from '@/components/ui/skeleton';
 
 type LocationItem = { name: string; value: number };
 
@@ -63,44 +64,32 @@ const BreakdownList = ({ data }: { data: LocationItem[] }) => {
 
 
 export function GeolocationChart() {
-    const { shopDomain } = useSettings();
-    const [countries, setCountries] = useState<LocationItem[]>([]);
-    const [cities, setCities] = useState<LocationItem[]>([]);
+    const { data, isLoading } = useSubscribersOverview();
 
-    useEffect(() => {
-        if (!shopDomain) {
-            return;
-        }
+    const countries = useMemo(() => {
+        if (!data?.ok) return [];
+        const nextCountries = Array.isArray(data.countries) ? data.countries : [];
+        return nextCountries.map((item: { name: string; value: number }) => ({
+            name: item.name,
+            value: Number(item.value ?? 0),
+        }));
+    }, [data]);
 
-        let active = true;
-        fetch(`/api/subscribers/overview?shop=${encodeURIComponent(shopDomain)}`)
-            .then((response) => response.json())
-            .then((data) => {
-                if (!active || !data?.ok) {
-                    return;
-                }
-
-                const nextCountries = Array.isArray(data.countries) ? data.countries : [];
-                const nextCities = Array.isArray(data.cities) ? data.cities : [];
-
-                setCountries(nextCountries.map((item: { name: string; value: number }) => ({
-                    name: item.name,
-                    value: Number(item.value ?? 0),
-                })));
-                setCities(nextCities.map((item: { name: string; value: number }) => ({
-                    name: item.name,
-                    value: Number(item.value ?? 0),
-                })));
-            })
-            .catch(() => undefined);
-
-        return () => {
-            active = false;
-        };
-    }, [shopDomain]);
+    const cities = useMemo(() => {
+        if (!data?.ok) return [];
+        const nextCities = Array.isArray(data.cities) ? data.cities : [];
+        return nextCities.map((item: { name: string; value: number }) => ({
+            name: item.name,
+            value: Number(item.value ?? 0),
+        }));
+    }, [data]);
 
     const processedCountriesData = useMemo(() => addOthersCategory(countries), [countries]);
     const processedCitiesData = useMemo(() => addOthersCategory(cities), [cities]);
+
+    if (isLoading && !data) {
+        return <Skeleton className="h-64 w-full" />;
+    }
 
   return (
     <Card className="h-full">

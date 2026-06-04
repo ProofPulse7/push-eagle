@@ -67,7 +67,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       throw redirect(buildDashboardUrl(dashboardUrl, shopDomain));
     }
 
-    throw redirect(dashboardUrl);
+    throw redirect(new URL("/dashboard", dashboardUrl).toString());
   }
 
   await authenticate.admin(request);

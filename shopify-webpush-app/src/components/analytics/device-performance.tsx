@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import type { DateRange } from 'react-day-picker';
+import { useMemo } from 'react';
 import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from '@/components/ui/skeleton';
+import { useSubscribersOverview } from '@/hooks/queries/use-app-queries';
 import { formatCurrency } from '@/lib/utils';
 
 type DevicePoint = { device: string; value: number; fill: string };
@@ -33,45 +33,34 @@ const chartConfig = {
   ios: { label: 'iOS', color: 'hsl(var(--chart-4))' },
 } satisfies ChartConfig;
 
-export function DevicePerformance({ dateRange, shopDomain }: { dateRange: DateRange | undefined; shopDomain?: string }) {
-  const [data, setData] = useState(emptyData);
-  const [loading, setLoading] = useState(false);
+export function DevicePerformance({ shopDomain }: { shopDomain?: string }) {
+  const { data: payload, isLoading } = useSubscribersOverview();
 
-  useEffect(() => {
-    if (!shopDomain) {
-      setData(emptyData());
-      return;
-    }
+  const data = useMemo(() => {
+    if (!shopDomain || !payload?.ok) return emptyData();
 
-    let active = true;
-    setLoading(true);
+    const platforms = (payload.platforms ?? []) as Array<{ name: string; value?: number; count?: number }>;
+    const total = platforms.reduce((acc, p) => acc + Number(p.value ?? p.count ?? 0), 0);
 
-    fetch(`/api/subscribers/overview?shop=${encodeURIComponent(shopDomain)}`)
-      .then((res) => res.json())
-      .then((payload) => {
-        if (!active || !payload?.ok) return;
+    const subsData = DEVICES.map((d) => {
+      const match = platforms.find((p) => p.name?.toLowerCase().includes(d === 'macos' ? 'mac' : d));
+      return {
+        device: d.charAt(0).toUpperCase() + d.slice(1),
+        value: Number(match?.value ?? match?.count ?? 0),
+        fill: FILLS[d],
+      };
+    });
 
-        const platforms: Array<{ name: string; count: number }> = payload.platforms ?? [];
-        const total = platforms.reduce((acc, p) => acc + p.count, 0);
+    const ctrData = DEVICES.map((d) => {
+      const match = platforms.find((p) => p.name?.toLowerCase().includes(d === 'macos' ? 'mac' : d));
+      const pct = total > 0 ? (Number(match?.value ?? match?.count ?? 0) / total) * 100 : 0;
+      return { device: d.charAt(0).toUpperCase() + d.slice(1), value: parseFloat(pct.toFixed(1)), fill: FILLS[d] };
+    });
 
-        const subsData = DEVICES.map((d) => {
-          const match = platforms.find((p) => p.name?.toLowerCase().includes(d === 'macos' ? 'mac' : d));
-          return { device: d.charAt(0).toUpperCase() + d.slice(1), value: match?.count ?? 0, fill: FILLS[d] };
-        });
+    return { revenueData: emptyData().revenueData, subscribersData: subsData, clickRateData: ctrData };
+  }, [shopDomain, payload]);
 
-        const ctrData = DEVICES.map((d) => {
-          const match = platforms.find((p) => p.name?.toLowerCase().includes(d === 'macos' ? 'mac' : d));
-          const pct = total > 0 ? ((match?.count ?? 0) / total) * 100 : 0;
-          return { device: d.charAt(0).toUpperCase() + d.slice(1), value: parseFloat(pct.toFixed(1)), fill: FILLS[d] };
-        });
-
-        setData({ revenueData: emptyData().revenueData, subscribersData: subsData, clickRateData: ctrData });
-      })
-      .catch(() => undefined)
-      .finally(() => { if (active) setLoading(false); });
-
-    return () => { active = false; };
-  }, [shopDomain, dateRange]);
+  const loading = isLoading && !payload;
 
   return (
     <Card>

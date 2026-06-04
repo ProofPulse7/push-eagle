@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { isImpressionLimitReached } from '@/lib/server/billing/merchant-billing';
 import { listAutomationRules, upsertAutomationRule } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -53,6 +54,17 @@ export async function POST(request: Request) {
   try {
     const body = updateSchema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
+
+    if (body.enabled === true && (await isImpressionLimitReached(shopDomain))) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            'Monthly impression limit reached. Upgrade your plan on Plans to activate automations.',
+        },
+        { status: 403 },
+      );
+    }
 
     const updated = await upsertAutomationRule(shopDomain, body.ruleKey, body.enabled, body.config);
     if (!updated) {

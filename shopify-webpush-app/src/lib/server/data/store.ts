@@ -913,6 +913,7 @@ const ensureSchema = async () => {
         WHERE s.ctid = r.ctid AND r.rn > 1
       `;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_subscribers_shop_external_id ON subscribers(shop_domain, external_id)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_subscribers_shop_created ON subscribers(shop_domain, created_at DESC)`;
 
       await sql`
         WITH ranked AS (
@@ -6695,6 +6696,9 @@ export const sendCampaign = async (
   campaignId: string,
   options?: { maxBatches?: number },
 ) => {
+  const { assertCanSendNotifications } = await import('@/lib/server/billing/merchant-billing');
+  await assertCanSendNotifications(shopDomain, 1);
+
   await ensureSchema();
   const sql = getNeonSql();
   const maxBatches = Math.max(1, Math.min(Number(options?.maxBatches ?? Number.MAX_SAFE_INTEGER), 2000));

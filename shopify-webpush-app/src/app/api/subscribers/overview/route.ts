@@ -14,15 +14,22 @@ export async function GET(request: Request) {
       getSubscriberLocationBreakdown(shopDomain),
     ]);
 
-    return NextResponse.json({
-      ok: true,
-      shopDomain,
-      ...kpis,
-      browsers: breakdown.browsers,
-      platforms: breakdown.platforms,
-      countries: locations.countries,
-      cities: locations.cities,
-    });
+    return NextResponse.json(
+      {
+        ok: true,
+        shopDomain,
+        ...kpis,
+        browsers: breakdown.browsers,
+        platforms: breakdown.platforms,
+        countries: locations.countries,
+        cities: locations.cities,
+      },
+      {
+        headers: {
+          'Cache-Control': 'private, max-age=15, stale-while-revalidate=60',
+        },
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch subscriber overview.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

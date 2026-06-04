@@ -1,17 +1,17 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis, Area, AreaChart } from 'recharts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { formatCurrency } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
-import { format, parseISO, eachDayOfInterval, addDays } from 'date-fns';
+import { format, eachDayOfInterval, addDays } from 'date-fns';
 import { AreaChart as AreaChartIcon, BarChart3 } from 'lucide-react';
-import { useSettings } from '@/context/settings-context';
-import { useSearchParams } from 'next/navigation';
+import { useAnalyticsStats } from '@/hooks/queries/use-app-queries';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 
 const chartConfig = {
   revenue: {
@@ -21,144 +21,93 @@ const chartConfig = {
 } satisfies ChartConfig;
 
 export function PerformanceChart() {
-    const { shopDomain: settingsShop } = useSettings();
-    const searchParams = useSearchParams();
-    const shopDomain = searchParams.get('shop') || settingsShop || '';
+  const shopDomain = useShopDomain();
+  const [chartType, setChartType] = useState<'bar' | 'area'>('bar');
+  const [isClient, setIsClient] = useState(false);
 
-    const [chartData, setChartData] = useState<{ data: { date: string; revenue: number }[]; total: number }>({ data: [], total: 0 });
-    const [chartType, setChartType] = useState<'bar' | 'area'>('bar');
-    const [isClient, setIsClient] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
 
-    useEffect(() => {
-        setIsClient(true);
-    }, []);
+  const to = new Date();
+  const from = addDays(to, -6);
+  const { data: payload, isLoading } = useAnalyticsStats(from, to);
 
-    useEffect(() => {
-        if (!isClient) return;
-
-        const to = new Date();
-        const from = addDays(to, -6);
-
-        if (!shopDomain) {
-            const emptyDays = eachDayOfInterval({ start: from, end: to }).map(day => ({
-                date: format(day, 'MMM d'),
-                revenue: 0,
-            }));
-            setChartData({ data: emptyDays, total: 0 });
-            return;
-        }
-
-        let active = true;
-        setIsLoading(true);
-
-        fetch(
-            `/api/analytics/stats?shop=${encodeURIComponent(shopDomain)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
-        )
-            .then((res) => res.json())
-            .then((payload) => {
-                if (!active || !payload?.ok) return;
-
-                const byDate = new Map<string, number>(
-                    (payload.dailyRevenue ?? []).map((r: { date: string; revenueCents: number }) => [
-                        r.date,
-                        r.revenueCents / 100,
-                    ]),
-                );
-
-                const days = eachDayOfInterval({ start: from, end: to }).map((day) => {
-                    const key = format(day, 'yyyy-MM-dd');
-                    return { date: format(day, 'MMM d'), revenue: byDate.get(key) ?? 0 };
-                });
-
-                const total = days.reduce((acc, d) => acc + d.revenue, 0);
-                setChartData({ data: days, total });
-            })
-            .catch(() => undefined)
-            .finally(() => {
-                if (active) setIsLoading(false);
-            });
-
-        return () => { active = false; };
-    }, [isClient, shopDomain]);
-
-    if (!isClient) {
-        return <CardSkeleton />;
+  const chartData = useMemo(() => {
+    if (!shopDomain || !payload?.ok) {
+      const emptyDays = eachDayOfInterval({ start: from, end: to }).map((day) => ({
+        date: format(day, 'MMM d'),
+        revenue: 0,
+      }));
+      return { data: emptyDays, total: 0 };
     }
 
-    return (
-        <Card>
-            <CardHeader>
-                <div>
-                    <CardTitle>Performance Overview</CardTitle>
-                    <CardDescription>Revenue over the last 7 days.</CardDescription>
-                </div>
-            </CardHeader>
-            <CardContent>
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4">
-                    <div className="flex items-baseline gap-2">
-                        <p className="text-2xl font-bold">{formatCurrency(chartData.total)}</p>
-                        <p className="text-sm text-muted-foreground">
-                           Total Revenue
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <div className="flex items-center rounded-md bg-muted p-1">
-                            <Button variant={chartType === 'area' ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setChartType('area')}><AreaChartIcon className="h-4 w-4" /></Button>
-                            <Button variant={chartType === 'bar' ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setChartType('bar')}><BarChart3 className="h-4 w-4" /></Button>
-                        </div>
-                    </div>
-                </div>
-
-                <ChartContainer config={chartConfig} className="h-64 w-full">
-                    {chartType === 'bar' ? (
-                        <ResponsiveContainer width="100%" height={250}>
-                            <BarChart data={chartData.data}>
-                                <CartesianGrid vertical={false} />
-                                <XAxis dataKey="date" tickLine={false} tickMargin={10} axisLine={false} />
-                                <YAxis tickLine={false} axisLine={false} tickMargin={10} tickFormatter={(value) => formatCurrency(value, true)} />
-                                <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="dot" />} />
-                                <Bar dataKey="revenue" fill="var(--color-revenue)" radius={4} />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    ) : (
-                         <ResponsiveContainer width="100%" height={250}>
-                            <AreaChart data={chartData.data}>
-                                <defs>
-                                    <linearGradient id="fillRevenue" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="var(--color-revenue)" stopOpacity={0.8} />
-                                        <stop offset="95%" stopColor="var(--color-revenue)" stopOpacity={0.1} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid vertical={false} />
-                                <XAxis dataKey="date" tickLine={false} tickMargin={10} axisLine={false} />
-                                <YAxis tickLine={false} axisLine={false} tickMargin={10} tickFormatter={(value) => formatCurrency(value, true)} />
-                                <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="dot" />} />
-                                <Area dataKey="revenue" type="monotone" stroke="var(--color-revenue)" strokeWidth={2} fillOpacity={1} fill="url(#fillRevenue)" dot={{ fill: "var(--color-revenue)", r: 2 }} activeDot={{ r: 6 }} />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    )}
-                </ChartContainer>
-                {isLoading && <p className="text-xs text-muted-foreground mt-2">Loading revenue data...</p>}
-            </CardContent>
-        </Card>
+    const byDate = new Map<string, number>(
+      ((payload.dailyRevenue ?? []) as Array<{ date: string; revenueCents: number }>).map((r) => [
+        r.date,
+        r.revenueCents / 100,
+      ]),
     );
-}
 
-const CardSkeleton = () => (
+    const days = eachDayOfInterval({ start: from, end: to });
+    const points = days.map((day) => ({
+      date: format(day, 'MMM d'),
+      revenue: byDate.get(format(day, 'yyyy-MM-dd')) ?? 0,
+    }));
+
+    const total = points.reduce((sum, p) => sum + p.revenue, 0);
+    return { data: points, total };
+  }, [shopDomain, payload, from, to]);
+
+  const showSkeleton = isLoading && !payload;
+
+  if (!isClient) {
+    return <Skeleton className="h-80 w-full" />;
+  }
+
+  return (
     <Card>
-        <CardHeader>
-            <div>
-                <Skeleton className="h-7 w-48" />
-                <Skeleton className="h-4 w-64 mt-2" />
-            </div>
-        </CardHeader>
-        <CardContent>
-             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4">
-                <Skeleton className="h-8 w-56" />
-                <Skeleton className="h-10 w-24" />
-            </div>
-            <Skeleton className="h-64 w-full" />
-        </CardContent>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle>Revenue (Last 7 Days)</CardTitle>
+          <CardDescription>{formatCurrency(chartData.total)} total</CardDescription>
+        </div>
+        <div className="flex gap-2">
+          <Button variant={chartType === 'bar' ? 'default' : 'outline'} size="icon" onClick={() => setChartType('bar')}>
+            <BarChart3 className="h-4 w-4" />
+          </Button>
+          <Button variant={chartType === 'area' ? 'default' : 'outline'} size="icon" onClick={() => setChartType('area')}>
+            <AreaChartIcon className="h-4 w-4" />
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {showSkeleton ? (
+          <Skeleton className="h-80 w-full" />
+        ) : (
+          <ChartContainer config={chartConfig} className="h-80 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              {chartType === 'bar' ? (
+                <BarChart data={chartData.data}>
+                  <CartesianGrid vertical={false} />
+                  <XAxis dataKey="date" tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(v) => formatCurrency(v)} tickLine={false} axisLine={false} />
+                  <ChartTooltip content={<ChartTooltipContent formatter={(v) => formatCurrency(Number(v))} />} />
+                  <Bar dataKey="revenue" fill="var(--color-revenue)" radius={4} />
+                </BarChart>
+              ) : (
+                <AreaChart data={chartData.data}>
+                  <CartesianGrid vertical={false} />
+                  <XAxis dataKey="date" tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(v) => formatCurrency(v)} tickLine={false} axisLine={false} />
+                  <ChartTooltip content={<ChartTooltipContent formatter={(v) => formatCurrency(Number(v))} />} />
+                  <Area type="monotone" dataKey="revenue" fill="var(--color-revenue)" stroke="var(--color-revenue)" />
+                </AreaChart>
+              )}
+            </ResponsiveContainer>
+          </ChartContainer>
+        )}
+      </CardContent>
     </Card>
-);
+  );
+}

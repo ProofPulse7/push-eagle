@@ -77,8 +77,6 @@ const getTargetTokens = async (
 export const sendCampaignNotification = async (input: SendNotificationInput): Promise<string> => {
   const sql = getNeonSql();
 
-  // Create delivery record in campaign_deliveries table
-  const deliveryId = randomUUID();
   const targetTokens = await getTargetTokens(input.shopDomain, input.segmentId);
 
   if (targetTokens.length === 0) {
@@ -86,6 +84,11 @@ export const sendCampaignNotification = async (input: SendNotificationInput): Pr
   }
 
   const totalDeliveries = targetTokens.length;
+  const { assertCanSendNotifications } = await import('@/lib/server/billing/merchant-billing');
+  await assertCanSendNotifications(input.shopDomain, totalDeliveries);
+
+  // Create delivery record in campaign_deliveries table
+  const deliveryId = randomUUID();
 
   // Batch insert delivery records (avoid individual inserts for speed)
   const chunkSize = 1000;

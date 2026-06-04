@@ -5,7 +5,8 @@ import { Pie, PieChart, ResponsiveContainer, Cell, Text } from 'recharts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { formatCurrency } from '@/lib/utils';
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
+import { useAnalyticsStats } from '@/hooks/queries/use-app-queries';
 import type { DateRange } from 'react-day-picker';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
@@ -68,34 +69,25 @@ const renderCustomizedLabel = ({
 
 
 export function RevenueAttribution({ dateRange, shopDomain }: { dateRange: DateRange | undefined; shopDomain?: string }) {
-  const [data, setData] = useState<typeof emptyData>(emptyData);
   const [isClient, setIsClient] = useState(false);
+  const from = dateRange?.from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const to = dateRange?.to ?? new Date();
+  const { data: payload, isLoading } = useAnalyticsStats(from, to);
 
   useEffect(() => {
     setIsClient(true);
   }, []);
 
-  useEffect(() => {
-    if (!isClient || !shopDomain) return;
+  const data = useMemo(() => {
+    if (!payload?.ok) return emptyData;
+    const attribution = (payload.attribution ?? {}) as Record<string, number>;
+    return [
+      { source: 'campaigns', revenue: (attribution.campaignRevenueCents ?? 0) / 100, fill: 'var(--color-campaigns)' },
+      { source: 'automations', revenue: (attribution.automationRevenueCents ?? 0) / 100, fill: 'var(--color-automations)' },
+    ];
+  }, [payload]);
 
-    const from = dateRange?.from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const to = dateRange?.to ?? new Date();
-
-    fetch(
-      `/api/analytics/stats?shop=${encodeURIComponent(shopDomain)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
-    )
-      .then((res) => res.json())
-      .then((payload) => {
-        if (!payload?.ok) return;
-        setData([
-          { source: 'campaigns', revenue: (payload.attribution?.campaignRevenueCents ?? 0) / 100, fill: 'var(--color-campaigns)' },
-          { source: 'automations', revenue: (payload.attribution?.automationRevenueCents ?? 0) / 100, fill: 'var(--color-automations)' },
-        ]);
-      })
-      .catch(() => undefined);
-  }, [isClient, shopDomain, dateRange]);
-
-  if (!isClient || data.length === 0) {
+  if (!isClient || (isLoading && !payload)) {
     return (
       <Card className="flex flex-col h-full">
         <CardHeader>

@@ -1,8 +1,9 @@
 
 'use client';
 
-import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { PageLoadingShell } from '@/components/ui/loading-ui';
+import { useSubscribersOverview } from '@/hooks/queries/use-app-queries';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SubscriberKpis } from '@/components/subscribers/subscriber-kpis';
@@ -12,7 +13,15 @@ import { SubscriberGrowthChart } from '@/components/dashboard/subscriber-growth-
 import { SubscriberBreakdown } from '@/components/subscribers/subscriber-breakdown';
 
 export default function SubscribersPage() {
+  const { data, isLoading, isFetching } = useSubscribersOverview();
+
   return (
+    <PageLoadingShell
+      title="Subscribers"
+      isLoading={isLoading}
+      hasData={Boolean(data)}
+      isFetching={isFetching}
+    >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
       <div className="flex items-center justify-between">
         <div>
@@ -49,5 +58,6 @@ export default function SubscribersPage() {
         </TabsContent>
       </Tabs>
     </div>
+    </PageLoadingShell>
   );
 }

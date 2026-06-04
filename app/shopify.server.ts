@@ -39,11 +39,6 @@ const deriveAppUrl = () => {
     return explicitUrl;
   }
 
-  const nextPublicUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
-  if (nextPublicUrl) {
-    return nextPublicUrl;
-  }
-
   const vercelUrl = process.env.VERCEL_URL?.trim();
   if (vercelUrl) {
     return vercelUrl.startsWith("http") ? vercelUrl : `https://${vercelUrl}`;

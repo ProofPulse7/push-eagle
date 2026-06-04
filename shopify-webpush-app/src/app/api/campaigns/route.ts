@@ -45,7 +45,10 @@ export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
     const campaigns = await listCampaigns(shopDomain);
-    return NextResponse.json({ ok: true, campaigns: campaigns.map(transformCampaign) });
+    return NextResponse.json(
+      { ok: true, campaigns: campaigns.map(transformCampaign) },
+      { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=60' } },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to list campaigns.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

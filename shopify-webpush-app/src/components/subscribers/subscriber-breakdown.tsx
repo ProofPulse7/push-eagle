@@ -1,12 +1,13 @@
 
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatNumber } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
-import { useSettings } from '@/context/settings-context';
+import { useSubscribersOverview } from '@/hooks/queries/use-app-queries';
+import { Skeleton } from '@/components/ui/skeleton';
 
 type BreakdownItem = { name: string; value: number; color?: string };
 
@@ -61,34 +62,29 @@ const addOthersCategory = (data: BreakdownItem[]) => {
 };
 
 export function SubscriberBreakdown() {
-  const { shopDomain } = useSettings();
-  const [browserData, setBrowserData] = useState<BreakdownItem[]>([]);
-  const [osData, setOsData] = useState<BreakdownItem[]>([]);
+  const { data, isLoading } = useSubscribersOverview();
 
-  useEffect(() => {
-    if (!shopDomain) {
-      return;
-    }
+  const browserData = useMemo(() => {
+    if (!data?.ok) return [];
+    const browsers = Array.isArray(data.browsers) ? data.browsers : [];
+    return browsers.map((item: { name: string; value: number }) => ({
+      name: item.name,
+      value: Number(item.value ?? 0),
+    }));
+  }, [data]);
 
-    let active = true;
-    fetch(`/api/subscribers/overview?shop=${encodeURIComponent(shopDomain)}`)
-      .then((response) => response.json())
-      .then((data) => {
-        if (!active || !data?.ok) {
-          return;
-        }
+  const osData = useMemo(() => {
+    if (!data?.ok) return [];
+    const platforms = Array.isArray(data.platforms) ? data.platforms : [];
+    return platforms.map((item: { name: string; value: number }) => ({
+      name: item.name,
+      value: Number(item.value ?? 0),
+    }));
+  }, [data]);
 
-        const browsers = Array.isArray(data.browsers) ? data.browsers : [];
-        const platforms = Array.isArray(data.platforms) ? data.platforms : [];
-        setBrowserData(browsers.map((item: { name: string; value: number }) => ({ name: item.name, value: Number(item.value ?? 0) })));
-        setOsData(platforms.map((item: { name: string; value: number }) => ({ name: item.name, value: Number(item.value ?? 0) })));
-      })
-      .catch(() => undefined);
-
-    return () => {
-      active = false;
-    };
-  }, [shopDomain]);
+  if (isLoading && !data) {
+    return <Skeleton className="h-64 w-full" />;
+  }
 
   const processedBrowserData = useMemo(() => addOthersCategory(browserData), [browserData]);
   const processedOsData = useMemo(() => addOthersCategory(osData), [osData]);

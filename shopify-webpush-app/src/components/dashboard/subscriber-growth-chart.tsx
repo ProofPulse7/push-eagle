@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis, Area, AreaChart } from 'recharts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
@@ -11,13 +11,12 @@ import { differenceInDays, eachMonthOfInterval, format } from 'date-fns';
 import { AreaChart as AreaChartIcon, BarChart3 } from 'lucide-react';
 import type { DateRange } from 'react-day-picker';
 import { DateRangePicker } from '../analytics/date-range-picker';
-import { useSettings } from '@/context/settings-context';
+import { useSubscriberGrowth } from '@/hooks/queries/use-app-queries';
 
 type GrowthPoint = {
   date: string;
   subscribers: number;
 };
-
 
 const chartConfig = {
   subscribers: {
@@ -40,99 +39,87 @@ const getXAxisProps = (dataCount: number) => {
     return { angle: 0, textAnchor: 'middle' as const, height: 30, interval: 0 };
 };
 
+function buildChartData(
+    payload: Record<string, unknown> | undefined,
+    from: Date,
+    to: Date,
+): { data: GrowthPoint[]; total: number } {
+    if (!payload?.ok) {
+        return { data: [], total: 0 };
+    }
+
+    const rawPoints = Array.isArray(payload.points) ? payload.points : [];
+    const pointDates = rawPoints
+        .map((item: { date?: string }) => (item?.date ? new Date(item.date) : null))
+        .filter((value: Date | null): value is Date => value instanceof Date && !Number.isNaN(value.getTime()));
+
+    const rangeDays =
+        pointDates.length > 1
+            ? differenceInDays(pointDates[pointDates.length - 1], pointDates[0])
+            : 0;
+
+    if (rangeDays > 90) {
+        const monthly = new Map<string, number>();
+        for (const item of rawPoints) {
+            const day = item?.date ? new Date(item.date) : null;
+            if (!day || Number.isNaN(day.getTime())) {
+                continue;
+            }
+            const label = format(day, 'MMM yy');
+            monthly.set(label, (monthly.get(label) ?? 0) + Number(item?.subscribers ?? 0));
+        }
+
+        const interval = eachMonthOfInterval({ start: from, end: to });
+        const monthPoints = interval.map((month) => {
+            const label = format(month, 'MMM yy');
+            return {
+                date: label,
+                subscribers: monthly.get(label) ?? 0,
+            };
+        });
+
+        return {
+            data: monthPoints,
+            total: monthPoints.reduce((sum, item) => sum + item.subscribers, 0),
+        };
+    }
+
+    const normalized = rawPoints.map((item: { date?: string; subscribers?: number }) => {
+        const parsedDate = item?.date ? new Date(item.date) : null;
+        return {
+            date:
+                parsedDate && !Number.isNaN(parsedDate.getTime())
+                    ? format(parsedDate, 'MMM d')
+                    : 'Unknown',
+            subscribers: Number(item?.subscribers ?? 0),
+        };
+    });
+
+    return {
+        data: normalized,
+        total: Number(
+            payload.totalNewSubscribers ??
+                normalized.reduce((sum, item) => sum + item.subscribers, 0),
+        ),
+    };
+}
 
 export function SubscriberGrowthChart({ showDatePicker = false }: { showDatePicker?: boolean }) {
-    const { shopDomain } = useSettings();
     const [date, setDate] = useState<DateRange | undefined>(undefined);
-    const [chartData, setChartData] = useState<{ data: GrowthPoint[]; total: number }>({ data: [], total: 0 });
     const [chartType, setChartType] = useState<'area' | 'bar'>('area');
     const [isClient, setIsClient] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
         setIsClient(true);
     }, []);
 
-    useEffect(() => {
-        if (!isClient || !shopDomain) {
-            return;
-        }
+    const to = date?.to ?? new Date();
+    const from = date?.from ?? new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const { data: payload, isFetching } = useSubscriberGrowth(from, to);
 
-        const to = date?.to ?? new Date();
-        const from = date?.from ?? new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-        let active = true;
-        setIsLoading(true);
-
-        fetch(`/api/subscribers/growth?shop=${encodeURIComponent(shopDomain)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`)
-            .then((response) => response.json())
-            .then((payload) => {
-                if (!active || !payload?.ok) {
-                    return;
-                }
-
-                const rawPoints = Array.isArray(payload.points) ? payload.points : [];
-                const pointDates = rawPoints
-                    .map((item: { date?: string }) => (item?.date ? new Date(item.date) : null))
-                    .filter((value: Date | null): value is Date => value instanceof Date && !Number.isNaN(value.getTime()));
-
-                const rangeDays = pointDates.length > 1
-                    ? differenceInDays(pointDates[pointDates.length - 1], pointDates[0])
-                    : 0;
-
-                if (rangeDays > 90) {
-                    const monthly = new Map<string, number>();
-                    for (const item of rawPoints) {
-                        const day = item?.date ? new Date(item.date) : null;
-                        if (!day || Number.isNaN(day.getTime())) {
-                            continue;
-                        }
-                        const label = format(day, 'MMM yy');
-                        monthly.set(label, (monthly.get(label) ?? 0) + Number(item?.subscribers ?? 0));
-                    }
-
-                    const interval = eachMonthOfInterval({ start: from, end: to });
-                    const monthPoints = interval.map((month) => {
-                        const label = format(month, 'MMM yy');
-                        return {
-                            date: label,
-                            subscribers: monthly.get(label) ?? 0,
-                        };
-                    });
-
-                    setChartData({
-                        data: monthPoints,
-                        total: monthPoints.reduce((sum, item) => sum + item.subscribers, 0),
-                    });
-                    return;
-                }
-
-                const normalized = rawPoints.map((item: { date?: string; subscribers?: number }) => {
-                    const parsedDate = item?.date ? new Date(item.date) : null;
-                    return {
-                        date: parsedDate && !Number.isNaN(parsedDate.getTime()) ? format(parsedDate, 'MMM d') : 'Unknown',
-                        subscribers: Number(item?.subscribers ?? 0),
-                    };
-                });
-
-                setChartData({
-                    data: normalized,
-                    total: Number(payload.totalNewSubscribers ?? normalized.reduce((sum: number, item: { subscribers: number }) => sum + item.subscribers, 0)),
-                });
-            })
-            .catch(() => undefined)
-            .finally(() => {
-                if (active) {
-                    setIsLoading(false);
-                }
-            });
-
-        return () => {
-            active = false;
-        };
-    }, [isClient, shopDomain, date]);
-
+    const chartData = useMemo(() => buildChartData(payload, from, to), [payload, from, to]);
     const xAxisProps = getXAxisProps(chartData.data.length);
+    const showRefreshing = isFetching && Boolean(payload);
 
     if (!isClient) {
         return <CardSkeleton />;
@@ -193,7 +180,7 @@ export function SubscriberGrowthChart({ showDatePicker = false }: { showDatePick
                         </ResponsiveContainer>
                     )}
                 </ChartContainer>
-                {isLoading && <p className="text-xs text-muted-foreground mt-2">Refreshing growth data...</p>}
+                {showRefreshing && <p className="text-xs text-muted-foreground mt-2">Refreshing growth data...</p>}
             </CardContent>
         </Card>
     );

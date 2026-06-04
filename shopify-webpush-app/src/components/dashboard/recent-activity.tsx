@@ -1,16 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { ArrowUpRight } from 'lucide-react';
+import Link from 'next/link';
+
+import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
-import Link from 'next/link';
 import { formatCurrency } from '@/lib/utils';
-import { useSettings } from '@/context/settings-context';
-import { useSearchParams } from 'next/navigation';
 
 type Campaign = {
   id: string;
@@ -22,38 +22,21 @@ type Campaign = {
 };
 
 export function RecentActivity() {
-  const { shopDomain: settingsShop } = useSettings();
-  const searchParams = useSearchParams();
-  const shopDomain = searchParams.get('shop') || settingsShop || '';
+  const { data, isLoading } = useCampaigns();
 
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [loading, setLoading] = useState(true);
+  const campaigns = useMemo(() => {
+    const rows = (data?.campaigns ?? []) as Array<Record<string, unknown>>;
+    return rows.slice(0, 5).map((campaign) => ({
+      id: String(campaign.id),
+      title: String(campaign.title ?? 'Untitled Campaign'),
+      status: String(campaign.status ?? 'draft'),
+      deliveryCount: Number(campaign.delivery_count ?? 0),
+      clickCount: Number(campaign.click_count ?? 0),
+      revenueCents: Number(campaign.revenue_cents ?? 0),
+    })) as Campaign[];
+  }, [data]);
 
-  useEffect(() => {
-    if (!shopDomain) {
-      setLoading(false);
-      return;
-    }
-
-    let active = true;
-    setLoading(true);
-
-    fetch(`/api/campaigns?shop=${encodeURIComponent(shopDomain)}`)
-      .then((res) => res.json())
-      .then((payload) => {
-        if (!active || !payload?.ok) return;
-        const all: Campaign[] = (payload.campaigns ?? []).slice(0, 5);
-        setCampaigns(all);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [shopDomain]);
+  const loading = isLoading && !data;
 
   const ctr = (c: Campaign) =>
     c.deliveryCount > 0 ? `${((c.clickCount / c.deliveryCount) * 100).toFixed(1)}%` : '0%';

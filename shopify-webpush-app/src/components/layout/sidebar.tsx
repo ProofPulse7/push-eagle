@@ -22,6 +22,7 @@ import {
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
 import { cn } from '@/lib/utils';
+import { useImpressionLimit } from '@/hooks/use-impression-limit';
 
 
 const NavLogo = (props: React.SVGProps<SVGSVGElement>) => (
@@ -32,6 +33,7 @@ const NavLogo = (props: React.SVGProps<SVGSVGElement>) => (
 
 
 export function Sidebar() {
+    const { atLimit } = useImpressionLimit();
     const currentParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
     const preservedParams = new URLSearchParams();
     const shop = currentParams.get('shop');
@@ -54,10 +56,10 @@ export function Sidebar() {
       </div>
       
       <div className="flex flex-1 flex-col overflow-y-auto p-4 gap-4">
-        <Button asChild>
-            <Link href={withContext('/campaigns/new')}>
+        <Button asChild disabled={atLimit} title={atLimit ? 'Monthly impression limit reached.' : undefined}>
+            <Link href={withContext(atLimit ? '/plans' : '/campaigns/new')}>
                 <Plus className="h-4 w-4" />
-                New Campaign
+                {atLimit ? 'Upgrade plan' : 'New Campaign'}
             </Link>
         </Button>
         <nav className="flex-1 space-y-1">

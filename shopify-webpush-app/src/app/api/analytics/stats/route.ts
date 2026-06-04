@@ -26,7 +26,14 @@ export async function GET(request: Request) {
       to ? new Date(to) : null,
     );
 
-    return NextResponse.json({ ok: true, ...stats });
+    return NextResponse.json(
+      { ok: true, ...stats },
+      {
+        headers: {
+          'Cache-Control': 'private, max-age=15, stale-while-revalidate=60',
+        },
+      },
+    );
   } catch (error) {
     const message = getRequestErrorMessage(error, 'Failed to fetch analytics stats.');
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

@@ -1,7 +1,8 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import {
     ArchiveRestore,
@@ -15,12 +16,16 @@ import {
     type LucideIcon,
 } from 'lucide-react';
 
-import { useSettings } from '@/context/settings-context';
+import { useAutomationsOverview } from '@/hooks/queries/use-app-queries';
+import { useImpressionLimit } from '@/hooks/use-impression-limit';
+import { useShopDomain } from '@/hooks/use-shop-domain';
+import { queryKeys } from '@/lib/client/query-keys';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 
 type RuleKey =
@@ -145,86 +150,40 @@ const getActionButtonClassName = (enabled: boolean) =>
         : 'h-8 rounded-lg bg-violet-600 px-3 text-xs font-semibold text-white hover:bg-violet-600/90';
 
 export default function AutomationsPage() {
-    const { shopDomain: storedShopDomain } = useSettings();
-    const [rules, setRules] = useState<AutomationRule[]>([]);
-    const [stats, setStats] = useState<AutomationStats | null>(null);
-    const [loading, setLoading] = useState(true);
+    const activeShopDomain = useShopDomain();
+    const { atLimit } = useImpressionLimit();
+    const queryClient = useQueryClient();
+    const { data, isLoading, isFetching, isError, error: queryError } = useAutomationsOverview();
     const [savingRuleKey, setSavingRuleKey] = useState<RuleKey | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [queryShop, setQueryShop] = useState('');
-    const [currentQuery, setCurrentQuery] = useState('');
-    const activeShopDomain = (queryShop || storedShopDomain || '').trim().toLowerCase();
 
-    useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        setQueryShop(params.get('shop') || '');
-        setCurrentQuery(params.toString());
-    }, []);
+    const { rules, stats } = useMemo(() => {
+        const overviewRules = (data?.rules ?? []) as AutomationRule[];
+        const visibleRules = visibleRuleKeys
+            .map((ruleKey) => overviewRules.find((rule) => rule.ruleKey === ruleKey))
+            .filter((rule): rule is AutomationRule => Boolean(rule));
 
-    useEffect(() => {
-        let cancelled = false;
+        const totals = visibleRules.reduce(
+            (acc, rule) => ({
+                impressions: acc.impressions + Number(rule.impressions ?? 0),
+                clicks: acc.clicks + Number(rule.clicks ?? 0),
+                revenueCents: acc.revenueCents + Number(rule.revenueCents ?? 0),
+            }),
+            { impressions: 0, clicks: 0, revenueCents: 0 },
+        );
 
-        const loadData = async () => {
-            try {
-                setLoading(true);
-                setError(null);
+        return { rules: visibleRules, stats: totals };
+    }, [data]);
 
-                if (!activeShopDomain) {
-                    if (!cancelled) {
-                        setRules([]);
-                        setStats({ impressions: 0, clicks: 0, revenueCents: 0 });
-                        setError('Missing shop context. Open the app from Shopify so automation data can load for the current store.');
-                    }
-                    return;
-                }
-
-                const params = new URLSearchParams({ shop: activeShopDomain });
-                const overviewResponse = await fetch(`/api/automations/overview?${params.toString()}`, { cache: 'no-store' });
-                const overviewPayload = (await overviewResponse.json()) as {
-                    ok?: boolean;
-                    error?: string;
-                    rules?: AutomationRule[];
-                };
-
-                if (!overviewResponse.ok || !overviewPayload.ok) {
-                    throw new Error(overviewPayload.error || 'Failed to load automation overview.');
-                }
-
-                const visibleRules = visibleRuleKeys
-                    .map((ruleKey) => (overviewPayload.rules || []).find((rule) => rule.ruleKey === ruleKey))
-                    .filter((rule): rule is AutomationRule => Boolean(rule));
-
-                const totals = visibleRules.reduce(
-                    (acc, rule) => ({
-                        impressions: acc.impressions + Number(rule.impressions ?? 0),
-                        clicks: acc.clicks + Number(rule.clicks ?? 0),
-                        revenueCents: acc.revenueCents + Number(rule.revenueCents ?? 0),
-                    }),
-                    { impressions: 0, clicks: 0, revenueCents: 0 },
-                );
-
-                if (!cancelled) {
-                    setRules(visibleRules);
-                    setStats(totals);
-                }
-            } catch (loadError) {
-                if (!cancelled) {
-                    setError(loadError instanceof Error ? loadError.message : 'Failed to load automation rules.');
-                    setStats({ impressions: 0, clicks: 0, revenueCents: 0 });
-                }
-            } finally {
-                if (!cancelled) {
-                    setLoading(false);
-                }
-            }
-        };
-
-        loadData();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [activeShopDomain]);
+    const loading = isLoading && !data;
+    const loadError =
+        !activeShopDomain
+            ? 'Missing shop context. Open the app from Shopify so automation data can load for the current store.'
+            : isError
+              ? queryError instanceof Error
+                  ? queryError.message
+                  : 'Failed to load automation rules.'
+              : error;
 
     const handleToggleStatus = async (rule: AutomationRule) => {
         try {
@@ -235,37 +194,45 @@ export default function AutomationsPage() {
                 throw new Error('Missing shop context. Refresh the app from Shopify and try again.');
             }
 
+            const nextEnabled = !rule.enabled;
+            if (nextEnabled && atLimit) {
+                setError('Monthly impression limit reached. Upgrade your plan on Plans to activate automations.');
+                return;
+            }
+
+            const cacheKey = queryKeys.automationsOverview(activeShopDomain);
+            const previous = queryClient.getQueryData<{ rules?: AutomationRule[] }>(cacheKey);
+
+            queryClient.setQueryData(cacheKey, (current: { rules?: AutomationRule[] } | undefined) => {
+                const currentRules = current?.rules ?? previous?.rules ?? [];
+                return {
+                    ok: true,
+                    rules: currentRules.map((item) =>
+                        item.ruleKey === rule.ruleKey ? { ...item, enabled: nextEnabled } : item,
+                    ),
+                };
+            });
+
             const response = await fetch('/api/automations/rules', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     shopDomain: activeShopDomain,
                     ruleKey: rule.ruleKey,
-                    enabled: !rule.enabled,
+                    enabled: nextEnabled,
                     config: rule.config || {},
                 }),
             });
 
             const payload = (await response.json()) as { ok?: boolean; error?: string; rule?: AutomationRule };
             if (!response.ok || !payload.ok || !payload.rule) {
+                if (previous) {
+                    queryClient.setQueryData(cacheKey, previous);
+                }
                 throw new Error(payload.error || 'Failed to update automation rule.');
             }
 
-            setRules((current) =>
-                current.map((item) =>
-                    item.ruleKey === payload.rule?.ruleKey
-                        ? {
-                              ...item,
-                              ...payload.rule,
-                              impressions: item.impressions,
-                              clicks: item.clicks,
-                              revenueCents: item.revenueCents,
-                          }
-                        : item,
-                ),
-            );
+            void queryClient.invalidateQueries({ queryKey: cacheKey });
         } catch (saveError) {
             setError(saveError instanceof Error ? saveError.message : 'Failed to update automation rule.');
         } finally {
@@ -274,6 +241,13 @@ export default function AutomationsPage() {
     };
 
     return (
+        <PageLoadingShell
+            title="Automations"
+            isLoading={loading}
+            hasData={Boolean(data)}
+            isFetching={isFetching}
+            error={loadError}
+        >
         <div className="min-h-full bg-slate-50/80 p-4 sm:p-6 md:p-8">
             <div className="mx-auto flex max-w-7xl flex-col gap-6">
                 <div className="flex items-start justify-between gap-4">
@@ -320,9 +294,13 @@ export default function AutomationsPage() {
                     </Card>
                 </section>
 
-                {error ? (
+                {isFetching && data ? (
+                    <p className="text-xs text-slate-500">Refreshing automations…</p>
+                ) : null}
+
+                {loadError ? (
                     <Card className="rounded-2xl border-red-200 bg-red-50 shadow-sm">
-                        <CardContent className="p-6 text-sm text-destructive">{error}</CardContent>
+                        <CardContent className="p-6 text-sm text-destructive">{loadError}</CardContent>
                     </Card>
                 ) : null}
 
@@ -373,12 +351,20 @@ export default function AutomationsPage() {
                                                       size="sm"
                                                       className={getActionButtonClassName(rule.enabled)}
                                                       onClick={() => handleToggleStatus(rule)}
-                                                      disabled={savingRuleKey === rule.ruleKey}
+                                                      disabled={
+                                                          savingRuleKey === rule.ruleKey ||
+                                                          (!rule.enabled && atLimit)
+                                                      }
+                                                      title={
+                                                          !rule.enabled && atLimit
+                                                              ? 'Monthly impression limit reached.'
+                                                              : undefined
+                                                      }
                                                   >
                                                       {savingRuleKey === rule.ruleKey ? 'Saving...' : rule.enabled ? 'Deactivate' : 'Activate'}
                                                   </Button>
                                                   <Button variant="outline" size="sm" className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100" asChild>
-                                                      <Link href={currentQuery ? `${definition.href}?${currentQuery}` : definition.href}>
+                                                      <Link href={activeShopDomain ? `${definition.href}?shop=${encodeURIComponent(activeShopDomain)}` : definition.href}>
                                                           View Flow <ArrowRight className="ml-2 h-4 w-4" />
                                                       </Link>
                                                   </Button>
@@ -392,5 +378,6 @@ export default function AutomationsPage() {
                 </section>
             </div>
         </div>
+        </PageLoadingShell>
     );
 }

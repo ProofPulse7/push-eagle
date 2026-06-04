@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Table,
   TableBody,
@@ -13,7 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ChevronsUpDown } from 'lucide-react';
-import { useSettings } from '@/context/settings-context';
+import { useSubscribersList } from '@/hooks/queries/use-app-queries';
 
 type Subscriber = {
     subscriber: string;
@@ -26,44 +26,20 @@ type Subscriber = {
 };
 
 export function SubscribersTable() {
-    const { shopDomain } = useSettings();
     const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-    const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
-    const [offset, setOffset] = useState(0);
-    const [hasMore, setHasMore] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [loadingMore, setLoadingMore] = useState(false);
     const pageSize = 100;
+    const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } =
+        useSubscribersList(sortOrder, pageSize);
 
-    useEffect(() => {
-        if (!shopDomain) {
-            return;
+    const subscribers = useMemo(() => {
+        if (!data?.pages) {
+            return [] as Subscriber[];
         }
 
-        let active = true;
-        setLoading(true);
-
-        fetch(`/api/subscribers/list?shop=${encodeURIComponent(shopDomain)}&limit=${pageSize}&offset=0&sort=${sortOrder}`)
-            .then((response) => response.json())
-            .then((data) => {
-                if (!active || !data?.ok) {
-                    return;
-                }
-                setSubscribers(Array.isArray(data.subscribers) ? data.subscribers : []);
-                setOffset(Array.isArray(data.subscribers) ? data.subscribers.length : 0);
-                setHasMore(Boolean(data.hasMore));
-            })
-            .catch(() => undefined)
-            .finally(() => {
-                if (active) {
-                    setLoading(false);
-                }
-            });
-
-        return () => {
-            active = false;
-        };
-    }, [shopDomain, sortOrder]);
+        return data.pages.flatMap((page) =>
+            Array.isArray(page.subscribers) ? (page.subscribers as Subscriber[]) : [],
+        );
+    }, [data]);
 
     const visibleSubscribers = useMemo(() => {
         return subscribers.map((subscriber) => ({
@@ -74,33 +50,11 @@ export function SubscribersTable() {
         }));
     }, [subscribers]);
 
-    const loadMore = async () => {
-        if (!shopDomain || !hasMore || loadingMore) {
-            return;
-        }
-
-        setLoadingMore(true);
-        try {
-            const response = await fetch(`/api/subscribers/list?shop=${encodeURIComponent(shopDomain)}&limit=${pageSize}&offset=${offset}&sort=${sortOrder}`);
-            const data = await response.json();
-            if (!data?.ok) {
-                return;
-            }
-
-            const nextRows = Array.isArray(data.subscribers) ? data.subscribers : [];
-            setSubscribers((prev) => [...prev, ...nextRows]);
-            setOffset((prev) => prev + nextRows.length);
-            setHasMore(Boolean(data.hasMore));
-        } catch (_error) {
-            // Keep the current list if load-more fails.
-        } finally {
-            setLoadingMore(false);
-        }
-    };
-
     const toggleSortOrder = () => {
         setSortOrder((prevOrder) => (prevOrder === 'asc' ? 'desc' : 'asc'));
     };
+
+    const loading = isLoading && subscribers.length === 0;
 
     return (
         <div>
@@ -143,9 +97,9 @@ export function SubscribersTable() {
                 </TableBody>
             </Table>
             <div className="text-center mt-4">
-                {hasMore && (
-                    <Button onClick={loadMore} disabled={loadingMore}>
-                        {loadingMore ? 'Loading...' : 'Load More'}
+                {hasNextPage && (
+                    <Button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+                        {isFetchingNextPage ? 'Loading...' : 'Load More'}
                     </Button>
                 )}
                 {loading && <p className="text-sm text-muted-foreground">Loading subscribers...</p>}
