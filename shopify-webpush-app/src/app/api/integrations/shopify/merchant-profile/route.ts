@@ -22,6 +22,7 @@ const bodySchema = z.object({
   planName: z.string().optional().nullable(),
   shopId: z.string().optional().nullable(),
   scopes: z.string().optional().nullable(),
+  shopifyOfflineAccessToken: z.string().optional().nullable(),
 });
 
 const MAX_AGE_MS = 5 * 60 * 1000;
@@ -86,6 +87,7 @@ export async function POST(request: Request) {
       timezone: parsed.timezone ?? null,
       planName: parsed.planName ?? null,
       scopes: parsed.scopes ?? null,
+      shopifyOfflineAccessToken: parsed.shopifyOfflineAccessToken ?? null,
     });
 
     return NextResponse.json({ ok: true, shopDomain });

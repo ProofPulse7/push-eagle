@@ -300,6 +300,7 @@ type UpsertMerchantProfileInput = {
   planName?: string | null;
   ownerName?: string | null;
   scopes?: string | null;
+  shopifyOfflineAccessToken?: string | null;
 };
 
 type UpsertShopifyCustomerInput = {
@@ -466,6 +467,8 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS plan_name TEXT`;
       await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS owner_name TEXT`;
       await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS scopes TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS shopify_offline_access_token TEXT`;
+      await sql`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS shopify_session_synced_at TIMESTAMPTZ`;
       await sql`UPDATE merchants SET first_installed_at = COALESCE(first_installed_at, created_at), last_authenticated_at = COALESCE(last_authenticated_at, updated_at) WHERE first_installed_at IS NULL OR last_authenticated_at IS NULL`;
       await sql`UPDATE merchants SET myshopify_domain = COALESCE(myshopify_domain, shop_domain) WHERE myshopify_domain IS NULL`;
 
@@ -4732,6 +4735,15 @@ export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) =
       plan_name = COALESCE(${input.planName ?? null}, plan_name),
       owner_name = COALESCE(${input.ownerName ?? null}, owner_name),
       scopes = COALESCE(${input.scopes ?? null}, scopes),
+      shopify_offline_access_token = COALESCE(${input.shopifyOfflineAccessToken ?? null}, shopify_offline_access_token),
+      shopify_session_synced_at = CASE
+        WHEN ${input.shopifyOfflineAccessToken ?? null} IS NOT NULL THEN NOW()
+        ELSE shopify_session_synced_at
+      END,
+      last_authenticated_at = CASE
+        WHEN ${input.shopifyOfflineAccessToken ?? null} IS NOT NULL THEN NOW()
+        ELSE last_authenticated_at
+      END,
       updated_at = NOW()
     WHERE shop_domain = ${input.shopDomain}
   `;

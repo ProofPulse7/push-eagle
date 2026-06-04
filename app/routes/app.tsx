@@ -54,6 +54,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       void syncMerchantProfileToDashboard({
         shopDomain: authSession.session.shop,
         scope: authSession.session.scope || null,
+        accessToken: authSession.session.accessToken || null,
         admin: authSession.admin,
       });
 

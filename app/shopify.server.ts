@@ -87,6 +87,7 @@ type AdminShopResponse = {
 export const syncMerchantProfileToDashboard = async (input: {
   shopDomain: string;
   scope?: string | null;
+  accessToken?: string | null;
   admin: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> };
 }) => {
   const dashboardUrl = resolveDashboardUrl();
@@ -143,6 +144,7 @@ export const syncMerchantProfileToDashboard = async (input: {
       timezone: shop?.ianaTimezone ?? null,
       planName: shop?.plan?.displayName ?? null,
       scopes: input.scope ?? null,
+      shopifyOfflineAccessToken: input.accessToken ?? null,
     }),
   });
 
@@ -384,6 +386,7 @@ const getShopify = () => {
             await syncMerchantProfileToDashboard({
               shopDomain: session.shop,
               scope: session.scope,
+              accessToken: session.accessToken,
               admin,
             });
             void syncRecentCustomersToDashboard({
