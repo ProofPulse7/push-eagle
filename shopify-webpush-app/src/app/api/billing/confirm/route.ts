@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { BUSINESS_TIERS } from '@/lib/server/billing/plans';
 import { upsertMerchantBilling } from '@/lib/server/billing/merchant-billing';
-import { callPushEagleBilling } from '@/lib/server/billing/push-eagle-client';
+import { syncActiveAppSubscription } from '@/lib/server/billing/sync-subscription';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -15,7 +15,7 @@ const matchTierByPrice = (amount: number) => {
 export async function POST(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const sync = await callPushEagleBilling('/api/shopify/billing/sync', shopDomain, {});
+    const sync = await syncActiveAppSubscription(shopDomain);
     const active = sync.active as
       | { id?: string; status?: string; amount?: number; name?: string }
       | null

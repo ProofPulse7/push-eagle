@@ -37,6 +37,9 @@ Set these in the Vercel project that deploys `shopify-webpush-app`:
 - `SHOPIFY_WEBHOOK_SECRET`: normally same as Shopify app secret
 - `DATABASE_PROVIDER=neon`
 - `NEON_DATABASE_URL`
+- `SHOPIFY_SESSION_DATABASE_URL`: same Postgres URL as the root app's `DATABASE_URL` (Prisma `Session` table with offline tokens). Required for Plans checkout from the dashboard without calling the Remix app.
+- `SHOPIFY_DASHBOARD_SSO_SECRET`: same value as on the root app (used if billing falls back to Remix routes)
+- `SHOPIFY_BILLING_TEST=true` on dev stores (optional)
 - Firebase client env vars
 - `FIREBASE_ADMIN_SERVICE_ACCOUNT_BASE64`
 

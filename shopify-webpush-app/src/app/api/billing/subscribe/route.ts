@@ -7,7 +7,7 @@ import {
   type PlanKey,
 } from '@/lib/server/billing/plans';
 import { upsertMerchantBilling } from '@/lib/server/billing/merchant-billing';
-import { callPushEagleBilling } from '@/lib/server/billing/push-eagle-client';
+import { startBusinessSubscriptionCheckout } from '@/lib/server/billing/create-subscription';
 import { env } from '@/lib/config/env';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -55,36 +55,28 @@ export async function POST(request: Request) {
       status: 'pending',
     });
 
-    let result: Record<string, unknown>;
     try {
-      result = await callPushEagleBilling('/api/shopify/billing/create', shopDomain, {
+      const result = await startBusinessSubscriptionCheckout({
+        shopDomain,
         planName: `Push Eagle Business (${tier.impressions.toLocaleString()} impressions)`,
         priceUsd: tier.priceUsd,
         returnUrl: returnUrl.toString(),
         test: process.env.SHOPIFY_BILLING_TEST === 'true',
       });
+
+      return NextResponse.json({
+        ok: true,
+        confirmationUrl: result.confirmationUrl,
+        subscriptionId: result.subscriptionId,
+        billing,
+      });
     } catch (billingError) {
       const message =
         billingError instanceof Error
           ? billingError.message
-          : 'Could not connect to Shopify billing. Open the app from Shopify admin and ensure push-eagle is deployed.';
+          : 'Could not start Shopify billing. Open the app from Shopify admin and try again.';
       return NextResponse.json({ ok: false, error: message, billing }, { status: 502 });
     }
-
-    const confirmationUrl = String(result.confirmationUrl || '');
-    if (!confirmationUrl) {
-      return NextResponse.json(
-        { ok: false, error: 'Missing Shopify confirmation URL.', billing },
-        { status: 502 },
-      );
-    }
-
-    return NextResponse.json({
-      ok: true,
-      confirmationUrl,
-      subscriptionId: result.subscriptionId ?? null,
-      billing,
-    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to start subscription.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
