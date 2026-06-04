@@ -43,7 +43,7 @@ export const parseShopDomain = (value: unknown) => {
   return raw;
 };
 
-export const getOfflineAccessToken = async (shopDomain: string) => {
+export const getOfflineAccessToken = async (shopDomain: string): Promise<string | null> => {
   const session =
     (await db.session.findFirst({ where: { shop: shopDomain, isOnline: false } })) ||
     (await db.session.findFirst({ where: { shop: shopDomain }, orderBy: { expires: "desc" } }));

@@ -23,44 +23,51 @@ const resolveDashboardUrl = () =>
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const dashboardUrl = resolveDashboardUrl();
-  let authSession:
-    | {
-        session?: { shop?: string; scope?: string | null };
-        admin?: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> };
-      }
-    | null = null;
 
   if (dashboardUrl) {
     const requestUrl = new URL(request.url);
-    const queryShop = requestUrl.searchParams.get("shop");
     const headerShop = request.headers.get("x-shopify-shop-domain");
-    let shopDomain = (queryShop || headerShop || "").trim().toLowerCase();
 
-    if (!shopDomain) {
+    let auth:
+      | {
+          session?: { shop?: string; scope?: string | null; accessToken?: string };
+          admin?: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> };
+        }
+      | null = null;
+
+    try {
+      auth = await authenticate.admin(request);
+    } catch {
+      auth = null;
+    }
+
+    const shopDomain = (
+      auth?.session?.shop ||
+      requestUrl.searchParams.get("shop") ||
+      headerShop ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+    if (auth?.session?.shop && auth.admin) {
       try {
-        const auth = await authenticate.admin(request);
-        authSession = auth;
-        shopDomain = (auth.session?.shop || "").trim().toLowerCase();
-      } catch {
-        // Continue with empty shop when admin auth context is not available yet.
+        await syncMerchantProfileToDashboard({
+          shopDomain: auth.session.shop,
+          scope: auth.session.scope || null,
+          accessToken: auth.session.accessToken || null,
+          admin: auth.admin,
+        });
+      } catch (error) {
+        console.warn("[push-eagle] Merchant profile sync failed before dashboard redirect", {
+          shop: auth.session.shop,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
-    }
-
-    if (!shopDomain) {
-      shopDomain = "";
-    }
-
-    if (authSession?.session?.shop && authSession.admin) {
-      void syncMerchantProfileToDashboard({
-        shopDomain: authSession.session.shop,
-        scope: authSession.session.scope || null,
-        accessToken: authSession.session.accessToken || null,
-        admin: authSession.admin,
-      });
 
       void syncRecentCustomersToDashboard({
-        shopDomain: authSession.session.shop,
-        admin: authSession.admin,
+        shopDomain: auth.session.shop,
+        admin: auth.admin,
       });
     }
 
