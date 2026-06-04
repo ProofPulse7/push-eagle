@@ -3,7 +3,7 @@ import '@shopify/shopify-api/adapters/node';
 
 import { env } from '@/lib/config/env';
 
-const appUrl = new URL(env.SHOPIFY_APP_URL);
+const appUrl = new URL(env.NEXT_PUBLIC_APP_URL || env.SHOPIFY_APP_URL);
 
 export const shopify = shopifyApi({
   apiKey: env.SHOPIFY_API_KEY,

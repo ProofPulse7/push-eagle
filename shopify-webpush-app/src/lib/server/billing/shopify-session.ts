@@ -4,6 +4,8 @@ import { env } from '@/lib/config/env';
 
 type SessionRow = { accessToken: string };
 
+export const hasShopifySessionDatabase = () => Boolean(env.SHOPIFY_SESSION_DATABASE_URL.trim());
+
 const getSessionSql = () => {
   const url = env.SHOPIFY_SESSION_DATABASE_URL.trim();
   if (!url) {

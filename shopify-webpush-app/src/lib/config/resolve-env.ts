@@ -1,0 +1,104 @@
+import { z } from 'zod';
+
+const EnvSchema = z.object({
+  NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
+  CRON_SECRET: z.string().default(''),
+  SHOPIFY_API_KEY: z.string().default(''),
+  SHOPIFY_API_SECRET: z.string().default(''),
+  SHOPIFY_SCOPES: z.string().default('read_products,read_customers,write_products'),
+  SHOPIFY_APP_URL: z.string().url().default('http://localhost:3000'),
+  SHOPIFY_ROOT_APP_URL: z.string().url().default('https://push-eagle.vercel.app'),
+  SHOPIFY_SESSION_DATABASE_URL: z.string().default(''),
+  SHOPIFY_WEBHOOK_SECRET: z.string().default(''),
+  SHOPIFY_DASHBOARD_SSO_SECRET: z.string().default(''),
+  DATABASE_PROVIDER: z.enum(['neon', 'supabase']).default('neon'),
+  DATABASE_URL: z.string().default(''),
+  NEON_DATABASE_URL: z.string().default(''),
+  SUPABASE_URL: z.string().default(''),
+  SUPABASE_ANON_KEY: z.string().default(''),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().default(''),
+  NEXT_PUBLIC_FIREBASE_API_KEY: z.string().default(''),
+  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: z.string().default(''),
+  NEXT_PUBLIC_FIREBASE_PROJECT_ID: z.string().default(''),
+  NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: z.string().default(''),
+  NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: z.string().default(''),
+  NEXT_PUBLIC_FIREBASE_APP_ID: z.string().default(''),
+  NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: z.string().default(''),
+  NEXT_PUBLIC_FIREBASE_VAPID_KEY: z.string().default(''),
+  FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON: z.string().default(''),
+  FIREBASE_ADMIN_SERVICE_ACCOUNT_BASE64: z.string().default(''),
+  R2_ACCOUNT_ID: z.string().default(''),
+  R2_BUCKET_NAME: z.string().default(''),
+  R2_S3_ENDPOINT: z.string().default(''),
+  R2_ACCESS_KEY_ID: z.string().default(''),
+  R2_SECRET_ACCESS_KEY: z.string().default(''),
+  R2_PUBLIC_BASE_URL: z.string().default(''),
+  VAPID_PUBLIC_KEY: z.string().default(''),
+  VAPID_PRIVATE_KEY: z.string().default(''),
+  VAPID_SUBJECT: z.string().default('mailto:support@push-eagle.com'),
+});
+
+export type AppEnv = z.infer<typeof EnvSchema>;
+
+const DASHBOARD_PRODUCTION_URL = 'https://push-eagle-dashboard.vercel.app';
+const SESSION_SCHEMA = 'shopify_sessions';
+
+const withPostgresSchema = (connectionUrl: string, schema: string) => {
+  if (!connectionUrl.startsWith('postgresql')) {
+    return '';
+  }
+  if (connectionUrl.includes('schema=')) {
+    return connectionUrl;
+  }
+  const separator = connectionUrl.includes('?') ? '&' : '?';
+  return `${connectionUrl}${separator}schema=${schema}`;
+};
+
+const fixDashboardPublicUrl = (url: string) => {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return DASHBOARD_PRODUCTION_URL;
+  }
+  // Common misconfiguration: dashboard project pointing at the Remix app URL.
+  if (
+    trimmed === 'https://push-eagle.vercel.app' ||
+    trimmed === 'http://push-eagle.vercel.app'
+  ) {
+    return DASHBOARD_PRODUCTION_URL;
+  }
+  return trimmed;
+};
+
+export const resolveShopifySessionDatabaseUrl = (raw: AppEnv) => {
+  const explicit = raw.SHOPIFY_SESSION_DATABASE_URL.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const candidates = [raw.NEON_DATABASE_URL.trim(), raw.DATABASE_URL.trim()].filter(Boolean);
+  for (const candidate of candidates) {
+    const withSchema = withPostgresSchema(candidate, SESSION_SCHEMA);
+    if (withSchema) {
+      return withSchema;
+    }
+  }
+
+  return '';
+};
+
+export const resolveAppEnv = (): AppEnv => {
+  const parsed = EnvSchema.parse(process.env);
+  const sessionDatabaseUrl = resolveShopifySessionDatabaseUrl(parsed);
+  const dashboardUrl = fixDashboardPublicUrl(parsed.NEXT_PUBLIC_APP_URL);
+  const ssoSecret =
+    parsed.SHOPIFY_DASHBOARD_SSO_SECRET.trim() || parsed.SHOPIFY_API_SECRET.trim();
+
+  return {
+    ...parsed,
+    NEXT_PUBLIC_APP_URL: dashboardUrl,
+    SHOPIFY_SESSION_DATABASE_URL: sessionDatabaseUrl,
+    SHOPIFY_DASHBOARD_SSO_SECRET: ssoSecret,
+    SHOPIFY_WEBHOOK_SECRET:
+      parsed.SHOPIFY_WEBHOOK_SECRET.trim() || parsed.SHOPIFY_API_SECRET.trim(),
+  };
+};

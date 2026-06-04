@@ -1,6 +1,5 @@
 import { createRecurringAppSubscription } from '@/lib/server/billing/shopify-admin-billing';
-import { callPushEagleBilling } from '@/lib/server/billing/push-eagle-client';
-import { env } from '@/lib/config/env';
+import { hasShopifySessionDatabase } from '@/lib/server/billing/shopify-session';
 
 export const startBusinessSubscriptionCheckout = async (input: {
   shopDomain: string;
@@ -9,29 +8,11 @@ export const startBusinessSubscriptionCheckout = async (input: {
   returnUrl: string;
   test?: boolean;
 }) => {
-  if (env.SHOPIFY_SESSION_DATABASE_URL.trim()) {
-    return createRecurringAppSubscription(input);
-  }
-
-  const result = await callPushEagleBilling('/api/shopify/billing/create', input.shopDomain, {
-    planName: input.planName,
-    priceUsd: input.priceUsd,
-    returnUrl: input.returnUrl,
-    test: input.test,
-  });
-
-  const confirmationUrl = String(result.confirmationUrl || '');
-  if (!confirmationUrl) {
+  if (!hasShopifySessionDatabase()) {
     throw new Error(
-      typeof result.error === 'string'
-        ? result.error
-        : 'Missing Shopify confirmation URL from billing service.',
+      'Billing database is not configured. On the dashboard Vercel project set SHOPIFY_SESSION_DATABASE_URL to the same Postgres URL as the Shopify app DATABASE_URL (with schema=shopify_sessions), or ensure NEON_DATABASE_URL is set.',
     );
   }
 
-  return {
-    confirmationUrl,
-    subscriptionId: result.subscriptionId ? String(result.subscriptionId) : null,
-    status: typeof result.status === 'string' ? result.status : 'PENDING',
-  };
+  return createRecurringAppSubscription(input);
 };
