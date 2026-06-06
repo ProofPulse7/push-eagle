@@ -81,25 +81,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const returnTo = readReturnTo(request);
     const redirectUrl = buildDashboardSsoUrl(dashboardUrl, auth.session.shop, returnTo);
 
-    void ensureOfflineAccessTokenForRequest(request, auth.session.shop)
-      .then(async (tokenForSync) => {
-        if (!tokenForSync) {
-          return;
-        }
-
-        try {
-          await syncMerchantProfileToDashboard({
-            shopDomain: auth.session.shop,
-            scope: auth.session.scope || null,
-            accessToken: tokenForSync,
-            admin: auth.admin,
-          });
-        } catch (error) {
-          console.warn("[push-eagle] Profile sync before dashboard redirect failed", {
-            shop: auth.session.shop,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+    try {
+      const tokenForSync = await ensureOfflineAccessTokenForRequest(request, auth.session.shop);
+      if (tokenForSync) {
+        await syncMerchantProfileToDashboard({
+          shopDomain: auth.session.shop,
+          scope: auth.session.scope || null,
+          accessToken: tokenForSync,
+          admin: auth.admin,
+        });
 
         void syncRecentCustomersToDashboard({
           shopDomain: auth.session.shop,
@@ -107,10 +97,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         }).catch(() => {
           // Non-blocking.
         });
-      })
-      .catch(() => {
-        // Non-blocking.
+      }
+    } catch (error) {
+      console.warn("[push-eagle] Profile sync before dashboard redirect failed", {
+        shop: auth.session.shop,
+        error: error instanceof Error ? error.message : String(error),
       });
+    }
 
     throw auth.redirect(redirectUrl, { target: "_top" });
   }
