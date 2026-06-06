@@ -77,6 +77,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     const target = buildDashboardUrl(dashboardUrl, auth.session.shop, returnTo);
     const response = redirect(target);
+    response.headers.append(
+      "Set-Cookie",
+      `pe_shop=${encodeURIComponent(auth.session.shop)}; Path=/; Max-Age=${60 * 60 * 24 * 30}; Secure; SameSite=Lax`,
+    );
     response.headers.append("Set-Cookie", "pe_return_to=; Path=/; Max-Age=0; Secure; SameSite=Lax");
     throw response;
   }

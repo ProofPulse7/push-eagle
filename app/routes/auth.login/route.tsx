@@ -1,7 +1,7 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData } from "react-router";
+import { Form, redirect, useActionData, useLoaderData } from "react-router";
 
 import { hasShopifyConfig, login, missingShopifyConfig } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
@@ -32,6 +32,17 @@ const runLogin = async (request: Request) => {
 };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const url = new URL(request.url);
+  const shop = url.searchParams.get("shop");
+
+  if (shop && hasShopifyConfig) {
+    const appUrl = new URL("/app", url.origin);
+    url.searchParams.forEach((value, key) => {
+      appUrl.searchParams.set(key, value);
+    });
+    throw redirect(appUrl.toString());
+  }
+
   if (!hasShopifyConfig) {
     return {
       errors: loginErrorMessage({
