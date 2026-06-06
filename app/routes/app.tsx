@@ -55,74 +55,30 @@ const readReturnTo = (request: Request) => {
 };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const requestUrl = new URL(request.url);
   const dashboardUrl = resolveDashboardUrl();
 
-  if (dashboardUrl) {
-    const requestUrl = new URL(request.url);
-    const headerShop = request.headers.get("x-shopify-shop-domain");
+  if (dashboardUrl && requestUrl.pathname.startsWith("/app")) {
+    // Never catch — authenticate.admin throws OAuth redirects that must propagate.
+    const auth = await authenticate.admin(request);
     const returnTo = readReturnTo(request);
 
-    let auth:
-      | {
-          session?: { shop?: string; scope?: string | null; accessToken?: string };
-          admin?: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> };
-        }
-      | null = null;
+    await syncMerchantProfileToDashboard({
+      shopDomain: auth.session.shop,
+      scope: auth.session.scope || null,
+      accessToken: auth.session.accessToken || null,
+      admin: auth.admin,
+    });
 
-    try {
-      auth = await authenticate.admin(request);
-    } catch {
-      auth = null;
-    }
+    void syncRecentCustomersToDashboard({
+      shopDomain: auth.session.shop,
+      admin: auth.admin,
+    });
 
-    const shopDomain = (
-      auth?.session?.shop ||
-      requestUrl.searchParams.get("shop") ||
-      headerShop ||
-      ""
-    )
-      .trim()
-      .toLowerCase();
-
-    if (auth?.session?.shop && auth.session.accessToken && auth.admin) {
-      try {
-        await syncMerchantProfileToDashboard({
-          shopDomain: auth.session.shop,
-          scope: auth.session.scope || null,
-          accessToken: auth.session.accessToken || null,
-          admin: auth.admin,
-        });
-      } catch (error) {
-        console.warn("[push-eagle] Merchant profile sync failed before dashboard redirect", {
-          shop: auth.session.shop,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-
-      void syncRecentCustomersToDashboard({
-        shopDomain: auth.session.shop,
-        admin: auth.admin,
-      });
-
-      const target = buildDashboardUrl(dashboardUrl, auth.session.shop, returnTo);
-      const response = redirect(target);
-      response.headers.append(
-        "Set-Cookie",
-        "pe_return_to=; Path=/; Max-Age=0; Secure; SameSite=Lax",
-      );
-      throw response;
-    }
-
-    if (shopDomain.endsWith(".myshopify.com")) {
-      const loginUrl = new URL("/auth/login", requestUrl.origin);
-      loginUrl.searchParams.set("shop", shopDomain);
-      if (returnTo) {
-        loginUrl.searchParams.set("return_to", returnTo);
-      }
-      throw redirect(loginUrl.toString());
-    }
-
-    throw redirect(new URL("/connect", dashboardUrl).toString());
+    const target = buildDashboardUrl(dashboardUrl, auth.session.shop, returnTo);
+    const response = redirect(target);
+    response.headers.append("Set-Cookie", "pe_return_to=; Path=/; Max-Age=0; Secure; SameSite=Lax");
+    throw response;
   }
 
   await authenticate.admin(request);
@@ -144,7 +100,6 @@ export default function App() {
   );
 }
 
-// Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
   return boundary.error(useRouteError());
 }
