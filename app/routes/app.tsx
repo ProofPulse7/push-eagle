@@ -112,7 +112,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         // Non-blocking.
       });
 
-    throw auth.redirect(redirectUrl, { target: "_top" });
+    // Non-embedded Partner config: break out to the dashboard with a top-level navigation.
+    const embedded = requestUrl.searchParams.get("embedded") === "1";
+    if (embedded) {
+      throw auth.redirect(redirectUrl, { target: "_top" });
+    }
+
+    throw Response.redirect(redirectUrl, 302);
   }
 
   await authenticate.admin(request);
@@ -124,7 +130,7 @@ export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
 
   return (
-    <AppProvider embedded apiKey={apiKey}>
+    <AppProvider embedded={false} apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">Home</s-link>
         <s-link href="/app/additional">Additional page</s-link>

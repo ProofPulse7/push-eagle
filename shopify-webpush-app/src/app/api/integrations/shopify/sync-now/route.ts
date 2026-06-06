@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const body = bodySchema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
 
-    const rootUrl = env.SHOPIFY_ROOT_APP_URL || 'https://push-eagle.vercel.app';
+    const rootUrl = env.NEXT_PUBLIC_APP_URL || env.SHOPIFY_APP_URL;
     const secret = env.SHOPIFY_DASHBOARD_SSO_SECRET || env.SHOPIFY_API_SECRET;
     if (!secret) {
       return NextResponse.json({ ok: false, error: 'Missing sync secret configuration.' }, { status: 500 });

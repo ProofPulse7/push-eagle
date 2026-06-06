@@ -1,14 +1,22 @@
 import { NextResponse } from 'next/server';
 
-const ROOT_APP_URL = process.env.SHOPIFY_ROOT_APP_URL?.trim() || 'https://push-eagle.vercel.app';
+import { completeShopifyOAuthCallback } from '@/lib/server/shopify/oauth-callback';
 
 export const runtime = 'nodejs';
 
 export async function GET(request: Request) {
-  const from = new URL(request.url);
-  const target = new URL('/auth/callback', ROOT_APP_URL);
-  from.searchParams.forEach((value, key) => {
-    target.searchParams.set(key, value);
+  const result = await completeShopifyOAuthCallback(request);
+
+  if (!result.ok) {
+    return NextResponse.json({ ok: false, error: result.error }, { status: result.status });
+  }
+
+  const response = NextResponse.redirect(result.redirectTo, { status: 302 });
+  response.cookies.set('pe_shop', new URL(result.redirectTo).searchParams.get('shop') || '', {
+    path: '/',
+    maxAge: 60 * 60 * 24 * 30,
+    sameSite: 'lax',
+    secure: true,
   });
-  return NextResponse.redirect(target, { status: 307 });
+  return response;
 }

@@ -240,6 +240,8 @@ export const buildShopifyReauthorizeUrl = (shopDomain: string) => {
   if (clientId) {
     return `https://admin.shopify.com/store/${storeHandle}/oauth/install?client_id=${clientId}`;
   }
-  const root = (env.SHOPIFY_ROOT_APP_URL || 'https://push-eagle.vercel.app').replace(/\/$/, '');
-  return `${root}/app?shop=${encodeURIComponent(shop)}`;
+  const root = (env.NEXT_PUBLIC_APP_URL || env.SHOPIFY_APP_URL).replace(/\/$/, '');
+  const loginUrl = new URL('/auth/login', root);
+  loginUrl.searchParams.set('shop', shop);
+  return loginUrl.toString();
 };

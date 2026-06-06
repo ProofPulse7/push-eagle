@@ -1,4 +1,3 @@
-import { callPushEagleBilling } from '@/lib/server/billing/push-eagle-client';
 import { readOfflineAccessTokenFromPrismaSessions } from '@/lib/server/billing/prisma-session-import';
 import { persistShopifyOfflineToken } from '@/lib/server/billing/persist-shopify-token';
 import {
@@ -13,16 +12,28 @@ import {
 } from '@/lib/server/billing/shopify-offline-token-refresh';
 import { validateShopifyAccessToken } from '@/lib/server/billing/shopify-token-validation';
 
-export const refreshShopifySessionFromRemixApp = async (shopDomain: string) => {
-  try {
-    const result = await callPushEagleBilling('/api/shopify/session/sync', shopDomain, {});
-    return { ok: true as const, result };
-  } catch (error) {
-    return {
-      ok: false as const,
-      error: error instanceof Error ? error.message : String(error),
-    };
+export const refreshShopifySessionLocally = async (shopDomain: string) => {
+  const shop = shopDomain.trim().toLowerCase();
+  const token = await readOfflineAccessTokenFromPrismaSessions(shop);
+  if (!token) {
+    return { ok: false as const, error: 'No Prisma Session row for this shop.' };
   }
+
+  if (!(await validateShopifyAccessToken(shop, token))) {
+    return { ok: false as const, error: 'Prisma session token is invalid or expired.' };
+  }
+
+  const persisted = await persistShopifyOfflineToken({
+    shopDomain: shop,
+    offlineAccessToken: token,
+    source: 'local_prisma_session_sync',
+  });
+
+  if (!persisted.saved || !persisted.valid) {
+    return { ok: false as const, error: 'Could not persist offline token from Prisma session.' };
+  }
+
+  return { ok: true as const, result: { synced: true, shopDomain: shop } };
 };
 
 const healFromPrismaSessionTable = async (shopDomain: string) => {
@@ -59,8 +70,8 @@ export const ensureShopifyOfflineAccessToken = async (shopDomain: string) => {
     await purgeStalePrismaSessionForShop(shop);
   }
 
-  const remixSync = await refreshShopifySessionFromRemixApp(shop);
-  if (remixSync.ok) {
+  const localSync = await refreshShopifySessionLocally(shop);
+  if (localSync.ok) {
     token = await getShopifyOfflineAccessToken(shop);
     if (token && (await validateShopifyAccessToken(shop, token))) {
       return token;

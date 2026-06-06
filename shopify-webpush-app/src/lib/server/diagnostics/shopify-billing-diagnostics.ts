@@ -33,25 +33,19 @@ const probeNeon = async () => {
   }
 };
 
-const probeRemixHealth = async (shopDomain: string | null) => {
-  const root = (env.SHOPIFY_ROOT_APP_URL || 'https://push-eagle.vercel.app').replace(/\/$/, '');
-  const healthUrl = new URL(`${root}/health`);
-  if (shopDomain) {
-    healthUrl.searchParams.set('shop', shopDomain);
-  }
+const probeDashboardHealth = async () => {
+  const root = (env.NEXT_PUBLIC_APP_URL || env.SHOPIFY_APP_URL).replace(/\/$/, '');
+  const healthUrl = new URL('/api/health/system', root);
 
   try {
     const response = await fetch(healthUrl.toString(), { cache: 'no-store' });
     const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-    const database = (payload?.database ?? null) as Record<string, unknown> | null;
+    const health = (payload?.health ?? null) as Record<string, unknown> | null;
     return {
       ok: response.ok,
       status: response.status,
       url: healthUrl.toString(),
-      hasShopifyConfig: payload?.hasShopifyConfig ?? null,
-      missingShopifyConfig: payload?.missingShopifyConfig ?? null,
-      appUrl: payload?.appUrl ?? null,
-      database,
+      database: health?.database ?? null,
     };
   } catch (error) {
     return {
@@ -63,7 +57,7 @@ const probeRemixHealth = async (shopDomain: string | null) => {
   }
 };
 
-const probeRemixSessionSync = async (shopDomain: string) => {
+const probeLocalSessionSync = async (shopDomain: string) => {
   try {
     const result = await callPushEagleBilling('/api/shopify/session/sync', shopDomain, {});
     return { ok: true, result };
@@ -127,7 +121,7 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
     shopifyApiKey: envFlag(env.SHOPIFY_API_KEY),
     shopifyApiSecret: envFlag(env.SHOPIFY_API_SECRET),
     shopifyDashboardSsoSecret: envFlag(env.SHOPIFY_DASHBOARD_SSO_SECRET),
-    shopifyRootAppUrl: env.SHOPIFY_ROOT_APP_URL,
+    shopifyAppUrl: env.SHOPIFY_APP_URL || env.NEXT_PUBLIC_APP_URL,
     billingTestMode: process.env.SHOPIFY_BILLING_TEST === 'true',
     nextPublicAppUrl: env.NEXT_PUBLIC_APP_URL,
   };
@@ -151,12 +145,12 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
   if (!environment.shopifySessionDatabaseUrl && !environment.shopifySessionDatabaseAutoResolved) {
     issues.push('SHOPIFY_SESSION_DATABASE_URL is missing and could not be derived from NEON_DATABASE_URL.');
     recommendations.push(
-      'Set SHOPIFY_SESSION_DATABASE_URL to the same Neon URL as the Remix app DATABASE_URL with &schema=shopify_sessions.',
+      'Set SHOPIFY_SESSION_DATABASE_URL to the same Neon URL as NEON_DATABASE_URL.',
     );
   }
   if (!environment.shopifyDashboardSsoSecret) {
     issues.push('SHOPIFY_DASHBOARD_SSO_SECRET is missing on the dashboard.');
-    recommendations.push('Set SHOPIFY_DASHBOARD_SSO_SECRET to the same value as SHOPIFY_API_SECRET on both Vercel projects.');
+    recommendations.push('Set SHOPIFY_DASHBOARD_SSO_SECRET to the same value as SHOPIFY_API_SECRET on the dashboard Vercel project.');
   }
   if (!environment.shopifyApiKey) {
     issues.push('SHOPIFY_API_KEY is missing on the dashboard.');
@@ -167,35 +161,20 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
     issues.push(`Neon database connection failed: ${neon.error}`);
   }
 
-  const remixHealth = await probeRemixHealth(shopDomain);
-  if (!remixHealth.ok) {
-    issues.push('Remix Shopify app health check failed (push-eagle.vercel.app).');
-    recommendations.push(
-      'On the push-eagle Vercel project set DATABASE_URL to the same Neon URL as NEON_DATABASE_URL on the dashboard (public schema, no wrapping quotes).',
-    );
-  } else if (remixHealth.hasShopifyConfig === false) {
-    issues.push(`Remix app missing Shopify env: ${JSON.stringify(remixHealth.missingShopifyConfig)}`);
-  } else if (remixHealth.database && remixHealth.database.configured === false) {
-    issues.push('Remix push-eagle Vercel project is missing DATABASE_URL — OAuth sessions are never saved.');
-    recommendations.push(
-      'Set DATABASE_URL on push-eagle.vercel.app to the same Neon connection string as dashboard NEON_DATABASE_URL, then redeploy and open Apps → Push Eagle again.',
-    );
-  } else if (remixHealth.database && remixHealth.database.ok === false) {
-    issues.push(`Remix DATABASE_URL cannot reach Postgres: ${remixHealth.database.error}`);
-  } else if (
-    shopDomain &&
-    remixHealth.database &&
-    remixHealth.database.shopSessionFound === false
-  ) {
-    issues.push('Remix has no Session row for this shop in Neon — OAuth did not complete on push-eagle.vercel.app.');
-    recommendations.push(`Connect via Shopify app entry: ${buildShopifyAppConnectUrl(shopDomain)}`);
+  const dashboardHealth = await probeDashboardHealth();
+  if (!dashboardHealth.ok) {
+    issues.push('Dashboard health check failed (push-eagle-dashboard.vercel.app).');
+    recommendations.push('Confirm the dashboard Vercel project is deployed and NEON_DATABASE_URL is set.');
+  } else if (dashboardHealth.database === 'unhealthy' || dashboardHealth.database === 'error') {
+    issues.push('Dashboard cannot reach Neon Postgres.');
+    recommendations.push('Set NEON_DATABASE_URL on the dashboard Vercel project, then redeploy.');
   }
 
   let merchantToken = null as Awaited<ReturnType<typeof probeMerchantToken>> | null;
   let credentialsTable = null as Awaited<ReturnType<typeof getShopifyStoreCredentials>> | null;
   let prismaSessions: Awaited<ReturnType<typeof probePrismaSessionSources>> = [];
   let resolvedToken: string | null = null;
-  let remixSync: Awaited<ReturnType<typeof probeRemixSessionSync>> | null = null;
+  let localSessionSync: Awaited<ReturnType<typeof probeLocalSessionSync>> | null = null;
   let graphqlProbe: Awaited<ReturnType<typeof probeShopifyGraphql>> | null = null;
   let tokenValidation: { ok: boolean; error?: string | null } | null = null;
 
@@ -225,14 +204,11 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
       issues.push('getShopifyOfflineAccessToken() returned null — billing cannot call appSubscriptionCreate.');
     }
 
-    remixSync = await probeRemixSessionSync(shopDomain);
-    if (!remixSync.ok) {
-      issues.push(`Remix session sync API failed: ${remixSync.error}`);
-      if (String(remixSync.error).includes('401')) {
-        recommendations.push('SHOPIFY_DASHBOARD_SSO_SECRET must match on dashboard and Remix (usually same as SHOPIFY_API_SECRET).');
-      }
-      if (String(remixSync.error).includes('404')) {
-        recommendations.push('Remix DATABASE_URL on push-eagle Vercel must be Neon Postgres (not SQLite) with schema=shopify_sessions.');
+    localSessionSync = await probeLocalSessionSync(shopDomain);
+    if (!localSessionSync.ok) {
+      issues.push(`Local session sync failed: ${localSessionSync.error}`);
+      if (String(localSessionSync.error).includes('401')) {
+        recommendations.push('SHOPIFY_DASHBOARD_SSO_SECRET should match SHOPIFY_API_SECRET on the dashboard project.');
       }
     }
 
@@ -245,9 +221,7 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
         recommendations.push(
           `Re-authorize Push Eagle via Shopify OAuth install: ${buildShopifyReauthorizeUrl(shopDomain)}`,
         );
-        recommendations.push(
-          'Or open Apps → Push Eagle in Shopify admin (must go through push-eagle.vercel.app/app, not the dashboard URL directly).',
-        );
+        recommendations.push('Or open Apps → Push Eagle in Shopify admin so OAuth completes on the dashboard.');
         recommendations.push(
           'If this persists, uninstall and reinstall Push Eagle on the dev store, then open the app again.',
         );
@@ -278,7 +252,7 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
     checks: {
       environment,
       neon,
-      remixHealth,
+      dashboardHealth,
       merchantToken,
       credentialsTable: credentialsTable
         ? {
@@ -291,7 +265,7 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
       prismaSessions,
       resolvedTokenPresent: Boolean(resolvedToken),
       tokenValidation,
-      remixSessionSync: remixSync,
+      localSessionSync,
       shopifyGraphql: graphqlProbe,
     },
     issues,
