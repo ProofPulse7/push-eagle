@@ -408,10 +408,28 @@ const getShopify = () => {
             await ensureShopifyWebPixel({
               admin,
             });
+
+            const offlineId = `offline_${session.shop}`;
+            const offlineSession = await sessionStorage.loadSession(offlineId);
+            const offlineAccessToken =
+              offlineSession?.accessToken && offlineSession.isOnline === false
+                ? offlineSession.accessToken
+                : session.isOnline
+                  ? null
+                  : session.accessToken;
+
+            if (!offlineAccessToken) {
+              console.warn("[push-eagle] afterAuth missing offline access token", {
+                shop: session.shop,
+                isOnline: session.isOnline,
+              });
+              return;
+            }
+
             await syncMerchantProfileToDashboard({
               shopDomain: session.shop,
-              scope: session.scope,
-              accessToken: session.accessToken,
+              scope: session.scope ?? offlineSession?.scope ?? null,
+              accessToken: offlineAccessToken,
               admin,
             });
             void syncRecentCustomersToDashboard({

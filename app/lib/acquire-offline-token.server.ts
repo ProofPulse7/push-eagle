@@ -1,7 +1,7 @@
 import { RequestedTokenType } from "@shopify/shopify-api";
 
 import db from "../db.server";
-import { getOfflineAccessToken } from "./shopify-billing.server";
+import { loadOfflineAccessToken } from "./resolve-offline-token.server";
 import { validateShopifyAccessToken } from "./shopify-offline-token-refresh.server";
 import { getShopifyApi, sessionStorage, shopifyApiKey } from "../shopify.server";
 
@@ -50,7 +50,7 @@ export const exchangeOfflineAccessToken = async (request: Request, shopDomain: s
 export const ensureOfflineAccessTokenForRequest = async (request: Request, shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
 
-  let token = await getOfflineAccessToken(shop);
+  let token = await loadOfflineAccessToken(shop);
   if (token && (await validateShopifyAccessToken(shop, token))) {
     return token;
   }

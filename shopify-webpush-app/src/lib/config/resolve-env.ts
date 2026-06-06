@@ -46,21 +46,7 @@ const EnvSchema = z.object({
 export type AppEnv = z.infer<typeof EnvSchema>;
 
 const DASHBOARD_PRODUCTION_URL = 'https://push-eagle-dashboard.vercel.app';
-const SESSION_SCHEMA = 'shopify_sessions';
-
 const cleanPostgresUrl = (value: string) => sanitizePostgresConnectionString(value.trim());
-
-const withPostgresSchema = (connectionUrl: string, schema: string) => {
-  const cleaned = cleanPostgresUrl(connectionUrl);
-  if (!cleaned.startsWith('postgresql') && !cleaned.startsWith('postgres://')) {
-    return '';
-  }
-  if (cleaned.includes('schema=')) {
-    return cleaned;
-  }
-  const separator = cleaned.includes('?') ? '&' : '?';
-  return `${cleaned}${separator}schema=${schema}`;
-};
 
 const fixDashboardPublicUrl = (url: string) => {
   const trimmed = url.trim();
@@ -83,17 +69,7 @@ export const resolveShopifySessionDatabaseUrl = (raw: AppEnv) => {
     return explicit;
   }
 
-  const candidates = [cleanPostgresUrl(raw.NEON_DATABASE_URL), cleanPostgresUrl(raw.DATABASE_URL)].filter(
-    Boolean,
-  );
-  for (const candidate of candidates) {
-    const withSchema = withPostgresSchema(candidate, SESSION_SCHEMA);
-    if (withSchema) {
-      return withSchema;
-    }
-  }
-
-  return '';
+  return cleanPostgresUrl(raw.NEON_DATABASE_URL) || cleanPostgresUrl(raw.DATABASE_URL) || '';
 };
 
 export const resolveAppEnv = (): AppEnv => {

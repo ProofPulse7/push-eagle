@@ -4,6 +4,7 @@ import { callPushEagleBilling } from '@/lib/server/billing/push-eagle-client';
 import { getShopifyStoreCredentials } from '@/lib/server/billing/shopify-credentials-store';
 import { getShopifyOfflineAccessToken, hasShopifySessionDatabase } from '@/lib/server/billing/shopify-session';
 import { probeMerchantToken, probePrismaSessionSources } from '@/lib/server/billing/session-probe';
+import { buildShopifyAppConnectUrl } from '@/lib/server/billing/shopify-connect-url';
 import { buildShopifyReauthorizeUrl } from '@/lib/server/billing/shopify-offline-token-refresh';
 import { validateShopifyAccessToken } from '@/lib/server/billing/shopify-token-validation';
 
@@ -32,24 +33,31 @@ const probeNeon = async () => {
   }
 };
 
-const probeRemixHealth = async () => {
+const probeRemixHealth = async (shopDomain: string | null) => {
   const root = (env.SHOPIFY_ROOT_APP_URL || 'https://push-eagle.vercel.app').replace(/\/$/, '');
+  const healthUrl = new URL(`${root}/health`);
+  if (shopDomain) {
+    healthUrl.searchParams.set('shop', shopDomain);
+  }
+
   try {
-    const response = await fetch(`${root}/health`, { cache: 'no-store' });
+    const response = await fetch(healthUrl.toString(), { cache: 'no-store' });
     const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const database = (payload?.database ?? null) as Record<string, unknown> | null;
     return {
       ok: response.ok,
       status: response.status,
-      url: `${root}/health`,
+      url: healthUrl.toString(),
       hasShopifyConfig: payload?.hasShopifyConfig ?? null,
       missingShopifyConfig: payload?.missingShopifyConfig ?? null,
       appUrl: payload?.appUrl ?? null,
+      database,
     };
   } catch (error) {
     return {
       ok: false,
       status: 0,
-      url: `${root}/health`,
+      url: healthUrl.toString(),
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -159,12 +167,28 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
     issues.push(`Neon database connection failed: ${neon.error}`);
   }
 
-  const remixHealth = await probeRemixHealth();
+  const remixHealth = await probeRemixHealth(shopDomain);
   if (!remixHealth.ok) {
     issues.push('Remix Shopify app health check failed (push-eagle.vercel.app).');
-    recommendations.push('Verify the push-eagle Vercel project is deployed and DATABASE_URL points to Neon with schema=shopify_sessions.');
+    recommendations.push(
+      'On the push-eagle Vercel project set DATABASE_URL to the same Neon URL as NEON_DATABASE_URL on the dashboard (public schema, no wrapping quotes).',
+    );
   } else if (remixHealth.hasShopifyConfig === false) {
     issues.push(`Remix app missing Shopify env: ${JSON.stringify(remixHealth.missingShopifyConfig)}`);
+  } else if (remixHealth.database && remixHealth.database.configured === false) {
+    issues.push('Remix push-eagle Vercel project is missing DATABASE_URL — OAuth sessions are never saved.');
+    recommendations.push(
+      'Set DATABASE_URL on push-eagle.vercel.app to the same Neon connection string as dashboard NEON_DATABASE_URL, then redeploy and open Apps → Push Eagle again.',
+    );
+  } else if (remixHealth.database && remixHealth.database.ok === false) {
+    issues.push(`Remix DATABASE_URL cannot reach Postgres: ${remixHealth.database.error}`);
+  } else if (
+    shopDomain &&
+    remixHealth.database &&
+    remixHealth.database.shopSessionFound === false
+  ) {
+    issues.push('Remix has no Session row for this shop in Neon — OAuth did not complete on push-eagle.vercel.app.');
+    recommendations.push(`Connect via Shopify app entry: ${buildShopifyAppConnectUrl(shopDomain)}`);
   }
 
   let merchantToken = null as Awaited<ReturnType<typeof probeMerchantToken>> | null;
@@ -191,8 +215,8 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
       );
     }
     if (!prismaSessions.some((row) => row.found)) {
-      issues.push('No Prisma Session row found in Neon for this shop (shopify_sessions schema).');
-      recommendations.push('Open Apps → Push Eagle from Shopify admin once to complete OAuth on push-eagle.vercel.app/app.');
+      issues.push('No Prisma Session row found in Neon for this shop (public.Session).');
+      recommendations.push(`Open Apps → Push Eagle from Shopify admin, or visit ${buildShopifyAppConnectUrl(shopDomain)}`);
     }
     if (!resolvedToken) {
       issues.push('getShopifyOfflineAccessToken() returned null — billing cannot call appSubscriptionCreate.');

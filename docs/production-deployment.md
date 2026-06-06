@@ -23,7 +23,7 @@ Set these in the Vercel project that deploys the repository root:
 - `SCOPES`
 - `SHOPIFY_APP_URL`: public URL of the root Shopify app
 - `SHOPIFY_WEB_DASHBOARD_URL`: public URL of the Next.js app iframe target
-- `DATABASE_URL`: Postgres connection string for Prisma session storage using an isolated schema, for example `...?sslmode=require&schema=shopify_sessions`
+- `DATABASE_URL`: **Same Neon Postgres URL as dashboard `NEON_DATABASE_URL`** (public schema). Example: `postgresql://USER:PASSWORD@HOST/neondb?sslmode=require`. Do not use `schema=shopify_sessions` — Prisma stores `Session` in `public`.
 
 ## Next.js app env vars
 
@@ -37,7 +37,7 @@ Set these in the Vercel project that deploys `shopify-webpush-app`:
 - `SHOPIFY_WEBHOOK_SECRET`: normally same as Shopify app secret
 - `DATABASE_PROVIDER=neon`
 - `NEON_DATABASE_URL`
-- `SHOPIFY_SESSION_DATABASE_URL`: same Postgres URL as the root app's `DATABASE_URL` (Prisma `Session` table with offline tokens). Required for Plans checkout from the dashboard without calling the Remix app.
+- `SHOPIFY_SESSION_DATABASE_URL`: same Neon URL as `NEON_DATABASE_URL` / Remix `DATABASE_URL` (reads `public.Session` for offline tokens).
 - `SHOPIFY_DASHBOARD_SSO_SECRET`: same value as on the root app (used if billing falls back to Remix routes)
 - `SHOPIFY_BILLING_TEST=true` on dev stores (optional)
 - Firebase client env vars

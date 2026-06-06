@@ -2,7 +2,7 @@
   "name": "push-eagle",
   "private": true,
   "scripts": {
-    "build": "react-router build",
+    "build": "prisma generate && prisma db push --skip-generate && react-router build",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
