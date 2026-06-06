@@ -178,10 +178,13 @@ export function PlansPageContent() {
           toast({ title: 'Business plan active', description: 'Your plan is ready to use.' });
         },
         onError: (error) => {
+          const message = error instanceof Error ? error.message : 'Try again.';
           toast({
             variant: 'destructive',
             title: 'Could not start checkout',
-            description: error instanceof Error ? error.message : 'Try again.',
+            description: message.includes('No Shopify session')
+              ? `${message} Open Billing diagnostics in the sidebar and download the JSON report.`
+              : message,
           });
         },
       },

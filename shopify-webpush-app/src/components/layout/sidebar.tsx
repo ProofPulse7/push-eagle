@@ -87,6 +87,9 @@ export function Sidebar() {
             <NavLink href="/automations/diagnostic" icon={Stethoscope}>
                 Diagnostics
             </NavLink>
+            <NavLink href="/diagnostics/shopify-billing" icon={Stethoscope}>
+                Billing diagnostics
+            </NavLink>
         </nav>
 
         <div className="mt-auto space-y-1">

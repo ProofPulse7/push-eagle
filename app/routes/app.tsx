@@ -5,6 +5,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { ExternalRedirect } from "../components/external-redirect";
+import { getOfflineAccessToken } from "../lib/shopify-billing.server";
 import {
   authenticate,
   shopifyApiKey,
@@ -80,18 +81,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const auth = await authenticate.admin(request);
     const returnTo = readReturnTo(request);
     const redirectUrl = buildDashboardSsoUrl(dashboardUrl, auth.session.shop, returnTo);
+    const offlineToken = await getOfflineAccessToken(auth.session.shop);
 
-    void syncMerchantProfileToDashboard({
-      shopDomain: auth.session.shop,
-      scope: auth.session.scope || null,
-      accessToken: auth.session.accessToken || null,
-      admin: auth.admin,
-    }).catch((error) => {
+    try {
+      await syncMerchantProfileToDashboard({
+        shopDomain: auth.session.shop,
+        scope: auth.session.scope || null,
+        accessToken: offlineToken || auth.session.accessToken || null,
+        admin: auth.admin,
+      });
+    } catch (error) {
       console.warn("[push-eagle] Profile sync before dashboard redirect failed", {
         shop: auth.session.shop,
         error: error instanceof Error ? error.message : String(error),
       });
-    });
+    }
 
     void syncRecentCustomersToDashboard({
       shopDomain: auth.session.shop,

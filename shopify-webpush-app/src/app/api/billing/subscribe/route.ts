@@ -63,8 +63,9 @@ export async function POST(request: Request) {
           {
             ok: false,
             error:
-              'No Shopify session for this store. Open Push Eagle from Shopify admin (Apps → Push Eagle) once, wait for the dashboard to load, then try Plans again.',
+              'No Shopify session for this store. Open Push Eagle from Shopify admin (Apps → Push Eagle) once, wait for the dashboard to load, then try Plans again. Open /diagnostics/shopify-billing and download the JSON report if this persists.',
             billing,
+            diagnosticsPath: '/diagnostics/shopify-billing',
           },
           { status: 502 },
         );
