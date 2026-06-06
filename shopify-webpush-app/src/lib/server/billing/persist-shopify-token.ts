@@ -1,6 +1,7 @@
 import { upsertMerchantProfile } from '@/lib/server/data/store';
 
 import { upsertShopifyStoreCredentials } from '@/lib/server/billing/shopify-credentials-store';
+import { clearMerchantOfflineAccessToken } from '@/lib/server/billing/shopify-offline-token-refresh';
 import { validateShopifyAccessToken } from '@/lib/server/billing/shopify-token-validation';
 
 export const persistShopifyOfflineToken = async (input: {
@@ -20,25 +21,32 @@ export const persistShopifyOfflineToken = async (input: {
   const valid =
     input.skipValidation === true ? true : await validateShopifyAccessToken(shop, token);
 
-  if (valid) {
-    await upsertShopifyStoreCredentials({
-      shopDomain: shop,
-      offlineAccessToken: token,
-      scopes: input.scopes ?? null,
-      source: input.source,
-      tokenValid: true,
-    });
-
-    await upsertMerchantProfile({
-      shopDomain: shop,
-      shopifyOfflineAccessToken: token,
-      scopes: input.scopes ?? null,
-    });
+  if (!valid) {
+    await clearMerchantOfflineAccessToken(shop);
+    return {
+      saved: false,
+      valid: false,
+      reason: 'invalid_token' as const,
+    };
   }
 
+  await upsertShopifyStoreCredentials({
+    shopDomain: shop,
+    offlineAccessToken: token,
+    scopes: input.scopes ?? null,
+    source: input.source,
+    tokenValid: true,
+  });
+
+  await upsertMerchantProfile({
+    shopDomain: shop,
+    shopifyOfflineAccessToken: token,
+    scopes: input.scopes ?? null,
+  });
+
   return {
-    saved: valid,
-    valid,
-    reason: valid ? null : ('invalid_token' as const),
+    saved: true,
+    valid: true,
+    reason: null,
   };
 };

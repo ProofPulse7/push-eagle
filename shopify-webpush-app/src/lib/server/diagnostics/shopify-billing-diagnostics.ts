@@ -4,6 +4,7 @@ import { callPushEagleBilling } from '@/lib/server/billing/push-eagle-client';
 import { getShopifyStoreCredentials } from '@/lib/server/billing/shopify-credentials-store';
 import { getShopifyOfflineAccessToken, hasShopifySessionDatabase } from '@/lib/server/billing/shopify-session';
 import { probeMerchantToken, probePrismaSessionSources } from '@/lib/server/billing/session-probe';
+import { buildShopifyReauthorizeUrl } from '@/lib/server/billing/shopify-offline-token-refresh';
 import { validateShopifyAccessToken } from '@/lib/server/billing/shopify-token-validation';
 
 export type ShopifyBillingDiagnosticReport = {
@@ -214,7 +215,9 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
       graphqlProbe = await probeShopifyGraphql(shopDomain, resolvedToken);
       if (!valid || !graphqlProbe.ok) {
         issues.push(`Shopify Admin GraphQL rejected the offline token: ${graphqlProbe.error || 'invalid or expired token'}`);
-        recommendations.push('Re-open the app from Shopify admin to refresh the offline access token.');
+        recommendations.push(
+          `Re-authorize Push Eagle: ${buildShopifyReauthorizeUrl(shopDomain)} (or Apps → Push Eagle in Shopify admin).`,
+        );
         recommendations.push(
           'If this persists, uninstall and reinstall Push Eagle on the dev store, then open the app again.',
         );

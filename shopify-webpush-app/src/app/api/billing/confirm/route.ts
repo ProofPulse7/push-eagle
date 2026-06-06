@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { BUSINESS_TIERS } from '@/lib/server/billing/plans';
+import { BASIC_PLAN, BUSINESS_TIERS } from '@/lib/server/billing/plans';
 import { upsertMerchantBilling } from '@/lib/server/billing/merchant-billing';
 import { syncActiveAppSubscription } from '@/lib/server/billing/sync-subscription';
 import { extractShopDomain } from '@/lib/server/shop-context';
@@ -29,16 +29,29 @@ export async function POST(request: Request) {
       });
     }
 
-    const tier = matchTierByPrice(Number(active.amount ?? 0));
-    const billing = await upsertMerchantBilling({
-      shopDomain,
-      planKey: 'business',
-      tierId: tier.id,
-      impressionLimit: tier.impressions,
-      priceUsd: tier.priceUsd,
-      shopifySubscriptionId: String(active.id),
-      status: 'active',
-    });
+    const amount = Number(active.amount ?? 0);
+    const tier = matchTierByPrice(amount);
+    const billing = await upsertMerchantBilling(
+      amount <= 0.001
+        ? {
+            shopDomain,
+            planKey: 'basic',
+            tierId: null,
+            impressionLimit: BASIC_PLAN.impressions,
+            priceUsd: BASIC_PLAN.priceUsd,
+            shopifySubscriptionId: String(active.id),
+            status: 'active',
+          }
+        : {
+            shopDomain,
+            planKey: 'business',
+            tierId: tier.id,
+            impressionLimit: tier.impressions,
+            priceUsd: tier.priceUsd,
+            shopifySubscriptionId: String(active.id),
+            status: 'active',
+          },
+    );
 
     return NextResponse.json({ ok: true, activated: true, billing });
   } catch (error) {

@@ -7,7 +7,12 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { ExternalRedirect } from "../components/external-redirect";
 import { getOfflineAccessToken } from "../lib/shopify-billing.server";
 import {
+  refreshOfflineAccessToken,
+  validateShopifyAccessToken,
+} from "../lib/shopify-offline-token-refresh.server";
+import {
   authenticate,
+  login,
   shopifyApiKey,
   syncMerchantProfileToDashboard,
   syncRecentCustomersToDashboard,
@@ -81,10 +86,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const auth = await authenticate.admin(request);
     const returnTo = readReturnTo(request);
     const redirectUrl = buildDashboardSsoUrl(dashboardUrl, auth.session.shop, returnTo);
-    const tokenForSync =
+    let tokenForSync =
       !auth.session.isOnline && auth.session.accessToken
         ? auth.session.accessToken
         : await getOfflineAccessToken(auth.session.shop);
+
+    const refreshedOffline = await refreshOfflineAccessToken(auth.session.shop);
+    if (refreshedOffline) {
+      tokenForSync = refreshedOffline;
+    }
+
+    const hasValidOfflineToken =
+      Boolean(tokenForSync) &&
+      (await validateShopifyAccessToken(auth.session.shop, tokenForSync as string));
+
+    if (!hasValidOfflineToken) {
+      throw await login(request);
+    }
 
     try {
       await syncMerchantProfileToDashboard({

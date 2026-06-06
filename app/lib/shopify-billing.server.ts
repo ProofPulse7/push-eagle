@@ -1,6 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import db from "../db.server";
+import {
+  refreshOfflineAccessToken,
+  validateShopifyAccessToken,
+} from "./shopify-offline-token-refresh.server";
 import { sessionStorage } from "../shopify.server";
 
 type BillingRequestBody = {
@@ -52,6 +56,11 @@ const readTokenFromRows = (rows: Array<{ accessToken?: string }>) => {
 export const getOfflineAccessToken = async (shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
   const offlineId = `offline_${shop}`;
+
+  const refreshed = await refreshOfflineAccessToken(shop);
+  if (refreshed) {
+    return refreshed;
+  }
 
   try {
     const storedSession = await sessionStorage.loadSession(offlineId);
@@ -212,8 +221,8 @@ export const handleBillingCreateRequest = async (request: Request) => {
     return Response.json({ ok: false, error: "Missing returnUrl." }, { status: 400 });
   }
 
-  if (priceUsd <= 0) {
-    return Response.json({ ok: false, error: "Paid plans require priceUsd > 0." }, { status: 400 });
+  if (priceUsd < 0) {
+    return Response.json({ ok: false, error: "Plan price cannot be negative." }, { status: 400 });
   }
 
   try {

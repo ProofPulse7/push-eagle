@@ -134,7 +134,7 @@ export function PlansPageContent() {
     confirmBilling.mutate(undefined, {
       onSuccess: (result) => {
         if (result?.activated) {
-          toast({ title: 'Plan activated', description: 'Your Business plan is now active.' });
+          toast({ title: 'Plan activated', description: 'Your Shopify subscription is now active.' });
         }
       },
       onError: () => {
@@ -151,13 +151,18 @@ export function PlansPageContent() {
     subscribe.mutate(
       { planKey: 'basic' },
       {
-        onSuccess: () => {
+        onSuccess: (result) => {
+          if (result?.confirmationUrl) {
+            const target = window.top ?? window;
+            target.location.assign(result.confirmationUrl);
+            return;
+          }
           toast({ title: 'Basic plan active', description: 'You are on the free Basic plan.' });
         },
         onError: (error) => {
           toast({
             variant: 'destructive',
-            title: 'Could not activate Basic',
+            title: 'Could not start Basic checkout',
             description: error instanceof Error ? error.message : 'Try again.',
           });
         },
@@ -227,8 +232,8 @@ export function PlansPageContent() {
               {currentPlanKey === 'basic'
                 ? 'Current plan'
                 : subscribe.isPending
-                  ? 'Processing…'
-                  : 'Subscribe free'}
+                  ? 'Redirecting to Shopify…'
+                  : 'Subscribe with Shopify'}
             </Button>
           }
         >

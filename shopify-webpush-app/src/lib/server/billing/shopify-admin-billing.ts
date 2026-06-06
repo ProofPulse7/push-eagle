@@ -1,3 +1,4 @@
+import { resolveBillingTestMode } from '@/lib/server/billing/billing-test-mode';
 import { requireShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
 
 const CREATE_SUBSCRIPTION = `
@@ -90,14 +91,20 @@ export const createRecurringAppSubscription = async (input: {
   returnUrl: string;
   test?: boolean;
 }) => {
-  if (input.priceUsd <= 0) {
-    throw new Error('Paid plans require priceUsd > 0.');
+  if (input.priceUsd < 0) {
+    throw new Error('Plan price cannot be negative.');
   }
+
+  const accessToken = await requireShopifyOfflineAccessToken(input.shopDomain);
+  const test =
+    input.test === undefined
+      ? await resolveBillingTestMode(input.shopDomain, accessToken)
+      : Boolean(input.test) || process.env.SHOPIFY_BILLING_TEST === 'true';
 
   const data = await adminGraphql(input.shopDomain, CREATE_SUBSCRIPTION, {
     name: input.planName,
     returnUrl: input.returnUrl,
-    test: Boolean(input.test) || process.env.SHOPIFY_BILLING_TEST === 'true',
+    test,
     lineItems: [
       {
         plan: {

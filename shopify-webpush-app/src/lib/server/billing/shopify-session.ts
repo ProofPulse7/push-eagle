@@ -2,6 +2,10 @@ import { neon } from '@neondatabase/serverless';
 
 import { isValidPostgresConnectionString, sanitizePostgresConnectionString } from '@/lib/config/sanitize-connection-string';
 import { getShopifyStoreCredentials } from '@/lib/server/billing/shopify-credentials-store';
+import {
+  clearMerchantOfflineAccessToken,
+  isObviouslyInvalidStoredToken,
+} from '@/lib/server/billing/shopify-offline-token-refresh';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { env } from '@/lib/config/env';
 
@@ -122,11 +126,6 @@ export const getShopifyOfflineAccessToken = async (shopDomain: string) => {
     return credentials.offlineAccessToken;
   }
 
-  const merchantToken = await getMerchantStoredAccessToken(shop);
-  if (merchantToken) {
-    return merchantToken;
-  }
-
   const prismaAttempts = [
     queryByOfflineSessionId,
     queryOfflineFromShopifySessionsSchema,
@@ -136,11 +135,20 @@ export const getShopifyOfflineAccessToken = async (shopDomain: string) => {
   for (const attempt of prismaAttempts) {
     try {
       const token = await attempt(shop);
-      if (token) {
+      if (token && !isObviouslyInvalidStoredToken(token)) {
         return token;
       }
     } catch {
       // Table may live in a different schema on this database.
+    }
+  }
+
+  const merchantToken = await getMerchantStoredAccessToken(shop);
+  if (merchantToken) {
+    if (isObviouslyInvalidStoredToken(merchantToken)) {
+      await clearMerchantOfflineAccessToken(shop);
+    } else {
+      return merchantToken;
     }
   }
 

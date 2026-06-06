@@ -4,11 +4,12 @@ import { z } from 'zod';
 import {
   BASIC_PLAN,
   getBusinessTier,
-  type PlanKey,
 } from '@/lib/server/billing/plans';
-import { upsertMerchantBilling } from '@/lib/server/billing/merchant-billing';
-import { ensureShopifyOfflineAccessToken } from '@/lib/server/billing/refresh-shopify-session';
-import { startBusinessSubscriptionCheckout } from '@/lib/server/billing/create-subscription';
+import {
+  basicCheckoutPlanName,
+  startPlanSubscriptionCheckout,
+} from '@/lib/server/billing/start-plan-checkout';
+import { buildShopifyReauthorizeUrl } from '@/lib/server/billing/shopify-offline-token-refresh';
 import { env } from '@/lib/config/env';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -21,25 +22,33 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
+  let shopDomain: string | null = null;
   try {
     const body = bodySchema.parse(await request.json());
-    const shopDomain = extractShopDomain(request, body.shopDomain);
+    shopDomain = extractShopDomain(request, body.shopDomain);
     const appUrl = env.NEXT_PUBLIC_APP_URL;
     const returnUrl = new URL('/plans', appUrl);
     returnUrl.searchParams.set('shop', shopDomain);
     returnUrl.searchParams.set('billing', 'return');
 
     if (body.planKey === 'basic') {
-      const billing = await upsertMerchantBilling({
+      const result = await startPlanSubscriptionCheckout({
         shopDomain,
         planKey: 'basic',
-        tierId: null,
+        planName: basicCheckoutPlanName(),
+        priceUsd: BASIC_PLAN.priceUsd,
+        returnUrl: returnUrl.toString(),
         impressionLimit: BASIC_PLAN.impressions,
-        priceUsd: 0,
-        shopifySubscriptionId: null,
-        status: 'active',
+        tierId: null,
       });
-      return NextResponse.json({ ok: true, activated: true, billing, confirmationUrl: null });
+
+      return NextResponse.json({
+        ok: true,
+        confirmationUrl: result.confirmationUrl,
+        subscriptionId: result.subscriptionId,
+        billing: result.billing,
+        test: result.test,
+      });
     }
 
     const tier = getBusinessTier(body.tierId || '');
@@ -47,53 +56,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: 'Invalid business tier.' }, { status: 400 });
     }
 
-    const billing = await upsertMerchantBilling({
+    const result = await startPlanSubscriptionCheckout({
       shopDomain,
       planKey: 'business',
-      tierId: tier.id,
-      impressionLimit: tier.impressions,
+      planName: `Push Eagle Business (${tier.impressions.toLocaleString()} impressions)`,
       priceUsd: tier.priceUsd,
-      status: 'pending',
+      returnUrl: returnUrl.toString(),
+      impressionLimit: tier.impressions,
+      tierId: tier.id,
     });
 
-    try {
-      const hasToken = await ensureShopifyOfflineAccessToken(shopDomain);
-      if (!hasToken) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error:
-              'No Shopify session for this store. Open Push Eagle from Shopify admin (Apps → Push Eagle) once, wait for the dashboard to load, then try Plans again. Open /diagnostics/shopify-billing and download the JSON report if this persists.',
-            billing,
-            diagnosticsPath: '/diagnostics/shopify-billing',
-          },
-          { status: 502 },
-        );
-      }
-
-      const result = await startBusinessSubscriptionCheckout({
-        shopDomain,
-        planName: `Push Eagle Business (${tier.impressions.toLocaleString()} impressions)`,
-        priceUsd: tier.priceUsd,
-        returnUrl: returnUrl.toString(),
-        test: process.env.SHOPIFY_BILLING_TEST === 'true',
-      });
-
-      return NextResponse.json({
-        ok: true,
-        confirmationUrl: result.confirmationUrl,
-        subscriptionId: result.subscriptionId,
-        billing,
-      });
-    } catch (billingError) {
-      const message =
-        billingError instanceof Error
-          ? billingError.message
-          : 'Could not start Shopify billing. Open the app from Shopify admin and try again.';
-      return NextResponse.json({ ok: false, error: message, billing }, { status: 502 });
-    }
+    return NextResponse.json({
+      ok: true,
+      confirmationUrl: result.confirmationUrl,
+      subscriptionId: result.subscriptionId,
+      billing: result.billing,
+      test: result.test,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to start subscription.';
-    return NextResponse.json({ ok: false, error: message }, { status: 400 });
+    const reauthorizeUrl =
+      shopDomain && message.includes('No valid Shopify offline token')
+        ? buildShopifyReauthorizeUrl(shopDomain)
+        : null;
+
+    return NextResponse.json(
+      {
+        ok: false,
+        error: message,
+        reauthorizeUrl,
+        diagnosticsPath: '/diagnostics/shopify-billing',
+      },
+      { status: message.includes('No valid Shopify offline token') ? 502 : 400 },
+    );
   }
 }

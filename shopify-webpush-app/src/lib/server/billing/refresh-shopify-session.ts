@@ -6,6 +6,10 @@ import {
   markShopifyStoreCredentialsInvalid,
 } from '@/lib/server/billing/shopify-credentials-store';
 import { getShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
+import {
+  clearMerchantOfflineAccessToken,
+  refreshOfflineAccessToken,
+} from '@/lib/server/billing/shopify-offline-token-refresh';
 import { validateShopifyAccessToken } from '@/lib/server/billing/shopify-token-validation';
 
 export const refreshShopifySessionFromRemixApp = async (shopDomain: string) => {
@@ -38,6 +42,11 @@ const healFromPrismaSessionTable = async (shopDomain: string) => {
 export const ensureShopifyOfflineAccessToken = async (shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
 
+  const refreshed = await refreshOfflineAccessToken(shop);
+  if (refreshed && (await validateShopifyAccessToken(shop, refreshed))) {
+    return refreshed;
+  }
+
   let token = await getShopifyOfflineAccessToken(shop);
   if (token && (await validateShopifyAccessToken(shop, token))) {
     return token;
@@ -45,6 +54,7 @@ export const ensureShopifyOfflineAccessToken = async (shopDomain: string) => {
 
   if (token) {
     await markShopifyStoreCredentialsInvalid(shop);
+    await clearMerchantOfflineAccessToken(shop);
   }
 
   const remixSync = await refreshShopifySessionFromRemixApp(shop);
