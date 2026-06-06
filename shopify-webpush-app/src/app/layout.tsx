@@ -1,4 +1,5 @@
 
+import { Suspense } from 'react';
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
@@ -8,6 +9,7 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { FirebaseClientInit } from '@/components/firebase/firebase-client-init';
 import { SettingsProvider } from '@/context/settings-context';
 import { AppBootstrapLoader } from '@/components/providers/app-bootstrap-loader';
+import { ShopConnectGate } from '@/components/auth/shop-connect-gate';
 import { AppSetupGate } from '@/components/providers/app-setup-gate';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { SettingsCacheSync } from '@/components/providers/settings-cache-sync';
@@ -55,14 +57,18 @@ export default function RootLayout({
         >
           <QueryProvider>
             <SettingsProvider>
-              <AppSetupGate>
-                <AppBootstrapLoader>
-                  <SettingsCacheSync />
-                  <FirebaseClientInit />
-                  <AppLayout>{children}</AppLayout>
-                  <Toaster />
-                </AppBootstrapLoader>
-              </AppSetupGate>
+              <Suspense fallback={null}>
+                <ShopConnectGate>
+                  <AppSetupGate>
+                  <AppBootstrapLoader>
+                    <SettingsCacheSync />
+                    <FirebaseClientInit />
+                    <AppLayout>{children}</AppLayout>
+                    <Toaster />
+                  </AppBootstrapLoader>
+                  </AppSetupGate>
+                </ShopConnectGate>
+              </Suspense>
             </SettingsProvider>
           </QueryProvider>
         </ThemeProvider>

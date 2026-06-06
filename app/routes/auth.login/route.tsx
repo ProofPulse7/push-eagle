@@ -6,6 +6,31 @@ import { Form, useActionData, useLoaderData } from "react-router";
 import { hasShopifyConfig, login, missingShopifyConfig } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
+const persistReturnToCookie = (request: Request, response: Response) => {
+  const returnTo = new URL(request.url).searchParams.get("return_to");
+  if (!returnTo) {
+    return response;
+  }
+
+  response.headers.append(
+    "Set-Cookie",
+    `pe_return_to=${encodeURIComponent(returnTo)}; Path=/; Max-Age=600; Secure; SameSite=Lax`,
+  );
+  return response;
+};
+
+const runLogin = async (request: Request) => {
+  try {
+    const errors = loginErrorMessage(await login(request));
+    return { errors };
+  } catch (error) {
+    if (error instanceof Response) {
+      throw persistReturnToCookie(request, error);
+    }
+    throw error;
+  }
+};
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (!hasShopifyConfig) {
     return {
@@ -15,9 +40,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   }
 
-  const errors = loginErrorMessage(await login(request));
-
-  return { errors };
+  return runLogin(request);
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -29,11 +52,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-  const errors = loginErrorMessage(await login(request));
-
-  return {
-    errors,
-  };
+  return runLogin(request);
 };
 
 export default function Auth() {
@@ -63,4 +82,4 @@ export default function Auth() {
       </s-page>
     </AppProvider>
   );
-}
+};

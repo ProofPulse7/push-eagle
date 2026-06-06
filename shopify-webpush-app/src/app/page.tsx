@@ -12,5 +12,5 @@ export default async function RootPage({ searchParams }: RootPageProps) {
     redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
   }
 
-  redirect('/dashboard');
+  redirect('/connect');
 }
