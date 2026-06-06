@@ -7,6 +7,7 @@ import {
   type PlanKey,
 } from '@/lib/server/billing/plans';
 import { upsertMerchantBilling } from '@/lib/server/billing/merchant-billing';
+import { ensureShopifyOfflineAccessToken } from '@/lib/server/billing/refresh-shopify-session';
 import { startBusinessSubscriptionCheckout } from '@/lib/server/billing/create-subscription';
 import { env } from '@/lib/config/env';
 import { extractShopDomain } from '@/lib/server/shop-context';
@@ -56,6 +57,19 @@ export async function POST(request: Request) {
     });
 
     try {
+      const hasToken = await ensureShopifyOfflineAccessToken(shopDomain);
+      if (!hasToken) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              'No Shopify session for this store. Open Push Eagle from Shopify admin (Apps → Push Eagle) once, wait for the dashboard to load, then try Plans again.',
+            billing,
+          },
+          { status: 502 },
+        );
+      }
+
       const result = await startBusinessSubscriptionCheckout({
         shopDomain,
         planName: `Push Eagle Business (${tier.impressions.toLocaleString()} impressions)`,

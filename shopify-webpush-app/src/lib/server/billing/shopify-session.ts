@@ -177,7 +177,10 @@ export const getShopifyOfflineAccessToken = async (shopDomain: string) => {
 };
 
 export const requireShopifyOfflineAccessToken = async (shopDomain: string) => {
-  const token = await getShopifyOfflineAccessToken(shopDomain);
+  const { ensureShopifyOfflineAccessToken } = await import(
+    '@/lib/server/billing/refresh-shopify-session'
+  );
+  const token = await ensureShopifyOfflineAccessToken(shopDomain);
   if (token) {
     return token;
   }

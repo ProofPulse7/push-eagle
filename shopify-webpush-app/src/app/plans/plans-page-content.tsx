@@ -9,7 +9,9 @@ import { Check, Info, Loader2, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BUSINESS_TIERS, BASIC_PLAN } from '@/lib/client/billing-plans';
 import { useBillingStatus, useConfirmBilling, useSubscribePlan } from '@/hooks/queries/use-billing';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
+import { fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { ImpressionUsageBar } from '@/components/billing/impression-usage-bar';
 
 const BUSINESS_FEATURES = [
@@ -89,6 +91,7 @@ function PlanCard({
 }
 
 export function PlansPageContent() {
+  const shop = useShopDomain();
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const { data, isFetching } = useBillingStatus({ refetchOnMount: true });
@@ -101,6 +104,17 @@ export function PlansPageContent() {
   const currentTierId = billing?.tierId ? String(billing.tierId) : null;
 
   const selectedTier = BUSINESS_TIERS[tierIndex] ?? BUSINESS_TIERS[0];
+
+  useEffect(() => {
+    if (!shop) {
+      return;
+    }
+    void fetchJsonWithShop('/api/integrations/shopify/refresh-session', shop, { method: 'POST' }).catch(
+      () => {
+        // Non-blocking; subscribe retries session sync server-side.
+      },
+    );
+  }, [shop]);
 
   useEffect(() => {
     if (currentTierId) {
