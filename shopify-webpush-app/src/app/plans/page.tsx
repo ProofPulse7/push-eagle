@@ -18,8 +18,7 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
   }
 
   await ensureShopifyOAuthHandoff({
-    shop: params.shop,
-    host: params.host,
+    searchParams: params,
     returnPath: '/plans',
   });
 

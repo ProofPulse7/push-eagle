@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 
 import { DashboardView } from '@/components/dashboard/dashboard-view';
-import { ensureShopifyOAuthHandoff } from '@/lib/server/shopify-entry';
+import { ensureShopifyOAuthHandoff, persistShopCookie } from '@/lib/server/shopify-entry';
+import { normalizeShopDomain } from '@/lib/server/shop-context';
 
 type DashboardPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -16,10 +17,15 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   }
 
   await ensureShopifyOAuthHandoff({
-    shop: params.shop,
-    host: params.host,
+    searchParams: params,
     returnPath: '/dashboard',
   });
+
+  try {
+    await persistShopCookie(normalizeShopDomain(shop));
+  } catch {
+    // Shop cookie is optional; query param remains the primary source.
+  }
 
   return <DashboardView />;
 }
