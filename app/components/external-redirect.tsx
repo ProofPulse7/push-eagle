@@ -1,13 +1,13 @@
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 
 type ExternalRedirectProps = {
   url: string;
 };
 
 export function ExternalRedirect({ url }: ExternalRedirectProps) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     const target = window.top ?? window;
-    target.location.href = url;
+    target.location.replace(url);
   }, [url]);
 
   return (
@@ -15,13 +15,18 @@ export function ExternalRedirect({ url }: ExternalRedirectProps) {
       style={{
         alignItems: "center",
         display: "flex",
+        flexDirection: "column",
         fontFamily: "Inter, system-ui, sans-serif",
+        gap: "12px",
         height: "100vh",
         justifyContent: "center",
         margin: 0,
       }}
     >
       <p>Opening Push Eagle dashboard…</p>
+      <a href={url} target="_top" rel="noopener noreferrer">
+        Continue to dashboard
+      </a>
     </div>
   );
 }
