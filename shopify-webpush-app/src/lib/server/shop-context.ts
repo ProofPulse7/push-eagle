@@ -23,32 +23,15 @@ const getCookieValue = (cookieHeader: string | null, key: string) => {
     return null;
   }
 
-  return decodeURIComponent(entry.slice(`${key}=`.length));
+  return entry.slice(`${key}=`.length);
 };
 
-export const tryExtractShopDomain = (request: Request, bodyShopDomain?: unknown) => {
+export const extractShopDomain = (request: Request, bodyShopDomain?: unknown) => {
   const url = new URL(request.url);
   const queryShop = url.searchParams.get('shop');
   const headerShop = request.headers.get('x-shop-domain');
   const shopifyHeaderShop = request.headers.get('x-shopify-shop-domain');
   const cookieShop = getCookieValue(request.headers.get('cookie'), 'pe_shop');
 
-  const candidate = bodyShopDomain ?? headerShop ?? shopifyHeaderShop ?? queryShop ?? cookieShop;
-  if (!candidate) {
-    return null;
-  }
-
-  try {
-    return parseShopDomain(candidate);
-  } catch {
-    return null;
-  }
-};
-
-export const extractShopDomain = (request: Request, bodyShopDomain?: unknown) => {
-  const shop = tryExtractShopDomain(request, bodyShopDomain);
-  if (!shop) {
-    throw new Error('Missing shop context. Open Push Eagle from your Shopify admin or connect your store.');
-  }
-  return shop;
+  return parseShopDomain(bodyShopDomain ?? headerShop ?? shopifyHeaderShop ?? queryShop ?? cookieShop);
 };

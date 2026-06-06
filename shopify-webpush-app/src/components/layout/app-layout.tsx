@@ -9,10 +9,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   
   const isCampaignComposer = pathname.startsWith('/campaigns/new');
-  const isLoginPage =
-    pathname.startsWith('/login') ||
-    pathname.startsWith('/connect') ||
-    pathname.startsWith('/shopify-login');
+  const isLoginPage = pathname.startsWith('/login');
   // This Regex checks for paths like /automations/{...}/some-id/edit
   const isAutomationEditor = /^\/automations\/[a-zA-Z0-9-]+\/[^/]+\/edit$/.test(pathname);
 

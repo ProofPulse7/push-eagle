@@ -1,10 +1,8 @@
-import { createHmac } from "node:crypto";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { redirect, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
-import { ExternalRedirect } from "../components/external-redirect";
 import {
   authenticate,
   shopifyApiKey,
@@ -12,109 +10,74 @@ import {
   syncRecentCustomersToDashboard,
 } from "../shopify.server";
 
+const buildDashboardUrl = (baseDashboardUrl: string, shopDomain: string) => {
+  const url = new URL("/dashboard", baseDashboardUrl);
+  url.searchParams.set("shop", shopDomain);
+  return url.toString();
+};
+
 const resolveDashboardUrl = () =>
   process.env.SHOPIFY_WEB_DASHBOARD_URL?.trim() ||
   process.env.WEB_DASHBOARD_URL?.trim() ||
   "https://push-eagle-dashboard.vercel.app";
 
-const readReturnTo = (request: Request) => {
-  const requestUrl = new URL(request.url);
-  const queryReturnTo = requestUrl.searchParams.get("return_to");
-  if (queryReturnTo) {
-    return queryReturnTo;
-  }
-
-  const cookieHeader = request.headers.get("cookie") || "";
-  const entry = cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith("pe_return_to="));
-
-  if (!entry) {
-    return null;
-  }
-
-  return decodeURIComponent(entry.slice("pe_return_to=".length));
-};
-
-const buildDashboardEntryUrl = (
-  baseDashboardUrl: string,
-  shopDomain: string,
-  returnTo?: string | null,
-) => {
-  let redirectPath = "/dashboard";
-
-  if (returnTo) {
-    try {
-      const parsed = new URL(returnTo);
-      const dashboardOrigin = new URL(baseDashboardUrl).origin;
-      if (parsed.origin === dashboardOrigin) {
-        redirectPath = `${parsed.pathname}${parsed.search}`;
-      }
-    } catch {
-      // Fall back to /dashboard.
-    }
-  }
-
-  const ssoUrl = new URL("/api/integrations/shopify/sso", baseDashboardUrl);
-  ssoUrl.searchParams.set("shop", shopDomain);
-  ssoUrl.searchParams.set("redirect", redirectPath.startsWith("/") ? redirectPath : "/dashboard");
-
-  const secret =
-    process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() || process.env.SHOPIFY_API_SECRET?.trim() || "";
-  if (secret) {
-    const ts = String(Date.now());
-    const sig = createHmac("sha256", secret).update(`${shopDomain}.${ts}`).digest("hex");
-    ssoUrl.searchParams.set("ts", ts);
-    ssoUrl.searchParams.set("sig", sig);
-  }
-
-  return ssoUrl.toString();
-};
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const requestUrl = new URL(request.url);
   const dashboardUrl = resolveDashboardUrl();
+  let authSession:
+    | {
+        session?: { shop?: string; scope?: string | null };
+        admin?: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> };
+      }
+    | null = null;
 
-  if (dashboardUrl && requestUrl.pathname.startsWith("/app")) {
-    const auth = await authenticate.admin(request);
-    const returnTo = readReturnTo(request);
-    const redirectUrl = buildDashboardEntryUrl(dashboardUrl, auth.session.shop, returnTo);
+  if (dashboardUrl) {
+    const requestUrl = new URL(request.url);
+    const queryShop = requestUrl.searchParams.get("shop");
+    const headerShop = request.headers.get("x-shopify-shop-domain");
+    let shopDomain = (queryShop || headerShop || "").trim().toLowerCase();
 
-    // Never block the Shopify Admin launch on dashboard sync — afterAuth already syncs on install.
-    void syncMerchantProfileToDashboard({
-      shopDomain: auth.session.shop,
-      scope: auth.session.scope || null,
-      accessToken: auth.session.accessToken || null,
-      admin: auth.admin,
-    }).catch((error) => {
-      console.warn("[push-eagle] Profile sync before dashboard redirect failed", {
-        shop: auth.session.shop,
-        error: error instanceof Error ? error.message : String(error),
+    if (!shopDomain) {
+      try {
+        const auth = await authenticate.admin(request);
+        authSession = auth;
+        shopDomain = (auth.session?.shop || "").trim().toLowerCase();
+      } catch {
+        // Continue with empty shop when admin auth context is not available yet.
+      }
+    }
+
+    if (!shopDomain) {
+      shopDomain = "";
+    }
+
+    if (authSession?.session?.shop && authSession.admin) {
+      void syncMerchantProfileToDashboard({
+        shopDomain: authSession.session.shop,
+        scope: authSession.session.scope || null,
+        accessToken: authSession.session.accessToken || null,
+        admin: authSession.admin,
       });
-    });
 
-    void syncRecentCustomersToDashboard({
-      shopDomain: auth.session.shop,
-      admin: auth.admin,
-    }).catch(() => {
-      // Non-blocking.
-    });
+      void syncRecentCustomersToDashboard({
+        shopDomain: authSession.session.shop,
+        admin: authSession.admin,
+      });
+    }
 
-    return { apiKey: shopifyApiKey, redirectUrl };
+    if (shopDomain.endsWith(".myshopify.com")) {
+      throw redirect(buildDashboardUrl(dashboardUrl, shopDomain));
+    }
+
+    throw redirect(new URL("/dashboard", dashboardUrl).toString());
   }
 
   await authenticate.admin(request);
 
-  return { apiKey: shopifyApiKey, redirectUrl: null };
+  return { apiKey: shopifyApiKey };
 };
 
 export default function App() {
-  const { apiKey, redirectUrl } = useLoaderData<typeof loader>();
-
-  if (redirectUrl) {
-    return <ExternalRedirect url={redirectUrl} />;
-  }
+  const { apiKey } = useLoaderData<typeof loader>();
 
   return (
     <AppProvider embedded={false} apiKey={apiKey}>
@@ -127,6 +90,7 @@ export default function App() {
   );
 }
 
+// Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
   return boundary.error(useRouteError());
 }

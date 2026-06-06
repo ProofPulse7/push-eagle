@@ -1,4 +1,4 @@
-import { ensureShopifyOfflineAccessToken } from '@/lib/server/billing/refresh-shopify-session';
+import { requireShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
 
 const CREATE_SUBSCRIPTION = `
   mutation AppSubscriptionCreate(
@@ -56,12 +56,7 @@ const adminApiVersion = () =>
   process.env.SHOPIFY_ADMIN_API_VERSION?.trim() || '2025-04';
 
 const adminGraphql = async (shopDomain: string, query: string, variables: Record<string, unknown>) => {
-  const accessToken = await ensureShopifyOfflineAccessToken(shopDomain);
-  if (!accessToken) {
-    throw new Error(
-      'No Shopify session for this store. Open Push Eagle from Shopify admin (Apps → Push Eagle), wait for the dashboard to load, then try Plans again.',
-    );
-  }
+  const accessToken = await requireShopifyOfflineAccessToken(shopDomain);
   const response = await fetch(`https://${shopDomain}/admin/api/${adminApiVersion()}/graphql.json`, {
     method: 'POST',
     headers: {

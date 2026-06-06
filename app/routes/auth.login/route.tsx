@@ -1,48 +1,12 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, redirect, useActionData, useLoaderData } from "react-router";
+import { Form, useActionData, useLoaderData } from "react-router";
 
 import { hasShopifyConfig, login, missingShopifyConfig } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
-const persistReturnToCookie = (request: Request, response: Response) => {
-  const returnTo = new URL(request.url).searchParams.get("return_to");
-  if (!returnTo) {
-    return response;
-  }
-
-  response.headers.append(
-    "Set-Cookie",
-    `pe_return_to=${encodeURIComponent(returnTo)}; Path=/; Max-Age=600; Secure; SameSite=Lax`,
-  );
-  return response;
-};
-
-const runLogin = async (request: Request) => {
-  try {
-    const errors = loginErrorMessage(await login(request));
-    return { errors };
-  } catch (error) {
-    if (error instanceof Response) {
-      throw persistReturnToCookie(request, error);
-    }
-    throw error;
-  }
-};
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const url = new URL(request.url);
-  const shop = url.searchParams.get("shop");
-
-  if (shop && hasShopifyConfig) {
-    const appUrl = new URL("/app", url.origin);
-    url.searchParams.forEach((value, key) => {
-      appUrl.searchParams.set(key, value);
-    });
-    throw redirect(appUrl.toString());
-  }
-
   if (!hasShopifyConfig) {
     return {
       errors: loginErrorMessage({
@@ -51,7 +15,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   }
 
-  return runLogin(request);
+  const errors = loginErrorMessage(await login(request));
+
+  return { errors };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -63,7 +29,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-  return runLogin(request);
+  const errors = loginErrorMessage(await login(request));
+
+  return {
+    errors,
+  };
 };
 
 export default function Auth() {
@@ -93,4 +63,4 @@ export default function Auth() {
       </s-page>
     </AppProvider>
   );
-};
+}
