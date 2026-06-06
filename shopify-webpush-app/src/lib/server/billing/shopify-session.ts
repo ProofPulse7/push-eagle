@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 
 import { isValidPostgresConnectionString, sanitizePostgresConnectionString } from '@/lib/config/sanitize-connection-string';
+import { getShopifyStoreCredentials } from '@/lib/server/billing/shopify-credentials-store';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { env } from '@/lib/config/env';
 
@@ -45,27 +46,10 @@ const queryOfflineFromPublic = async (shop: string) => {
 
   const rows = await sql`
     SELECT "accessToken"
-    FROM "Session"
+    FROM public."Session"
     WHERE shop = ${shop}
       AND "isOnline" = false
     ORDER BY expires DESC NULLS LAST
-    LIMIT 1
-  `;
-
-  return readTokenFromRows(rows as SessionRow[]);
-};
-
-const queryAnyFromPublic = async (shop: string) => {
-  const sql = getPrismaSessionSql();
-  if (!sql) {
-    return null;
-  }
-
-  const rows = await sql`
-    SELECT "accessToken"
-    FROM "Session"
-    WHERE shop = ${shop}
-    ORDER BY "isOnline" ASC, expires DESC NULLS LAST
     LIMIT 1
   `;
 
@@ -90,23 +74,6 @@ const queryOfflineFromShopifySessionsSchema = async (shop: string) => {
   return readTokenFromRows(rows as SessionRow[]);
 };
 
-const queryAnyFromShopifySessionsSchema = async (shop: string) => {
-  const sql = getPrismaSessionSql();
-  if (!sql) {
-    return null;
-  }
-
-  const rows = await sql`
-    SELECT "accessToken"
-    FROM shopify_sessions."Session"
-    WHERE shop = ${shop}
-    ORDER BY "isOnline" ASC, expires DESC NULLS LAST
-    LIMIT 1
-  `;
-
-  return readTokenFromRows(rows as SessionRow[]);
-};
-
 const queryByOfflineSessionId = async (shop: string) => {
   const sql = getPrismaSessionSql();
   if (!sql) {
@@ -117,7 +84,7 @@ const queryByOfflineSessionId = async (shop: string) => {
   const attempts = [
     () => sql`
       SELECT "accessToken"
-      FROM "Session"
+      FROM public."Session"
       WHERE id = ${offlineId}
       LIMIT 1
     `,
@@ -150,6 +117,11 @@ export const getShopifyOfflineAccessToken = async (shopDomain: string) => {
     return null;
   }
 
+  const credentials = await getShopifyStoreCredentials(shop);
+  if (credentials?.offlineAccessToken) {
+    return credentials.offlineAccessToken;
+  }
+
   const merchantToken = await getMerchantStoredAccessToken(shop);
   if (merchantToken) {
     return merchantToken;
@@ -159,8 +131,6 @@ export const getShopifyOfflineAccessToken = async (shopDomain: string) => {
     queryByOfflineSessionId,
     queryOfflineFromShopifySessionsSchema,
     queryOfflineFromPublic,
-    queryAnyFromShopifySessionsSchema,
-    queryAnyFromPublic,
   ];
 
   for (const attempt of prismaAttempts) {
@@ -187,6 +157,6 @@ export const requireShopifyOfflineAccessToken = async (shopDomain: string) => {
   }
 
   throw new Error(
-    'No Shopify session for this store. Open Push Eagle from Shopify admin (Apps → Push Eagle) once to connect billing, wait for the dashboard to load, then try Plans again.',
+    'No valid Shopify session for this store. Open Push Eagle from Shopify admin (Apps → Push Eagle) once to refresh your connection, then try Plans again.',
   );
 };

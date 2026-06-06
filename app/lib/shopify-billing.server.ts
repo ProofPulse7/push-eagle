@@ -43,12 +43,47 @@ export const parseShopDomain = (value: unknown) => {
   return raw;
 };
 
-export const getOfflineAccessToken = async (shopDomain: string) => {
-  const session =
-    (await db.session.findFirst({ where: { shop: shopDomain, isOnline: false } })) ||
-    (await db.session.findFirst({ where: { shop: shopDomain }, orderBy: { expires: "desc" } }));
+const readTokenFromRows = (rows: Array<{ accessToken?: string }>) => {
+  const token = rows[0]?.accessToken;
+  return typeof token === "string" && token.length > 0 ? token : null;
+};
 
-  return session?.accessToken ?? null;
+export const getOfflineAccessToken = async (shopDomain: string) => {
+  const shop = shopDomain.trim().toLowerCase();
+  const offlineId = `offline_${shop}`;
+
+  const prismaSession =
+    (await db.session.findFirst({ where: { shop, isOnline: false } })) ||
+    (await db.session.findFirst({ where: { id: offlineId } })) ||
+    (await db.session.findFirst({ where: { shop, isOnline: false }, orderBy: { expires: "desc" } }));
+
+  if (prismaSession?.accessToken) {
+    return prismaSession.accessToken;
+  }
+
+  const publicAttempts = [
+    `SELECT "accessToken" FROM public."Session" WHERE id = $1 LIMIT 1`,
+    `SELECT "accessToken" FROM public."Session" WHERE shop = $1 AND "isOnline" = false ORDER BY expires DESC NULLS LAST LIMIT 1`,
+    `SELECT "accessToken" FROM shopify_sessions."Session" WHERE id = $1 LIMIT 1`,
+    `SELECT "accessToken" FROM shopify_sessions."Session" WHERE shop = $1 AND "isOnline" = false ORDER BY expires DESC NULLS LAST LIMIT 1`,
+  ];
+
+  for (const query of publicAttempts) {
+    try {
+      const usesShopOnly = query.includes("shop = $1");
+      const rows = usesShopOnly
+        ? await db.$queryRawUnsafe<Array<{ accessToken?: string }>>(query, shop)
+        : await db.$queryRawUnsafe<Array<{ accessToken?: string }>>(query, offlineId);
+      const token = readTokenFromRows(rows);
+      if (token) {
+        return token;
+      }
+    } catch {
+      // try next query
+    }
+  }
+
+  return null;
 };
 
 const CREATE_SUBSCRIPTION = `

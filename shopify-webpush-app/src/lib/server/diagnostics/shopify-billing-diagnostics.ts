@@ -1,8 +1,10 @@
 import { env, isValidPostgresConnectionString } from '@/lib/config/env';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { callPushEagleBilling } from '@/lib/server/billing/push-eagle-client';
+import { getShopifyStoreCredentials } from '@/lib/server/billing/shopify-credentials-store';
 import { getShopifyOfflineAccessToken, hasShopifySessionDatabase } from '@/lib/server/billing/shopify-session';
 import { probeMerchantToken, probePrismaSessionSources } from '@/lib/server/billing/session-probe';
+import { validateShopifyAccessToken } from '@/lib/server/billing/shopify-token-validation';
 
 export type ShopifyBillingDiagnosticReport = {
   generatedAt: string;
@@ -165,18 +167,27 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
   }
 
   let merchantToken = null as Awaited<ReturnType<typeof probeMerchantToken>> | null;
+  let credentialsTable = null as Awaited<ReturnType<typeof getShopifyStoreCredentials>> | null;
   let prismaSessions: Awaited<ReturnType<typeof probePrismaSessionSources>> = [];
   let resolvedToken: string | null = null;
   let remixSync: Awaited<ReturnType<typeof probeRemixSessionSync>> | null = null;
   let graphqlProbe: Awaited<ReturnType<typeof probeShopifyGraphql>> | null = null;
+  let tokenValidation: { ok: boolean; error?: string | null } | null = null;
 
   if (shopDomain) {
     merchantToken = await probeMerchantToken(shopDomain);
+    credentialsTable = await getShopifyStoreCredentials(shopDomain);
     prismaSessions = await probePrismaSessionSources(shopDomain);
     resolvedToken = await getShopifyOfflineAccessToken(shopDomain);
 
     if (!merchantToken.found) {
       issues.push('No offline token stored on merchants.shopify_offline_access_token for this shop.');
+    }
+    if (!credentialsTable?.offlineAccessToken) {
+      issues.push('No row in shopify_store_credentials table for this shop.');
+      recommendations.push(
+        'Open Apps → Push Eagle from Shopify admin once so OAuth can save a validated token to shopify_store_credentials.',
+      );
     }
     if (!prismaSessions.some((row) => row.found)) {
       issues.push('No Prisma Session row found in Neon for this shop (shopify_sessions schema).');
@@ -198,10 +209,15 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
     }
 
     if (resolvedToken) {
+      const valid = await validateShopifyAccessToken(shopDomain, resolvedToken);
+      tokenValidation = { ok: valid, error: valid ? null : 'Token failed Shopify GraphQL validation (likely expired).' };
       graphqlProbe = await probeShopifyGraphql(shopDomain, resolvedToken);
-      if (!graphqlProbe.ok) {
-        issues.push(`Shopify Admin GraphQL rejected the offline token: ${graphqlProbe.error}`);
+      if (!valid || !graphqlProbe.ok) {
+        issues.push(`Shopify Admin GraphQL rejected the offline token: ${graphqlProbe.error || 'invalid or expired token'}`);
         recommendations.push('Re-open the app from Shopify admin to refresh the offline access token.');
+        recommendations.push(
+          'If this persists, uninstall and reinstall Push Eagle on the dev store, then open the app again.',
+        );
       }
     }
   } else {
@@ -231,8 +247,17 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
       neon,
       remixHealth,
       merchantToken,
+      credentialsTable: credentialsTable
+        ? {
+            found: true,
+            source: credentialsTable.source,
+            verifiedAt: credentialsTable.verifiedAt,
+            updatedAt: credentialsTable.updatedAt,
+          }
+        : { found: false },
       prismaSessions,
       resolvedTokenPresent: Boolean(resolvedToken),
+      tokenValidation,
       remixSessionSync: remixSync,
       shopifyGraphql: graphqlProbe,
     },

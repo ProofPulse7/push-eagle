@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { ensureShopifyOfflineAccessToken } from '@/lib/server/billing/refresh-shopify-session';
+import { getShopifyStoreCredentials } from '@/lib/server/billing/shopify-credentials-store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -22,7 +23,15 @@ export async function POST(request: Request) {
       );
     }
 
-    return NextResponse.json({ ok: true, shopDomain, hasToken: true });
+    const credentials = await getShopifyStoreCredentials(shopDomain);
+
+    return NextResponse.json({
+      ok: true,
+      shopDomain,
+      hasToken: true,
+      credentialsSaved: Boolean(credentials?.offlineAccessToken),
+      verifiedAt: credentials?.verifiedAt ?? null,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to refresh Shopify session.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

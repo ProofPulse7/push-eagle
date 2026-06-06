@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { env } from '@/lib/config/env';
 import { parseShopDomain } from '@/lib/server/shop-context';
+import { persistShopifyOfflineToken } from '@/lib/server/billing/persist-shopify-token';
 import { upsertMerchantProfile } from '@/lib/server/data/store';
 
 export const runtime = 'nodejs';
@@ -90,7 +91,20 @@ export async function POST(request: Request) {
       shopifyOfflineAccessToken: parsed.shopifyOfflineAccessToken ?? null,
     });
 
-    return NextResponse.json({ ok: true, shopDomain });
+    let tokenPersisted = false;
+    let tokenValid = false;
+    if (parsed.shopifyOfflineAccessToken) {
+      const persisted = await persistShopifyOfflineToken({
+        shopDomain,
+        offlineAccessToken: parsed.shopifyOfflineAccessToken,
+        scopes: parsed.scopes ?? null,
+        source: 'merchant_profile_api',
+      });
+      tokenPersisted = persisted.saved;
+      tokenValid = persisted.valid;
+    }
+
+    return NextResponse.json({ ok: true, shopDomain, tokenPersisted, tokenValid });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to sync merchant profile.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

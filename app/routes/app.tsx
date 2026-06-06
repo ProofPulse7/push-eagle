@@ -83,11 +83,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const redirectUrl = buildDashboardSsoUrl(dashboardUrl, auth.session.shop, returnTo);
     const offlineToken = await getOfflineAccessToken(auth.session.shop);
 
+    const tokenForSync = offlineToken || auth.session.accessToken || null;
+
     try {
       await syncMerchantProfileToDashboard({
         shopDomain: auth.session.shop,
         scope: auth.session.scope || null,
-        accessToken: offlineToken || auth.session.accessToken || null,
+        accessToken: tokenForSync,
         admin: auth.admin,
       });
     } catch (error) {
