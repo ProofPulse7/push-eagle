@@ -1,10 +1,9 @@
 import { createHmac } from "node:crypto";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, redirect, useLoaderData, useRouteError } from "react-router";
+import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
-import { ExternalRedirect } from "../components/external-redirect";
 import { ensureOfflineAccessTokenForRequest } from "../lib/acquire-offline-token.server";
 import {
   authenticate,
@@ -81,36 +80,39 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const auth = await authenticate.admin(request);
     const returnTo = readReturnTo(request);
     const redirectUrl = buildDashboardSsoUrl(dashboardUrl, auth.session.shop, returnTo);
-    const tokenForSync = await ensureOfflineAccessTokenForRequest(request, auth.session.shop);
 
-    if (!tokenForSync) {
-      const reauthorizeUrl = new URL("/auth/reauthorize", requestUrl.origin);
-      reauthorizeUrl.searchParams.set("shop", auth.session.shop);
-      throw redirect(reauthorizeUrl.toString());
-    }
+    void ensureOfflineAccessTokenForRequest(request, auth.session.shop)
+      .then(async (tokenForSync) => {
+        if (!tokenForSync) {
+          return;
+        }
 
-    try {
-      await syncMerchantProfileToDashboard({
-        shopDomain: auth.session.shop,
-        scope: auth.session.scope || null,
-        accessToken: tokenForSync,
-        admin: auth.admin,
+        try {
+          await syncMerchantProfileToDashboard({
+            shopDomain: auth.session.shop,
+            scope: auth.session.scope || null,
+            accessToken: tokenForSync,
+            admin: auth.admin,
+          });
+        } catch (error) {
+          console.warn("[push-eagle] Profile sync before dashboard redirect failed", {
+            shop: auth.session.shop,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+
+        void syncRecentCustomersToDashboard({
+          shopDomain: auth.session.shop,
+          admin: auth.admin,
+        }).catch(() => {
+          // Non-blocking.
+        });
+      })
+      .catch(() => {
+        // Non-blocking.
       });
-    } catch (error) {
-      console.warn("[push-eagle] Profile sync before dashboard redirect failed", {
-        shop: auth.session.shop,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
 
-    void syncRecentCustomersToDashboard({
-      shopDomain: auth.session.shop,
-      admin: auth.admin,
-    }).catch(() => {
-      // Non-blocking.
-    });
-
-    return { apiKey: shopifyApiKey, redirectUrl };
+    throw auth.redirect(redirectUrl, { target: "_top" });
   }
 
   await authenticate.admin(request);
@@ -119,14 +121,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export default function App() {
-  const { apiKey, redirectUrl } = useLoaderData<typeof loader>();
-
-  if (redirectUrl) {
-    return <ExternalRedirect url={redirectUrl} />;
-  }
+  const { apiKey } = useLoaderData<typeof loader>();
 
   return (
-    <AppProvider embedded={false} apiKey={apiKey}>
+    <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">Home</s-link>
         <s-link href="/app/additional">Additional page</s-link>
