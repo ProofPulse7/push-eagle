@@ -15,7 +15,11 @@ const SETUP_STEPS = [
 ] as const;
 
 const shouldSkipSetup = (pathname: string) => {
-  if (pathname.startsWith('/login') || pathname.startsWith('/connect')) {
+  if (
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/connect') ||
+    pathname.startsWith('/shopify-login')
+  ) {
     return true;
   }
   if (pathname.startsWith('/campaigns/new')) {

@@ -1,11 +1,5 @@
-import { Suspense } from 'react';
-
-import ConnectPageClient from './connect-page-client';
+import { redirect } from 'next/navigation';
 
 export default function ConnectPage() {
-  return (
-    <Suspense fallback={null}>
-      <ConnectPageClient />
-    </Suspense>
-  );
+  redirect('/shopify-login');
 }
