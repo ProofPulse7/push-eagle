@@ -216,7 +216,10 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
       if (!valid || !graphqlProbe.ok) {
         issues.push(`Shopify Admin GraphQL rejected the offline token: ${graphqlProbe.error || 'invalid or expired token'}`);
         recommendations.push(
-          `Re-authorize Push Eagle: ${buildShopifyReauthorizeUrl(shopDomain)} (or Apps → Push Eagle in Shopify admin).`,
+          `Re-authorize Push Eagle via Shopify OAuth install: ${buildShopifyReauthorizeUrl(shopDomain)}`,
+        );
+        recommendations.push(
+          'Or open Apps → Push Eagle in Shopify admin (must go through push-eagle.vercel.app/app, not the dashboard URL directly).',
         );
         recommendations.push(
           'If this persists, uninstall and reinstall Push Eagle on the dev store, then open the app again.',

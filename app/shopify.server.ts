@@ -5,6 +5,7 @@ import {
   AppDistribution,
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
+import { shopifyApi } from "@shopify/shopify-api";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 
@@ -361,6 +362,30 @@ const scopes = (process.env.SCOPES || process.env.SHOPIFY_SCOPES || "")
   .filter(Boolean);
 
 let shopifyInstance: ReturnType<typeof shopifyApp> | null = null;
+let shopifyApiInstance: ReturnType<typeof shopifyApi> | null = null;
+
+export const getShopifyApi = () => {
+  if (!hasShopifyConfig) {
+    throw new Error(getShopifyConfigError());
+  }
+
+  if (!shopifyApiInstance) {
+    const hostName = appUrl ? new URL(appUrl).hostname : "push-eagle.vercel.app";
+    shopifyApiInstance = shopifyApi({
+      apiKey: shopifyApiKey,
+      apiSecretKey: shopifyApiSecret,
+      apiVersion: ApiVersion.October25,
+      scopes,
+      hostName,
+      isEmbeddedApp: true,
+      future: {
+        expiringOfflineAccessTokens: true,
+      },
+    });
+  }
+
+  return shopifyApiInstance;
+};
 
 const getShopify = () => {
   if (!hasShopifyConfig) {
@@ -430,7 +455,7 @@ export const authenticate = {
 };
 
 export const unauthenticated = {
-  admin: (request: Request) => getShopify().unauthenticated.admin(request),
+  admin: (shop: string) => getShopify().unauthenticated.admin(shop),
 };
 
 export const login = (request: Request) => getShopify().login(request);

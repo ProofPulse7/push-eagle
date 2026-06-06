@@ -5,11 +5,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { ExternalRedirect } from "../components/external-redirect";
-import { getOfflineAccessToken } from "../lib/shopify-billing.server";
-import {
-  refreshOfflineAccessToken,
-  validateShopifyAccessToken,
-} from "../lib/shopify-offline-token-refresh.server";
+import { ensureOfflineAccessTokenForRequest } from "../lib/acquire-offline-token.server";
 import {
   authenticate,
   login,
@@ -86,21 +82,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const auth = await authenticate.admin(request);
     const returnTo = readReturnTo(request);
     const redirectUrl = buildDashboardSsoUrl(dashboardUrl, auth.session.shop, returnTo);
-    let tokenForSync =
-      !auth.session.isOnline && auth.session.accessToken
-        ? auth.session.accessToken
-        : await getOfflineAccessToken(auth.session.shop);
+    const tokenForSync = await ensureOfflineAccessTokenForRequest(request, auth.session.shop);
 
-    const refreshedOffline = await refreshOfflineAccessToken(auth.session.shop);
-    if (refreshedOffline) {
-      tokenForSync = refreshedOffline;
-    }
-
-    const hasValidOfflineToken =
-      Boolean(tokenForSync) &&
-      (await validateShopifyAccessToken(auth.session.shop, tokenForSync as string));
-
-    if (!hasValidOfflineToken) {
+    if (!tokenForSync) {
       throw await login(request);
     }
 

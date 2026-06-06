@@ -167,20 +167,18 @@ export const refreshOfflineAccessToken = async (shopDomain: string) => {
     return null;
   }
 
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    grant_type: 'refresh_token',
-    refresh_token: row.refreshToken,
-  });
-
   const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body,
+    body: JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: 'refresh_token',
+      refresh_token: row.refreshToken,
+    }),
   });
 
   const payload = (await response.json().catch(() => null)) as {
@@ -212,6 +210,11 @@ export const refreshOfflineAccessToken = async (shopDomain: string) => {
 
 export const buildShopifyReauthorizeUrl = (shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
+  const storeHandle = shop.replace('.myshopify.com', '');
+  const clientId = env.SHOPIFY_API_KEY?.trim();
+  if (clientId) {
+    return `https://admin.shopify.com/store/${storeHandle}/oauth/install?client_id=${clientId}`;
+  }
   const root = (env.SHOPIFY_ROOT_APP_URL || 'https://push-eagle.vercel.app').replace(/\/$/, '');
-  return `${root}/auth?shop=${encodeURIComponent(shop)}`;
+  return `${root}/app?shop=${encodeURIComponent(shop)}`;
 };

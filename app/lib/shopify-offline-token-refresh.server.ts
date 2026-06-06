@@ -38,52 +38,28 @@ export const refreshOfflineAccessToken = async (shopDomain: string) => {
     return null;
   }
 
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    grant_type: "refresh_token",
-    refresh_token: row.refreshToken,
-  });
+  try {
+    const { getShopifyApi } = await import("../shopify.server");
+    const { session } = await getShopifyApi().auth.refreshToken({
+      shop,
+      refreshToken: row.refreshToken,
+    });
 
-  const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    body,
-  });
+    await db.session.update({
+      where: { id: row.id },
+      data: {
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken ?? row.refreshToken,
+        expires: session.expires ?? null,
+        refreshTokenExpires: session.refreshTokenExpires ?? row.refreshTokenExpires,
+        scope: session.scope ?? row.scope,
+      },
+    });
 
-  const payload = (await response.json().catch(() => null)) as {
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-    refresh_token_expires_in?: number;
-    scope?: string;
-  } | null;
-
-  if (!response.ok || !payload?.access_token) {
+    return session.accessToken ?? null;
+  } catch {
     return null;
   }
-
-  const expires = new Date(Date.now() + Number(payload.expires_in ?? 3600) * 1000);
-  const refreshTokenExpires =
-    payload.refresh_token_expires_in && (payload.refresh_token ?? row.refreshToken)
-      ? new Date(Date.now() + Number(payload.refresh_token_expires_in) * 1000)
-      : row.refreshTokenExpires;
-
-  await db.session.update({
-    where: { id: row.id },
-    data: {
-      accessToken: payload.access_token,
-      refreshToken: payload.refresh_token ?? row.refreshToken,
-      expires,
-      refreshTokenExpires,
-      scope: payload.scope ?? row.scope,
-    },
-  });
-
-  return payload.access_token;
 };
 
 export const validateShopifyAccessToken = async (shopDomain: string, accessToken: string) => {

@@ -1,7 +1,9 @@
 import type { ActionFunctionArgs } from "react-router";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { buildOAuthInstallUrl } from "../lib/acquire-offline-token.server";
 import { getOfflineAccessToken, verifyDashboardSignature } from "../lib/shopify-billing.server";
+import { validateShopifyAccessToken } from "../lib/shopify-offline-token-refresh.server";
 
 type SyncBody = {
   shopDomain?: string;
@@ -37,14 +39,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const accessToken = await getOfflineAccessToken(shopDomain);
-    if (!accessToken) {
+    const tokenValid =
+      Boolean(accessToken) && (await validateShopifyAccessToken(shopDomain, accessToken as string));
+
+    if (!tokenValid) {
       return Response.json(
         {
           ok: false,
           error:
-            "No Shopify install session in database. Open Push Eagle from Shopify admin to install or re-authorize the app.",
+            "Offline Shopify token is missing or expired. Open Push Eagle from Shopify admin to re-authorize.",
+          reauthorizeUrl: buildOAuthInstallUrl(shopDomain),
         },
-        { status: 404 },
+        { status: 401 },
       );
     }
 
