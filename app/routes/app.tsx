@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { Outlet, redirect, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
@@ -8,7 +8,6 @@ import { ExternalRedirect } from "../components/external-redirect";
 import { ensureOfflineAccessTokenForRequest } from "../lib/acquire-offline-token.server";
 import {
   authenticate,
-  login,
   shopifyApiKey,
   syncMerchantProfileToDashboard,
   syncRecentCustomersToDashboard,
@@ -85,7 +84,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const tokenForSync = await ensureOfflineAccessTokenForRequest(request, auth.session.shop);
 
     if (!tokenForSync) {
-      throw await login(request);
+      const reauthorizeUrl = new URL("/auth/reauthorize", requestUrl.origin);
+      reauthorizeUrl.searchParams.set("shop", auth.session.shop);
+      throw redirect(reauthorizeUrl.toString());
     }
 
     try {

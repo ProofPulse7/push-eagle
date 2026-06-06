@@ -119,9 +119,7 @@ scopes = "read_customer_events,read_customers,read_discounts,read_fulfillments,r
 redirect_urls = [
   "https://push-eagle.vercel.app/auth/callback",
   "https://push-eagle.vercel.app/auth/shopify/callback",
-  "https://push-eagle.vercel.app/api/auth",
-  "https://push-eagle-dashboard.vercel.app/auth/callback",
-  "https://push-eagle-dashboard.vercel.app/api/auth/callback"
+  "https://push-eagle.vercel.app/api/auth"
 ]
 
 [app_proxy]

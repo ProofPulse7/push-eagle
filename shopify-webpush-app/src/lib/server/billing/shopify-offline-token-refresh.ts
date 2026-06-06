@@ -208,6 +208,31 @@ export const refreshOfflineAccessToken = async (shopDomain: string) => {
   return payload.access_token;
 };
 
+export const purgeStalePrismaSessionForShop = async (shopDomain: string) => {
+  const sql = getSessionSql();
+  if (!sql) {
+    return;
+  }
+
+  const shop = shopDomain.trim().toLowerCase();
+  const offlineId = `offline_${shop}`;
+
+  const attempts = [
+    () => sql`DELETE FROM public."Session" WHERE id = ${offlineId}`,
+    () => sql`DELETE FROM public."Session" WHERE shop = ${shop} AND "isOnline" = false`,
+    () => sql`DELETE FROM shopify_sessions."Session" WHERE id = ${offlineId}`,
+    () => sql`DELETE FROM shopify_sessions."Session" WHERE shop = ${shop} AND "isOnline" = false`,
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      await attempt();
+    } catch {
+      // schema may not exist
+    }
+  }
+};
+
 export const buildShopifyReauthorizeUrl = (shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
   const storeHandle = shop.replace('.myshopify.com', '');

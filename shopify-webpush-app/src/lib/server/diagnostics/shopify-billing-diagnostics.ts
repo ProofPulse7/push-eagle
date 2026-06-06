@@ -203,7 +203,10 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
     merchantToken = await probeMerchantToken(shopDomain);
     credentialsTable = await getShopifyStoreCredentials(shopDomain);
     prismaSessions = await probePrismaSessionSources(shopDomain);
-    resolvedToken = await getShopifyOfflineAccessToken(shopDomain);
+    const { getValidatedShopifyOfflineAccessToken } = await import(
+      '@/lib/server/billing/shopify-session'
+    );
+    resolvedToken = await getValidatedShopifyOfflineAccessToken(shopDomain);
 
     if (!merchantToken.found) {
       issues.push('No offline token stored on merchants.shopify_offline_access_token for this shop.');

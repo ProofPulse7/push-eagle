@@ -5,7 +5,9 @@ import { getShopifyStoreCredentials } from '@/lib/server/billing/shopify-credent
 import {
   clearMerchantOfflineAccessToken,
   isObviouslyInvalidStoredToken,
+  purgeStalePrismaSessionForShop,
 } from '@/lib/server/billing/shopify-offline-token-refresh';
+import { validateShopifyAccessToken } from '@/lib/server/billing/shopify-token-validation';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { env } from '@/lib/config/env';
 
@@ -152,6 +154,22 @@ export const getShopifyOfflineAccessToken = async (shopDomain: string) => {
     }
   }
 
+  return null;
+};
+
+export const getValidatedShopifyOfflineAccessToken = async (shopDomain: string) => {
+  const token = await getShopifyOfflineAccessToken(shopDomain);
+  if (!token) {
+    return null;
+  }
+
+  const valid = await validateShopifyAccessToken(shopDomain, token);
+  if (valid) {
+    return token;
+  }
+
+  await clearMerchantOfflineAccessToken(shopDomain);
+  await purgeStalePrismaSessionForShop(shopDomain);
   return null;
 };
 

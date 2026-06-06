@@ -8,6 +8,7 @@ import {
 import { getShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
 import {
   clearMerchantOfflineAccessToken,
+  purgeStalePrismaSessionForShop,
   refreshOfflineAccessToken,
 } from '@/lib/server/billing/shopify-offline-token-refresh';
 import { validateShopifyAccessToken } from '@/lib/server/billing/shopify-token-validation';
@@ -55,6 +56,7 @@ export const ensureShopifyOfflineAccessToken = async (shopDomain: string) => {
   if (token) {
     await markShopifyStoreCredentialsInvalid(shop);
     await clearMerchantOfflineAccessToken(shop);
+    await purgeStalePrismaSessionForShop(shop);
   }
 
   const remixSync = await refreshShopifySessionFromRemixApp(shop);

@@ -1,9 +1,5 @@
-import { redirect } from 'next/navigation';
-
 import { DashboardView } from '@/components/dashboard/dashboard-view';
-import { buildShopifyAppConnectUrl } from '@/lib/server/billing/shopify-connect-url';
 import { ensureShopifyOfflineAccessToken } from '@/lib/server/billing/refresh-shopify-session';
-import { getShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
 import { persistShopCookie, resolveShopDomain } from '@/lib/server/resolve-shop';
 
 type DashboardPageProps = {
@@ -15,12 +11,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const shopDomain = await resolveShopDomain(params);
 
   if (shopDomain) {
-    const existingToken = await getShopifyOfflineAccessToken(shopDomain);
-    if (!existingToken) {
-      redirect(buildShopifyAppConnectUrl(shopDomain));
-    }
-
-    await ensureShopifyOfflineAccessToken(shopDomain);
+    void ensureShopifyOfflineAccessToken(shopDomain).catch(() => {
+      // Non-blocking background heal; avoid redirect loops with Remix /app entry.
+    });
 
     try {
       await persistShopCookie(shopDomain);
@@ -30,4 +23,4 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   }
 
   return <DashboardView />;
-}
+};
