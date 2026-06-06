@@ -1,7 +1,11 @@
 import { resolveAppEnv } from '@/lib/config/resolve-env';
 
 export type { AppEnv } from '@/lib/config/resolve-env';
-export { resolveShopifySessionDatabaseUrl } from '@/lib/config/resolve-env';
+export {
+  isValidPostgresConnectionString,
+  resolveShopifySessionDatabaseUrl,
+  sanitizePostgresConnectionString,
+} from '@/lib/config/resolve-env';
 
 export const env = resolveAppEnv();
 

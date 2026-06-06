@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  isValidPostgresConnectionString,
+  sanitizePostgresConnectionString,
+} from '@/lib/config/sanitize-connection-string';
+
 const EnvSchema = z.object({
   NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
   CRON_SECRET: z.string().default(''),
@@ -43,15 +48,18 @@ export type AppEnv = z.infer<typeof EnvSchema>;
 const DASHBOARD_PRODUCTION_URL = 'https://push-eagle-dashboard.vercel.app';
 const SESSION_SCHEMA = 'shopify_sessions';
 
+const cleanPostgresUrl = (value: string) => sanitizePostgresConnectionString(value.trim());
+
 const withPostgresSchema = (connectionUrl: string, schema: string) => {
-  if (!connectionUrl.startsWith('postgresql')) {
+  const cleaned = cleanPostgresUrl(connectionUrl);
+  if (!cleaned.startsWith('postgresql') && !cleaned.startsWith('postgres://')) {
     return '';
   }
-  if (connectionUrl.includes('schema=')) {
-    return connectionUrl;
+  if (cleaned.includes('schema=')) {
+    return cleaned;
   }
-  const separator = connectionUrl.includes('?') ? '&' : '?';
-  return `${connectionUrl}${separator}schema=${schema}`;
+  const separator = cleaned.includes('?') ? '&' : '?';
+  return `${cleaned}${separator}schema=${schema}`;
 };
 
 const fixDashboardPublicUrl = (url: string) => {
@@ -70,12 +78,14 @@ const fixDashboardPublicUrl = (url: string) => {
 };
 
 export const resolveShopifySessionDatabaseUrl = (raw: AppEnv) => {
-  const explicit = raw.SHOPIFY_SESSION_DATABASE_URL.trim();
+  const explicit = cleanPostgresUrl(raw.SHOPIFY_SESSION_DATABASE_URL);
   if (explicit) {
     return explicit;
   }
 
-  const candidates = [raw.NEON_DATABASE_URL.trim(), raw.DATABASE_URL.trim()].filter(Boolean);
+  const candidates = [cleanPostgresUrl(raw.NEON_DATABASE_URL), cleanPostgresUrl(raw.DATABASE_URL)].filter(
+    Boolean,
+  );
   for (const candidate of candidates) {
     const withSchema = withPostgresSchema(candidate, SESSION_SCHEMA);
     if (withSchema) {
@@ -93,12 +103,19 @@ export const resolveAppEnv = (): AppEnv => {
   const ssoSecret =
     parsed.SHOPIFY_DASHBOARD_SSO_SECRET.trim() || parsed.SHOPIFY_API_SECRET.trim();
 
+  const neonDatabaseUrl = cleanPostgresUrl(parsed.NEON_DATABASE_URL);
+  const databaseUrl = cleanPostgresUrl(parsed.DATABASE_URL);
+
   return {
     ...parsed,
     NEXT_PUBLIC_APP_URL: dashboardUrl,
+    NEON_DATABASE_URL: neonDatabaseUrl,
+    DATABASE_URL: databaseUrl,
     SHOPIFY_SESSION_DATABASE_URL: sessionDatabaseUrl,
     SHOPIFY_DASHBOARD_SSO_SECRET: ssoSecret,
     SHOPIFY_WEBHOOK_SECRET:
       parsed.SHOPIFY_WEBHOOK_SECRET.trim() || parsed.SHOPIFY_API_SECRET.trim(),
   };
 };
+
+export { isValidPostgresConnectionString, sanitizePostgresConnectionString };

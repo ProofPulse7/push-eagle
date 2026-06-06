@@ -1,4 +1,4 @@
-import { env } from '@/lib/config/env';
+import { env, isValidPostgresConnectionString } from '@/lib/config/env';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { callPushEagleBilling } from '@/lib/server/billing/push-eagle-client';
 import { getShopifyOfflineAccessToken, hasShopifySessionDatabase } from '@/lib/server/billing/shopify-session';
@@ -104,9 +104,14 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
   const issues: string[] = [];
   const recommendations: string[] = [];
 
+  const neonUrl = env.NEON_DATABASE_URL || env.DATABASE_URL;
+  const sessionUrl = env.SHOPIFY_SESSION_DATABASE_URL;
+
   const environment = {
-    neonDatabaseUrl: envFlag(env.NEON_DATABASE_URL || env.DATABASE_URL),
-    shopifySessionDatabaseUrl: envFlag(env.SHOPIFY_SESSION_DATABASE_URL),
+    neonDatabaseUrl: envFlag(neonUrl),
+    neonDatabaseUrlValid: isValidPostgresConnectionString(neonUrl),
+    shopifySessionDatabaseUrl: envFlag(sessionUrl),
+    shopifySessionDatabaseUrlValid: isValidPostgresConnectionString(sessionUrl),
     shopifySessionDatabaseAutoResolved: hasShopifySessionDatabase(),
     shopifyApiKey: envFlag(env.SHOPIFY_API_KEY),
     shopifyApiSecret: envFlag(env.SHOPIFY_API_SECRET),
@@ -119,6 +124,18 @@ export const runShopifyBillingDiagnostics = async (shopDomain: string | null) =>
   if (!environment.neonDatabaseUrl) {
     issues.push('NEON_DATABASE_URL is missing on the dashboard Vercel project.');
     recommendations.push('Set NEON_DATABASE_URL to your Neon Postgres connection string.');
+  } else if (!environment.neonDatabaseUrlValid) {
+    issues.push(
+      'NEON_DATABASE_URL is present but not a valid Postgres URL (often caused by wrapping quotes in Vercel).',
+    );
+    recommendations.push(
+      'In Vercel → Environment Variables, paste the Neon URL without surrounding double quotes.',
+    );
+  } else if (!environment.shopifySessionDatabaseUrlValid && environment.shopifySessionDatabaseUrl) {
+    issues.push('SHOPIFY_SESSION_DATABASE_URL is present but not a valid Postgres URL.');
+    recommendations.push(
+      'Use the same Neon URL with &schema=shopify_sessions and no wrapping quotes.',
+    );
   }
   if (!environment.shopifySessionDatabaseUrl && !environment.shopifySessionDatabaseAutoResolved) {
     issues.push('SHOPIFY_SESSION_DATABASE_URL is missing and could not be derived from NEON_DATABASE_URL.');

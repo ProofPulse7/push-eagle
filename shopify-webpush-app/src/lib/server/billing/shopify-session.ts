@@ -1,5 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
+import { isValidPostgresConnectionString, sanitizePostgresConnectionString } from '@/lib/config/sanitize-connection-string';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { env } from '@/lib/config/env';
 
@@ -8,8 +9,8 @@ type SessionRow = { accessToken: string };
 export const hasShopifySessionDatabase = () => Boolean(env.SHOPIFY_SESSION_DATABASE_URL.trim());
 
 const getPrismaSessionSql = () => {
-  const url = env.SHOPIFY_SESSION_DATABASE_URL.trim();
-  if (!url) {
+  const url = sanitizePostgresConnectionString(env.SHOPIFY_SESSION_DATABASE_URL);
+  if (!url || !isValidPostgresConnectionString(url)) {
     return null;
   }
   return neon(url);
