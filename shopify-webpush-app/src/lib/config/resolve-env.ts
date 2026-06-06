@@ -12,7 +12,7 @@ const EnvSchema = z.object({
   SHOPIFY_API_SECRET: z.string().default(''),
   SHOPIFY_SCOPES: z.string().default('read_products,read_customers,write_products'),
   SHOPIFY_APP_URL: z.string().url().default('http://localhost:3000'),
-  SHOPIFY_ROOT_APP_URL: z.string().url().default('https://push-eagle-dashboard.vercel.app'),
+  SHOPIFY_ROOT_APP_URL: z.string().url().default('https://push-eagle.vercel.app'),
   SHOPIFY_SESSION_DATABASE_URL: z.string().default(''),
   SHOPIFY_WEBHOOK_SECRET: z.string().default(''),
   SHOPIFY_DASHBOARD_SSO_SECRET: z.string().default(''),
@@ -85,10 +85,6 @@ export const resolveAppEnv = (): AppEnv => {
   return {
     ...parsed,
     NEXT_PUBLIC_APP_URL: dashboardUrl,
-    SHOPIFY_APP_URL: fixDashboardPublicUrl(parsed.SHOPIFY_APP_URL || dashboardUrl),
-    SHOPIFY_ROOT_APP_URL: fixDashboardPublicUrl(
-      parsed.SHOPIFY_ROOT_APP_URL || parsed.SHOPIFY_APP_URL || dashboardUrl,
-    ),
     NEON_DATABASE_URL: neonDatabaseUrl,
     DATABASE_URL: databaseUrl,
     SHOPIFY_SESSION_DATABASE_URL: sessionDatabaseUrl,

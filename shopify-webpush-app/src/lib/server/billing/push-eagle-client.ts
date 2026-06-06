@@ -15,10 +15,7 @@ export const callPushEagleBilling = async (
   shopDomain: string,
   body: Record<string, unknown>,
 ) => {
-  const rootUrl = (env.NEXT_PUBLIC_APP_URL || env.SHOPIFY_APP_URL || env.SHOPIFY_ROOT_APP_URL).replace(
-    /\/$/,
-    '',
-  );
+  const rootUrl = (env.SHOPIFY_ROOT_APP_URL || 'https://push-eagle.vercel.app').replace(/\/$/, '');
   const ts = Date.now();
   const signature = signRequest(shopDomain, ts);
   const url = `${rootUrl}${path.startsWith('/') ? path : `/${path}`}`;
@@ -44,7 +41,7 @@ export const callPushEagleBilling = async (
     const message =
       (typeof parsed?.error === 'string' && parsed.error) ||
       (response.status === 404
-        ? `API not found at ${url}. Confirm NEXT_PUBLIC_APP_URL is set to your dashboard URL on Vercel.`
+        ? `Billing API not found at ${url}. Deploy the push-eagle Shopify app or set SHOPIFY_SESSION_DATABASE_URL on the dashboard.`
         : `Billing request failed (${response.status}).`);
     throw new Error(message);
   }

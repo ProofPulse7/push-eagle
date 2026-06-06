@@ -54,11 +54,7 @@ const isTrustedRootSource = (request: Request, ts: number) => {
     return false;
   }
 
-  const configuredRoot =
-    env.SHOPIFY_APP_URL?.trim() ||
-    env.SHOPIFY_ROOT_APP_URL?.trim() ||
-    env.NEXT_PUBLIC_APP_URL?.trim() ||
-    'https://push-eagle-dashboard.vercel.app';
+  const configuredRoot = env.SHOPIFY_ROOT_APP_URL?.trim() || 'https://push-eagle.vercel.app';
   const sourceHeader = request.headers.get('x-push-eagle-source')?.trim();
   return Boolean(sourceHeader) && sourceHeader === configuredRoot;
 };
