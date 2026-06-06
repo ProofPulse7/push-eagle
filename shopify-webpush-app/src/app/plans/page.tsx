@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
 
 import { PageLoadingView } from '@/components/ui/loading-ui';
-import { ensureShopifyOAuthHandoff } from '@/lib/server/shopify-entry';
+import { resolveShopDomain } from '@/lib/server/resolve-shop';
 import { PlansPageContent } from './plans-page-content';
 
 type PlansPageProps = {
@@ -11,16 +11,11 @@ type PlansPageProps = {
 
 export default async function PlansPage({ searchParams }: PlansPageProps) {
   const params = await searchParams;
-  const shop = Array.isArray(params.shop) ? params.shop[0] : params.shop;
+  const shopDomain = await resolveShopDomain(params);
 
-  if (!shop) {
+  if (!shopDomain) {
     redirect('/shopify-login');
   }
-
-  await ensureShopifyOAuthHandoff({
-    searchParams: params,
-    returnPath: '/plans',
-  });
 
   return (
     <Suspense fallback={<PageLoadingView title="Plans" description="Loading plans and billing…" />}>

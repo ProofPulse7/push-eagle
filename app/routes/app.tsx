@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { redirect, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -9,25 +10,6 @@ import {
   syncMerchantProfileToDashboard,
   syncRecentCustomersToDashboard,
 } from "../shopify.server";
-
-const buildDashboardUrl = (baseDashboardUrl: string, shopDomain: string, returnTo?: string | null) => {
-  if (returnTo) {
-    try {
-      const parsed = new URL(returnTo);
-      const dashboardOrigin = new URL(baseDashboardUrl).origin;
-      if (parsed.origin === dashboardOrigin) {
-        parsed.searchParams.set("shop", shopDomain);
-        return parsed.toString();
-      }
-    } catch {
-      // Fall back to default dashboard path.
-    }
-  }
-
-  const url = new URL("/dashboard", baseDashboardUrl);
-  url.searchParams.set("shop", shopDomain);
-  return url.toString();
-};
 
 const resolveDashboardUrl = () =>
   process.env.SHOPIFY_WEB_DASHBOARD_URL?.trim() ||
@@ -54,12 +36,46 @@ const readReturnTo = (request: Request) => {
   return decodeURIComponent(entry.slice("pe_return_to=".length));
 };
 
+const buildDashboardEntryUrl = (
+  baseDashboardUrl: string,
+  shopDomain: string,
+  returnTo?: string | null,
+) => {
+  let redirectPath = "/dashboard";
+
+  if (returnTo) {
+    try {
+      const parsed = new URL(returnTo);
+      const dashboardOrigin = new URL(baseDashboardUrl).origin;
+      if (parsed.origin === dashboardOrigin) {
+        redirectPath = `${parsed.pathname}${parsed.search}`;
+      }
+    } catch {
+      // Fall back to /dashboard.
+    }
+  }
+
+  const ssoUrl = new URL("/api/integrations/shopify/sso", baseDashboardUrl);
+  ssoUrl.searchParams.set("shop", shopDomain);
+  ssoUrl.searchParams.set("redirect", redirectPath.startsWith("/") ? redirectPath : "/dashboard");
+
+  const secret =
+    process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() || process.env.SHOPIFY_API_SECRET?.trim() || "";
+  if (secret) {
+    const ts = String(Date.now());
+    const sig = createHmac("sha256", secret).update(`${shopDomain}.${ts}`).digest("hex");
+    ssoUrl.searchParams.set("ts", ts);
+    ssoUrl.searchParams.set("sig", sig);
+  }
+
+  return ssoUrl.toString();
+};
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const requestUrl = new URL(request.url);
   const dashboardUrl = resolveDashboardUrl();
 
   if (dashboardUrl && requestUrl.pathname.startsWith("/app")) {
-    // Never catch — authenticate.admin throws OAuth redirects that must propagate.
     const auth = await authenticate.admin(request);
     const returnTo = readReturnTo(request);
 
@@ -75,14 +91,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       admin: auth.admin,
     });
 
-    const target = buildDashboardUrl(dashboardUrl, auth.session.shop, returnTo);
-    const response = redirect(target);
-    response.headers.append(
-      "Set-Cookie",
-      `pe_shop=${encodeURIComponent(auth.session.shop)}; Path=/; Max-Age=${60 * 60 * 24 * 30}; Secure; SameSite=Lax`,
-    );
-    response.headers.append("Set-Cookie", "pe_return_to=; Path=/; Max-Age=0; Secure; SameSite=Lax");
-    throw response;
+    const target = buildDashboardEntryUrl(dashboardUrl, auth.session.shop, returnTo);
+    throw redirect(target);
   }
 
   await authenticate.admin(request);

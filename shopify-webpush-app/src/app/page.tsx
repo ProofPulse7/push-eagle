@@ -1,15 +1,17 @@
 import { redirect } from 'next/navigation';
 
+import { resolveShopDomain } from '@/lib/server/resolve-shop';
+
 type RootPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default async function RootPage({ searchParams }: RootPageProps) {
   const params = await searchParams;
-  const shop = Array.isArray(params.shop) ? params.shop[0] : params.shop;
+  const shopDomain = await resolveShopDomain(params);
 
-  if (shop) {
-    redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
+  if (shopDomain) {
+    redirect(`/dashboard?shop=${encodeURIComponent(shopDomain)}`);
   }
 
   redirect('/shopify-login');

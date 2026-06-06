@@ -1,8 +1,7 @@
 import { redirect } from 'next/navigation';
 
 import { DashboardView } from '@/components/dashboard/dashboard-view';
-import { ensureShopifyOAuthHandoff, persistShopCookie } from '@/lib/server/shopify-entry';
-import { normalizeShopDomain } from '@/lib/server/shop-context';
+import { persistShopCookie, resolveShopDomain } from '@/lib/server/resolve-shop';
 
 type DashboardPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -10,21 +9,18 @@ type DashboardPageProps = {
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const params = await searchParams;
-  const shop = Array.isArray(params.shop) ? params.shop[0] : params.shop;
+  const shopDomain = await resolveShopDomain(params);
 
-  if (!shop) {
+  if (!shopDomain) {
     redirect('/shopify-login');
   }
 
-  await ensureShopifyOAuthHandoff({
-    searchParams: params,
-    returnPath: '/dashboard',
-  });
-
-  try {
-    await persistShopCookie(normalizeShopDomain(shop));
-  } catch {
-    // Shop cookie is optional; query param remains the primary source.
+  if (params.shop) {
+    try {
+      await persistShopCookie(shopDomain);
+    } catch {
+      // Cookie is optional; client hooks also read ?shop= from the URL.
+    }
   }
 
   return <DashboardView />;
