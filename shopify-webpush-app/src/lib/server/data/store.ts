@@ -4722,6 +4722,9 @@ export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) =
   const sql = getNeonSql();
   await ensureMerchant(input.shopDomain);
 
+  const offlineToken = input.shopifyOfflineAccessToken?.trim() || null;
+  const hasOfflineToken = Boolean(offlineToken);
+
   await sql`
     UPDATE merchants
     SET
@@ -4735,13 +4738,16 @@ export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) =
       plan_name = COALESCE(${input.planName ?? null}, plan_name),
       owner_name = COALESCE(${input.ownerName ?? null}, owner_name),
       scopes = COALESCE(${input.scopes ?? null}, scopes),
-      shopify_offline_access_token = COALESCE(${input.shopifyOfflineAccessToken ?? null}, shopify_offline_access_token),
+      shopify_offline_access_token = CASE
+        WHEN ${hasOfflineToken} THEN ${offlineToken}
+        ELSE shopify_offline_access_token
+      END,
       shopify_session_synced_at = CASE
-        WHEN ${input.shopifyOfflineAccessToken ?? null} IS NOT NULL THEN NOW()
+        WHEN ${hasOfflineToken} THEN NOW()
         ELSE shopify_session_synced_at
       END,
       last_authenticated_at = CASE
-        WHEN ${input.shopifyOfflineAccessToken ?? null} IS NOT NULL THEN NOW()
+        WHEN ${hasOfflineToken} THEN NOW()
         ELSE last_authenticated_at
       END,
       updated_at = NOW()

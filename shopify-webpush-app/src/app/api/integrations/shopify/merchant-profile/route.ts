@@ -88,7 +88,6 @@ export async function POST(request: Request) {
       timezone: parsed.timezone ?? null,
       planName: parsed.planName ?? null,
       scopes: parsed.scopes ?? null,
-      shopifyOfflineAccessToken: parsed.shopifyOfflineAccessToken ?? null,
     });
 
     let tokenPersisted = false;

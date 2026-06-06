@@ -34,6 +34,8 @@ export const upsertShopifyStoreCredentials = async (input: {
   await ensureShopifyCredentialsTable();
   const sql = getNeonSql();
   const shop = input.shopDomain.trim().toLowerCase();
+  const tokenValid = input.tokenValid ?? true;
+  const verifiedAt = tokenValid ? new Date().toISOString() : null;
 
   await sql`
     INSERT INTO shopify_store_credentials (
@@ -50,8 +52,8 @@ export const upsertShopifyStoreCredentials = async (input: {
       ${input.offlineAccessToken},
       ${input.scopes ?? null},
       ${input.source},
-      ${input.tokenValid ?? true},
-      CASE WHEN ${input.tokenValid ?? true} THEN NOW() ELSE NULL END,
+      ${tokenValid},
+      ${verifiedAt},
       NOW()
     )
     ON CONFLICT (shop_domain) DO UPDATE SET

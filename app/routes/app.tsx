@@ -81,9 +81,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const auth = await authenticate.admin(request);
     const returnTo = readReturnTo(request);
     const redirectUrl = buildDashboardSsoUrl(dashboardUrl, auth.session.shop, returnTo);
-    const offlineToken = await getOfflineAccessToken(auth.session.shop);
-
-    const tokenForSync = offlineToken || auth.session.accessToken || null;
+    const tokenForSync =
+      !auth.session.isOnline && auth.session.accessToken
+        ? auth.session.accessToken
+        : await getOfflineAccessToken(auth.session.shop);
 
     try {
       await syncMerchantProfileToDashboard({

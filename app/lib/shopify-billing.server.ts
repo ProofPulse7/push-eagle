@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import db from "../db.server";
+import { sessionStorage } from "../shopify.server";
 
 type BillingRequestBody = {
   shopDomain?: string;
@@ -51,6 +52,15 @@ const readTokenFromRows = (rows: Array<{ accessToken?: string }>) => {
 export const getOfflineAccessToken = async (shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
   const offlineId = `offline_${shop}`;
+
+  try {
+    const storedSession = await sessionStorage.loadSession(offlineId);
+    if (storedSession?.accessToken && storedSession.isOnline === false) {
+      return storedSession.accessToken;
+    }
+  } catch {
+    // Fall back to direct database reads below.
+  }
 
   const prismaSession =
     (await db.session.findFirst({ where: { shop, isOnline: false } })) ||
