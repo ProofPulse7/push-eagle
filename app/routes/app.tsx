@@ -1,9 +1,10 @@
 import { createHmac } from "node:crypto";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { redirect, Outlet, useLoaderData, useRouteError } from "react-router";
+import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
+import { ExternalRedirect } from "../components/external-redirect";
 import {
   authenticate,
   shopifyApiKey,
@@ -78,30 +79,42 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (dashboardUrl && requestUrl.pathname.startsWith("/app")) {
     const auth = await authenticate.admin(request);
     const returnTo = readReturnTo(request);
+    const redirectUrl = buildDashboardEntryUrl(dashboardUrl, auth.session.shop, returnTo);
 
-    await syncMerchantProfileToDashboard({
+    // Never block the Shopify Admin launch on dashboard sync — afterAuth already syncs on install.
+    void syncMerchantProfileToDashboard({
       shopDomain: auth.session.shop,
       scope: auth.session.scope || null,
       accessToken: auth.session.accessToken || null,
       admin: auth.admin,
+    }).catch((error) => {
+      console.warn("[push-eagle] Profile sync before dashboard redirect failed", {
+        shop: auth.session.shop,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
 
     void syncRecentCustomersToDashboard({
       shopDomain: auth.session.shop,
       admin: auth.admin,
+    }).catch(() => {
+      // Non-blocking.
     });
 
-    const target = buildDashboardEntryUrl(dashboardUrl, auth.session.shop, returnTo);
-    throw redirect(target);
+    return { apiKey: shopifyApiKey, redirectUrl };
   }
 
   await authenticate.admin(request);
 
-  return { apiKey: shopifyApiKey };
+  return { apiKey: shopifyApiKey, redirectUrl: null };
 };
 
 export default function App() {
-  const { apiKey } = useLoaderData<typeof loader>();
+  const { apiKey, redirectUrl } = useLoaderData<typeof loader>();
+
+  if (redirectUrl) {
+    return <ExternalRedirect url={redirectUrl} />;
+  }
 
   return (
     <AppProvider embedded={false} apiKey={apiKey}>
