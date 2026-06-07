@@ -59,6 +59,7 @@ export async function GET(request: Request) {
     const currentOrigin = new URL(request.url).origin;
     const redirectUrl = new URL(redirectPath.startsWith('/') ? redirectPath : '/dashboard', currentOrigin);
     redirectUrl.searchParams.set('shop', shopDomain);
+    redirectUrl.searchParams.set('from_sso', '1');
 
     const response = NextResponse.redirect(redirectUrl, { status: 302 });
     response.cookies.set('pe_shop', shopDomain, {

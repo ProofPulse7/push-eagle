@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { env } from '@/lib/config/env';
 import { appendShopifyAdminParams } from '@/lib/server/billing/shopify-admin-params';
 import { buildShopifyAppConnectUrl } from '@/lib/server/billing/shopify-connect-url';
+import { ensureShopifyOfflineAccessToken } from '@/lib/server/billing/refresh-shopify-session';
 import { getValidatedShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
 
 const pickParam = (value: string | string[] | undefined) =>
@@ -23,7 +24,8 @@ export const redirectToShopifyConnectIfNeeded = async (input: {
     return;
   }
 
-  if (pickParam(searchParams.oauth_attempt) === '1') {
+  if (pickParam(searchParams.from_sso) === '1' || pickParam(searchParams.oauth_attempt) === '1') {
+    await ensureShopifyOfflineAccessToken(shopDomain);
     return;
   }
 

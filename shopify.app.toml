@@ -1,18 +1,8 @@
-# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
-#
-# This file + `shopify app deploy` updates the Shopify Partner Dashboard only
-# (application URL, OAuth redirects, webhooks, scopes). It does NOT deploy code
-# to Vercel and does NOT set runtime secrets.
-#
-# Billing test charges (Plans → Shopify payment):
-#   Set SHOPIFY_BILLING_TEST=true on the **dashboard** Vercel project
-#   (push-eagle-dashboard / shopify-webpush-app), then redeploy that project.
-#   Do not put SHOPIFY_BILLING_TEST in this file — it is not a Partner setting.
 
 client_id = "c866e24e9ce383cebeee6edb01496449"
 name = "Push-Eagle"
 application_url = "https://push-eagle-dashboard.vercel.app/dashboard"
-embedded = true
+embedded = false
 
 [build]
 automatically_update_urls_on_dev = false

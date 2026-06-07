@@ -377,7 +377,7 @@ export const getShopifyApi = () => {
       apiVersion: ApiVersion.October25,
       scopes,
       hostName,
-      isEmbeddedApp: true,
+      isEmbeddedApp: false,
       future: {
         expiringOfflineAccessTokens: true,
       },

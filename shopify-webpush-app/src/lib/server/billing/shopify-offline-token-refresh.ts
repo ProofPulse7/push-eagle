@@ -3,6 +3,7 @@ import { neon } from '@neondatabase/serverless';
 import { isValidPostgresConnectionString, sanitizePostgresConnectionString } from '@/lib/config/sanitize-connection-string';
 import { env } from '@/lib/config/env';
 import { getNeonSql } from '@/lib/integrations/database/neon';
+import { buildShopifyAppConnectUrl } from '@/lib/server/billing/shopify-connect-url';
 import { persistShopifyOfflineToken } from '@/lib/server/billing/persist-shopify-token';
 
 type OfflineSessionRow = {
@@ -233,13 +234,5 @@ export const purgeStalePrismaSessionForShop = async (shopDomain: string) => {
   }
 };
 
-export const buildShopifyReauthorizeUrl = (shopDomain: string) => {
-  const shop = shopDomain.trim().toLowerCase();
-  const storeHandle = shop.replace('.myshopify.com', '');
-  const clientId = env.SHOPIFY_API_KEY?.trim();
-  if (clientId) {
-    return `https://admin.shopify.com/store/${storeHandle}/oauth/install?client_id=${clientId}`;
-  }
-  const root = (env.SHOPIFY_ROOT_APP_URL || 'https://push-eagle.vercel.app').replace(/\/$/, '');
-  return `${root}/app?shop=${encodeURIComponent(shop)}`;
-};
+export const buildShopifyReauthorizeUrl = (shopDomain: string) =>
+  buildShopifyAppConnectUrl(shopDomain);
