@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { Outlet, redirect, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
@@ -72,12 +72,38 @@ const buildDashboardSsoUrl = (
   return ssoUrl.toString();
 };
 
+const authenticateAdminOrLogin = async (request: Request) => {
+  const requestUrl = new URL(request.url);
+  const shop = requestUrl.searchParams.get("shop");
+
+  try {
+    return await authenticate.admin(request);
+  } catch (error) {
+    if (error instanceof Response && shop) {
+      const location = error.headers.get("Location") ?? "";
+      if (location === "/auth/login" || location.endsWith("/auth/login")) {
+        const loginUrl = new URL("/auth/login", requestUrl.origin);
+        loginUrl.searchParams.set("shop", shop);
+        for (const key of ["host", "embedded", "return_to", "locale"]) {
+          const value = requestUrl.searchParams.get(key);
+          if (value) {
+            loginUrl.searchParams.set(key, value);
+          }
+        }
+        throw redirect(loginUrl.toString());
+      }
+    }
+
+    throw error;
+  }
+};
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const requestUrl = new URL(request.url);
   const dashboardUrl = resolveDashboardUrl();
 
   if (dashboardUrl && requestUrl.pathname.startsWith("/app")) {
-    const auth = await authenticate.admin(request);
+    const auth = await authenticateAdminOrLogin(request);
     const returnTo = readReturnTo(request);
     const redirectUrl = buildDashboardSsoUrl(dashboardUrl, auth.session.shop, returnTo);
 
@@ -117,7 +143,7 @@ export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
 
   return (
-    <AppProvider embedded={false} apiKey={apiKey}>
+    <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">Home</s-link>
         <s-link href="/app/additional">Additional page</s-link>
