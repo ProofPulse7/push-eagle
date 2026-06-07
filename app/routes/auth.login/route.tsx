@@ -1,17 +1,12 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, redirect, useActionData, useLoaderData } from "react-router";
+import { Form, useActionData, useLoaderData } from "react-router";
 
 import { hasShopifyConfig, login, missingShopifyConfig } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const requestUrl = new URL(request.url);
-  if (requestUrl.searchParams.get("shop")) {
-    throw redirect(`/app?${requestUrl.searchParams.toString()}`);
-  }
-
   if (!hasShopifyConfig) {
     return {
       errors: loginErrorMessage({

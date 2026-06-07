@@ -1,7 +1,7 @@
 
 client_id = "c866e24e9ce383cebeee6edb01496449"
 name = "Push-Eagle"
-application_url = "https://push-eagle-dashboard.vercel.app/dashboard"
+application_url = "https://push-eagle.vercel.app/app"
 embedded = false
 
 [build]
