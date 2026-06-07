@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 
 import { env } from '@/lib/config/env';
+import { appendShopifyAdminParams } from '@/lib/server/billing/shopify-admin-params';
 import { buildShopifyAppConnectUrl } from '@/lib/server/billing/shopify-connect-url';
 import { getValidatedShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
 
@@ -30,8 +31,9 @@ export const redirectToShopifyConnectIfNeeded = async (input: {
   const returnTo = new URL(returnPath, env.NEXT_PUBLIC_APP_URL);
   returnTo.searchParams.set('shop', shopDomain);
   returnTo.searchParams.set('oauth_attempt', '1');
+  appendShopifyAdminParams(returnTo, searchParams, { includeShop: false });
 
-  const connectUrl = new URL(buildShopifyAppConnectUrl(shopDomain));
-  connectUrl.searchParams.set('return_to', returnTo.toString());
-  redirect(connectUrl.toString());
+  const connectTarget = new URL(buildShopifyAppConnectUrl(shopDomain, searchParams));
+  connectTarget.searchParams.set('return_to', returnTo.toString());
+  redirect(connectTarget.toString());
 };
