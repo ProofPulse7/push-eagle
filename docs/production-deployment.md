@@ -41,6 +41,17 @@ Running `shopify app dev` on your PC:
 
 To update production Partner Dashboard config (application URL, redirects, webhooks): run `shopify app deploy` from the repo root.
 
+## What goes where (two folders)
+
+| Change | Folder | How it goes live |
+|--------|--------|------------------|
+| Shopify Partner settings (app URL, webhooks, OAuth redirects, scopes) | `push-eagle/` → `shopify.app.toml` | `shopify app deploy` from repo root |
+| Shopify backend code (OAuth, sessions, merchant-site connection) | `push-eagle/` → `app/` | Git push → `push-eagle` repo → Vercel `push-eagle.vercel.app` |
+| Web dashboard UI + Plans billing API | `shopify-webpush-app/` | Git push → `push-eagle-dashboard` repo → Vercel `push-eagle-dashboard.vercel.app` |
+| Runtime secrets (`SHOPIFY_BILLING_TEST`, Neon URL, API keys) | **Not** in `shopify.app.toml` | Vercel → Environment Variables → redeploy |
+
+`SHOPIFY_BILLING_TEST=true` enables **test** app subscription charges on dev stores. Set it on the **dashboard** Vercel project (`shopify-webpush-app`), because Plans checkout runs there. After saving the variable in Vercel, trigger a redeploy (or push to GitHub). `shopify app deploy` does **not** apply this setting.
+
 ## Shopify Partner Dashboard (`shopify.app.toml`)
 
 | Setting | Value |
@@ -76,7 +87,7 @@ To update production Partner Dashboard config (application URL, redirects, webho
 | `NEON_DATABASE_URL` | Same Neon URL as Remix `DATABASE_URL` |
 | `SHOPIFY_SESSION_DATABASE_URL` | Same Neon URL (reads `public.Session`) |
 | `SHOPIFY_DASHBOARD_SSO_SECRET` | Same value as on Remix project |
-| `SHOPIFY_BILLING_TEST` | `true` on dev stores (optional) |
+| `SHOPIFY_BILLING_TEST` | `true` on dev stores — **required here for test plan checkout** (not in `shopify.app.toml`) |
 
 **Important:** `NEXT_PUBLIC_APP_URL` and `SHOPIFY_APP_URL` must be the **dashboard** URL. `SHOPIFY_ROOT_APP_URL` must be the **Remix** URL.
 
