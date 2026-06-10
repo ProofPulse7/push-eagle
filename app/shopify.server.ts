@@ -1,4 +1,5 @@
 import "@shopify/shopify-app-react-router/adapters/node";
+import "@shopify/shopify-api/adapters/web-api";
 import { createHmac } from "node:crypto";
 import {
   ApiVersion,
@@ -370,13 +371,14 @@ export const getShopifyApi = () => {
   }
 
   if (!shopifyApiInstance) {
-    const hostName = appUrl ? new URL(appUrl).hostname : "push-eagle.vercel.app";
+    const parsedAppUrl = appUrl ? new URL(appUrl) : new URL("https://push-eagle.vercel.app");
     shopifyApiInstance = shopifyApi({
       apiKey: shopifyApiKey,
       apiSecretKey: shopifyApiSecret,
       apiVersion: ApiVersion.October25,
       scopes,
-      hostName,
+      hostName: parsedAppUrl.host,
+      hostScheme: parsedAppUrl.protocol.replace(":", "") as "https" | "http",
       isEmbeddedApp: false,
       future: {
         expiringOfflineAccessTokens: true,

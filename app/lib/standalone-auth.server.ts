@@ -28,7 +28,11 @@ export const loadOfflineSession = async (shopDomain: string) => {
   const offlineId = `offline_${shop}`;
   const session = await sessionStorage.loadSession(offlineId);
 
-  if (!session?.accessToken || !session.isActive(undefined)) {
+  if (!session?.accessToken) {
+    return null;
+  }
+
+  if (typeof session.isActive === "function" && !session.isActive(undefined)) {
     return null;
   }
 
