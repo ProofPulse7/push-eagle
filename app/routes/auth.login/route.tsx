@@ -3,14 +3,33 @@ import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, redirect, useActionData, useLoaderData } from "react-router";
 
-import { hasShopifyConfig, login, missingShopifyConfig } from "../../shopify.server";
+import { LoginErrorType } from "@shopify/shopify-app-react-router/server";
+import { hasShopifyConfig, missingShopifyConfig } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+const redirectToStandaloneAuth = (request: Request) => {
   const requestUrl = new URL(request.url);
-  if (requestUrl.searchParams.get("embedded") === "1" && requestUrl.searchParams.get("shop")) {
-    throw redirect(`/app?${requestUrl.searchParams.toString()}`);
+  const shop = requestUrl.searchParams.get("shop");
+
+  if (!shop) {
+    return null;
   }
+
+  const authUrl = new URL("/auth", requestUrl.origin);
+  authUrl.searchParams.set("shop", shop);
+
+  for (const key of ["return_to", "locale"]) {
+    const value = requestUrl.searchParams.get(key);
+    if (value) {
+      authUrl.searchParams.set(key, value);
+    }
+  }
+
+  throw redirect(authUrl.toString());
+};
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  redirectToStandaloneAuth(request);
 
   if (!hasShopifyConfig) {
     return {
@@ -20,9 +39,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   }
 
-  const errors = loginErrorMessage(await login(request));
-
-  return { errors };
+  return { errors: loginErrorMessage({}) };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -34,10 +51,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-  const errors = loginErrorMessage(await login(request));
+  const formData = await request.formData();
+  const shop = formData.get("shop");
+  if (typeof shop === "string" && shop.trim()) {
+    const requestUrl = new URL(request.url);
+    const authUrl = new URL("/auth", requestUrl.origin);
+    authUrl.searchParams.set("shop", shop.trim());
+    throw redirect(authUrl.toString());
+  }
 
   return {
-    errors,
+    errors: loginErrorMessage({ shop: LoginErrorType.MissingShop }),
   };
 };
 
@@ -48,7 +72,7 @@ export default function Auth() {
   const { errors } = actionData || loaderData;
 
   return (
-    <AppProvider embedded>
+    <AppProvider embedded={false}>
       <s-page>
         <Form method="post">
         <s-section heading="Log in">

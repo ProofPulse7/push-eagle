@@ -377,7 +377,7 @@ export const getShopifyApi = () => {
       apiVersion: ApiVersion.October25,
       scopes,
       hostName,
-      isEmbeddedApp: true,
+      isEmbeddedApp: false,
       future: {
         expiringOfflineAccessTokens: true,
       },
@@ -404,44 +404,7 @@ const getShopify = () => {
       distribution: AppDistribution.AppStore,
       hooks: {
         afterAuth: async ({ session, admin }) => {
-          try {
-            await ensureShopifyWebPixel({
-              admin,
-            });
-
-            const offlineId = `offline_${session.shop}`;
-            const offlineSession = await sessionStorage.loadSession(offlineId);
-            const offlineAccessToken =
-              offlineSession?.accessToken && offlineSession.isOnline === false
-                ? offlineSession.accessToken
-                : session.isOnline
-                  ? null
-                  : session.accessToken;
-
-            if (!offlineAccessToken) {
-              console.warn("[push-eagle] afterAuth missing offline access token", {
-                shop: session.shop,
-                isOnline: session.isOnline,
-              });
-              return;
-            }
-
-            await syncMerchantProfileToDashboard({
-              shopDomain: session.shop,
-              scope: session.scope ?? offlineSession?.scope ?? null,
-              accessToken: offlineAccessToken,
-              admin,
-            });
-            void syncRecentCustomersToDashboard({
-              shopDomain: session.shop,
-              admin,
-            });
-          } catch (error) {
-            console.warn("[push-eagle] Post-auth Shopify setup skipped", {
-              shop: session.shop,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
+          await runAfterAuthForSession(session, admin);
         },
       },
       future: {
@@ -454,6 +417,55 @@ const getShopify = () => {
   }
 
   return shopifyInstance;
+};
+
+type AfterAuthAdmin = {
+  graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
+};
+
+export const runAfterAuthForSession = async (
+  session: { shop: string; scope?: string | null; accessToken?: string | null; isOnline?: boolean },
+  admin: AfterAuthAdmin,
+) => {
+
+  try {
+    await ensureShopifyWebPixel({
+      admin,
+    });
+
+    const offlineId = `offline_${session.shop}`;
+    const offlineSession = await sessionStorage.loadSession(offlineId);
+    const offlineAccessToken =
+      offlineSession?.accessToken && offlineSession.isOnline === false
+        ? offlineSession.accessToken
+        : session.isOnline
+          ? null
+          : session.accessToken;
+
+    if (!offlineAccessToken) {
+      console.warn("[push-eagle] afterAuth missing offline access token", {
+        shop: session.shop,
+        isOnline: session.isOnline,
+      });
+      return;
+    }
+
+    await syncMerchantProfileToDashboard({
+      shopDomain: session.shop,
+      scope: session.scope ?? offlineSession?.scope ?? null,
+      accessToken: offlineAccessToken,
+      admin,
+    });
+    void syncRecentCustomersToDashboard({
+      shopDomain: session.shop,
+      admin,
+    });
+  } catch (error) {
+    console.warn("[push-eagle] Post-auth Shopify setup skipped", {
+      shop: session.shop,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 };
 
 export default getShopify;

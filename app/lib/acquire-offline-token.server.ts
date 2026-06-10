@@ -3,7 +3,7 @@ import { RequestedTokenType } from "@shopify/shopify-api";
 import db from "../db.server";
 import { loadOfflineAccessToken } from "./resolve-offline-token.server";
 import { validateShopifyAccessToken } from "./shopify-offline-token-refresh.server";
-import { getShopifyApi, sessionStorage, shopifyApiKey } from "../shopify.server";
+import { getShopifyApi, sessionStorage } from "../shopify.server";
 
 const getSessionTokenFromRequest = (request: Request) => {
   const authorization = request.headers.get("authorization");
@@ -16,8 +16,10 @@ const getSessionTokenFromRequest = (request: Request) => {
 
 export const buildOAuthInstallUrl = (shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
-  const storeHandle = shop.replace(".myshopify.com", "");
-  return `https://admin.shopify.com/store/${storeHandle}/oauth/install?client_id=${shopifyApiKey}`;
+  const root =
+    process.env.SHOPIFY_APP_URL?.trim() ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://push-eagle.vercel.app");
+  return `${root.replace(/\/$/, "")}/auth?shop=${encodeURIComponent(shop)}`;
 };
 
 export const purgeOfflineSession = async (shopDomain: string) => {
