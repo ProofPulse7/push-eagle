@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { registerWebhookEvent, upsertShopifyProductVariants } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
@@ -53,22 +54,24 @@ export async function POST(request: Request) {
       }
     }
 
-    await upsertShopifyProductVariants({
-      shopDomain,
-      productId: String(payload.id ?? ''),
-      productTitle: payload.title ?? null,
-      handle: payload.handle ?? null,
-      imageUrl: payload.image?.src ?? null,
-      updatedAt: payload.updated_at ?? null,
-      variants: (payload.variants ?? [])
-        .filter((variant) => variant?.id != null)
-        .map((variant) => ({
-          variantId: String(variant.id),
-          variantTitle: variant.title ?? null,
-          priceCents: toCents(variant.price),
-          compareAtPriceCents: toCents(variant.compare_at_price),
-          inventoryItemId: variant.inventory_item_id ? String(variant.inventory_item_id) : null,
-        })),
+    deferAfterResponse(async () => {
+      await upsertShopifyProductVariants({
+        shopDomain,
+        productId: String(payload.id ?? ''),
+        productTitle: payload.title ?? null,
+        handle: payload.handle ?? null,
+        imageUrl: payload.image?.src ?? null,
+        updatedAt: payload.updated_at ?? null,
+        variants: (payload.variants ?? [])
+          .filter((variant) => variant?.id != null)
+          .map((variant) => ({
+            variantId: String(variant.id),
+            variantTitle: variant.title ?? null,
+            priceCents: toCents(variant.price),
+            compareAtPriceCents: toCents(variant.compare_at_price),
+            inventoryItemId: variant.inventory_item_id ? String(variant.inventory_item_id) : null,
+          })),
+      });
     });
 
     return NextResponse.json({ ok: true, shopDomain });

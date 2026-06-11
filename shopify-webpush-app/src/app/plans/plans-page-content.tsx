@@ -5,10 +5,10 @@ import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
-import { Check, Info, Loader2, Mail } from 'lucide-react';
+import { Check, Info, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BUSINESS_TIERS, BASIC_PLAN } from '@/lib/client/billing-plans';
-import { useBillingStatus, useConfirmBilling, useSubscribePlan } from '@/hooks/queries/use-billing';
+import { useBillingStatus, useConfirmBilling } from '@/hooks/queries/use-billing';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
 import { fetchJsonWithShop } from '@/lib/client/api-fetch';
@@ -95,13 +95,18 @@ export function PlansPageContent() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const { data, isFetching } = useBillingStatus({ refetchOnMount: true });
-  const subscribe = useSubscribePlan();
   const confirmBilling = useConfirmBilling();
   const [tierIndex, setTierIndex] = useState(0);
 
   const billing = (data?.billing ?? null) as Record<string, unknown> | null;
+  const billingStatus = String(billing?.status ?? 'active');
   const currentPlanKey = String(billing?.planKey ?? 'basic');
   const currentTierId = billing?.tierId ? String(billing.tierId) : null;
+  const isBillingActive = billingStatus === 'active';
+
+  const isCurrentBasic = isBillingActive && currentPlanKey === 'basic';
+  const isCurrentBusinessTier = (tierId: string) =>
+    isBillingActive && currentPlanKey === 'business' && currentTierId === tierId;
 
   const selectedTier = BUSINESS_TIERS[tierIndex] ?? BUSINESS_TIERS[0];
 
@@ -127,74 +132,78 @@ export function PlansPageContent() {
 
   const billingReturnHandled = useRef(false);
   useEffect(() => {
-    if (searchParams.get('billing') !== 'return' || billingReturnHandled.current) {
+    if (searchParams.get('billing') !== 'return' || billingReturnHandled.current || !shop) {
       return;
     }
+
     billingReturnHandled.current = true;
     confirmBilling.mutate(undefined, {
       onSuccess: (result) => {
         if (result?.activated) {
-          toast({ title: 'Plan activated', description: 'Your Shopify subscription is now active.' });
+          toast({
+            title: 'Billing updated',
+            description: 'Your plan is synced with your Shopify subscription.',
+          });
+          return;
         }
-      },
-      onError: () => {
+
+        if (String(result?.billing?.status ?? '') === 'active') {
+          return;
+        }
+
         toast({
           variant: 'destructive',
           title: 'Billing confirmation pending',
-          description: 'Complete approval in Shopify if you have not already.',
+          description:
+            typeof result?.message === 'string'
+              ? result.message
+              : 'Complete approval in Shopify if you have not already.',
+        });
+      },
+      onError: (error) => {
+        toast({
+          variant: 'destructive',
+          title: 'Could not confirm billing',
+          description: error instanceof Error ? error.message : 'Try refreshing the page.',
         });
       },
     });
-  }, [searchParams, confirmBilling, toast]);
+  }, [searchParams, shop, confirmBilling, toast]);
 
-  const handleSubscribeBasic = () => {
-    subscribe.mutate(
-      { planKey: 'basic' },
-      {
-        onSuccess: (result) => {
-          if (result?.confirmationUrl) {
-            const target = window.top ?? window;
-            target.location.assign(result.confirmationUrl);
-            return;
-          }
-          toast({ title: 'Basic plan active', description: 'You are on the free Basic plan.' });
-        },
-        onError: (error) => {
-          toast({
-            variant: 'destructive',
-            title: 'Could not start Basic checkout',
-            description: error instanceof Error ? error.message : 'Try again.',
-          });
-        },
-      },
-    );
+  const startShopifyCheckout = (planKey: 'basic' | 'business', tierId?: string) => {
+    if (!shop) {
+      toast({
+        variant: 'destructive',
+        title: 'Missing shop',
+        description: 'Open Push Eagle from Shopify admin, then try again.',
+      });
+      return;
+    }
+
+    const params = new URLSearchParams({
+      shop,
+      planKey,
+    });
+    if (tierId) {
+      params.set('tierId', tierId);
+    }
+
+    const host = searchParams.get('host');
+    const embedded = searchParams.get('embedded');
+    if (host) {
+      params.set('host', host);
+    }
+    if (embedded) {
+      params.set('embedded', embedded);
+    }
+
+    const target = window.top ?? window;
+    target.location.href = `/api/billing/subscribe-redirect?${params.toString()}`;
   };
 
-  const handleSubscribeBusiness = () => {
-    subscribe.mutate(
-      { planKey: 'business', tierId: selectedTier.id },
-      {
-        onSuccess: (result) => {
-          if (result?.confirmationUrl) {
-            const target = window.top ?? window;
-            target.location.assign(result.confirmationUrl);
-            return;
-          }
-          toast({ title: 'Business plan active', description: 'Your plan is ready to use.' });
-        },
-        onError: (error) => {
-          const message = error instanceof Error ? error.message : 'Try again.';
-          toast({
-            variant: 'destructive',
-            title: 'Could not start checkout',
-            description: message.includes('No Shopify session')
-              ? `${message} Open Billing diagnostics in the sidebar and download the JSON report.`
-              : message,
-          });
-        },
-      },
-    );
-  };
+  const handleSubscribeBasic = () => startShopifyCheckout('basic');
+
+  const handleSubscribeBusiness = () => startShopifyCheckout('business', selectedTier.id);
 
   const refreshHint = useMemo(
     () => (isFetching ? 'Syncing usage with Shopify…' : null),
@@ -214,6 +223,13 @@ export function PlansPageContent() {
 
       <ImpressionUsageBar />
 
+      {billingStatus === 'pending' ? (
+        <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
+          Shopify billing approval is pending. Click Subscribe again to open the charge approval page,
+          then return here after you approve.
+        </p>
+      ) : null}
+
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3 items-stretch">
         <PlanCard
           title="Basic"
@@ -221,18 +237,18 @@ export function PlansPageContent() {
           price="$0"
           priceSuffix="/mo"
           features={BASIC_FEATURES}
-          active={currentPlanKey === 'basic'}
+          active={isCurrentBasic}
           footer={
             <Button
               className="w-full pe-pressable"
-              variant={currentPlanKey === 'basic' ? 'secondary' : 'default'}
-              disabled={currentPlanKey === 'basic' || subscribe.isPending}
+              variant={isCurrentBasic ? 'secondary' : 'default'}
+              disabled={isCurrentBasic}
               onClick={handleSubscribeBasic}
             >
-              {currentPlanKey === 'basic'
+              {isCurrentBasic
                 ? 'Current plan'
-                : subscribe.isPending
-                  ? 'Redirecting to Shopify…'
+                : billingStatus === 'pending'
+                  ? 'Approve in Shopify…'
                   : 'Subscribe with Shopify'}
             </Button>
           }
@@ -249,26 +265,18 @@ export function PlansPageContent() {
           price={`$${selectedTier.priceUsd}`}
           priceSuffix="/mo"
           features={BUSINESS_FEATURES}
-          active={currentPlanKey === 'business'}
+          active={isCurrentBusinessTier(selectedTier.id)}
           footer={
             <Button
               className="w-full pe-pressable"
-              disabled={
-                (currentPlanKey === 'business' && currentTierId === selectedTier.id) ||
-                subscribe.isPending
-              }
+              disabled={isCurrentBusinessTier(selectedTier.id)}
               onClick={handleSubscribeBusiness}
             >
-              {subscribe.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Redirecting to Shopify…
-                </>
-              ) : currentPlanKey === 'business' && currentTierId === selectedTier.id ? (
-                'Current plan'
-              ) : (
-                'Subscribe with Shopify'
-              )}
+              {isCurrentBusinessTier(selectedTier.id)
+                ? 'Current plan'
+                : billingStatus === 'pending'
+                  ? 'Approve in Shopify…'
+                  : 'Subscribe with Shopify'}
             </Button>
           }
         >

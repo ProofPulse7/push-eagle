@@ -917,6 +917,8 @@ const ensureSchema = async () => {
       `;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_subscribers_shop_external_id ON subscribers(shop_domain, external_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_subscribers_shop_created ON subscribers(shop_domain, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_webhook_events_shop_received ON webhook_events(shop_domain, received_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_subscriber ON subscriber_tokens(shop_domain, subscriber_id)`;
 
       await sql`
         WITH ranked AS (
@@ -951,6 +953,8 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_scheduled ON campaigns(shop_domain, status, scheduled_at)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_created ON pixel_events(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_external ON pixel_events(shop_domain, external_id, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_cart ON pixel_events(shop_domain, cart_token, created_at DESC) WHERE cart_token IS NOT NULL`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_client ON pixel_events(shop_domain, client_id, created_at DESC) WHERE client_id IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_due ON ingestion_jobs(status, due_at)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_shop_type ON ingestion_jobs(shop_domain, job_type, status, due_at)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_ingestion_jobs_dedupe ON ingestion_jobs(shop_domain, job_type, dedupe_key) WHERE dedupe_key IS NOT NULL`;
@@ -958,6 +962,7 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_schedules_send_at ON campaign_schedules(send_at) WHERE send_at IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_smart_delivery_metrics_shop ON smart_delivery_metrics(shop_domain)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_delivered_at ON campaign_deliveries(shop_domain, delivered_at)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_token ON campaign_deliveries(campaign_id, token_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
@@ -976,6 +981,7 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_media_assets_shop_created ON media_assets(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_rules_shop_rule ON automation_rules(shop_domain, rule_key)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_due ON automation_jobs(shop_domain, status, due_at)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_payload_external ON automation_jobs(shop_domain, ((payload ->> 'externalId'))) WHERE (payload ->> 'externalId') IS NOT NULL`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_jobs_dedupe ON automation_jobs(shop_domain, dedupe_key) WHERE dedupe_key IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_external_created ON subscriber_activity_events(shop_domain, external_id, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_product_created ON subscriber_activity_events(shop_domain, product_id, created_at DESC)`;
@@ -1992,7 +1998,16 @@ const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean
   { key: 'post_purchase_followup', enabled: false, config: { delayDays: 2 } },
 ];
 
+const automationRulesReadyAt = new Map<string, number>();
+const AUTOMATION_RULES_READY_TTL_MS = 5 * 60 * 1000;
+
 const ensureAutomationRules = async (shopDomain: string) => {
+  const shop = shopDomain.trim().toLowerCase();
+  const readyAt = automationRulesReadyAt.get(shop);
+  if (readyAt && Date.now() - readyAt < AUTOMATION_RULES_READY_TTL_MS) {
+    return;
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
   await ensureMerchant(shopDomain);
@@ -2130,6 +2145,8 @@ const ensureAutomationRules = async (shopDomain: string) => {
         AND rule_key = 'price_drop'
     `;
   }
+
+  automationRulesReadyAt.set(shop, Date.now());
 };
 
 export const listAutomationRules = async (shopDomain: string) => {
@@ -3324,12 +3341,16 @@ export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIn
   const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
   const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
 
-  // If a worker crashed mid-flight, move stale processing jobs back to pending.
+  // If a worker crashed mid-flight, move stale processing jobs back to pending (shard-scoped).
   await sql`
     UPDATE automation_jobs
     SET status = 'pending', updated_at = NOW()
     WHERE status = 'processing'
       AND updated_at < NOW() - INTERVAL '2 minutes'
+      AND (
+        ${safeShardCount} = 1
+        OR MOD(ABS(hashtext(id)), ${safeShardCount}) = ${safeShardIndex}
+      )
   `;
 
   const rows = await sql`
@@ -3368,13 +3389,17 @@ export const listDueAutomationJobsByRule = async (
   const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
   const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
 
-  // If a worker crashed mid-flight, move stale processing jobs for this rule back to pending.
+  // If a worker crashed mid-flight, move stale processing jobs for this rule back to pending (shard-scoped).
   await sql`
     UPDATE automation_jobs
     SET status = 'pending', updated_at = NOW()
     WHERE status = 'processing'
       AND rule_key = ${ruleKey}
       AND updated_at < NOW() - INTERVAL '2 minutes'
+      AND (
+        ${safeShardCount} = 1
+        OR MOD(ABS(hashtext(id)), ${safeShardCount}) = ${safeShardIndex}
+      )
   `;
 
   const rows = await sql`
@@ -5728,6 +5753,8 @@ export const resolveCampaignAudience = async (
     return [];
   }
 
+  const subscriberIds = Array.from(allowedIds);
+
   const rows = excludeDeliveredCampaignId
     ? await sql`
       SELECT
@@ -5745,6 +5772,7 @@ export const resolveCampaignAudience = async (
       WHERE s.shop_domain = ${shopDomain}
         AND t.shop_domain = ${shopDomain}
         AND t.status = 'active'
+        AND s.id = ANY(${subscriberIds})
         AND NOT EXISTS (
           SELECT 1
           FROM campaign_deliveries cd
@@ -5769,10 +5797,11 @@ export const resolveCampaignAudience = async (
       WHERE s.shop_domain = ${shopDomain}
         AND t.shop_domain = ${shopDomain}
         AND t.status = 'active'
+        AND s.id = ANY(${subscriberIds})
       ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
     `;
 
-  return (rows as Array<{
+  return rows as Array<{
     token_id: string | number;
     fcm_token: string;
     token_type: string | null;
@@ -5782,9 +5811,7 @@ export const resolveCampaignAudience = async (
     subscriber_id: string | number;
     external_id: string | null;
     platform: string | null;
-  }>).filter((row) =>
-    allowedIds.has(Number(row.subscriber_id)),
-  );
+  }>;
 };
 
 export const countCampaignAudienceTokens = async (shopDomain: string, segmentId?: string | null) => {
@@ -6709,6 +6736,42 @@ export const listDueScheduledCampaigns = async (limit = 25, shardCount = 1, shar
   return rows as Array<{ id: string; shop_domain: string; scheduled_at: string | Date | null }>;
 };
 
+type CampaignDeliveryInsertRow = {
+  campaignId: string;
+  shopDomain: string;
+  subscriberId: number;
+  tokenId: number;
+  messageId: string | null;
+};
+
+const insertCampaignDeliveriesBatch = async (
+  sql: ReturnType<typeof getNeonSql>,
+  rows: CampaignDeliveryInsertRow[],
+) => {
+  if (rows.length === 0) {
+    return;
+  }
+
+  const campaignIds = rows.map((row) => row.campaignId);
+  const shopDomains = rows.map((row) => row.shopDomain);
+  const subscriberIds = rows.map((row) => row.subscriberId);
+  const tokenIds = rows.map((row) => row.tokenId);
+  const messageIds = rows.map((row) => row.messageId);
+
+  await sql`
+    INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
+    SELECT u.campaign_id, u.shop_domain, u.subscriber_id, u.token_id, u.fcm_message_id
+    FROM UNNEST(
+      ${campaignIds}::text[],
+      ${shopDomains}::text[],
+      ${subscriberIds}::bigint[],
+      ${tokenIds}::bigint[],
+      ${messageIds}::text[]
+    ) AS u(campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
+    ON CONFLICT (campaign_id, token_id) DO NOTHING
+  `;
+};
+
 export const sendCampaign = async (
   shopDomain: string,
   campaignId: string,
@@ -6910,6 +6973,9 @@ export const sendCampaign = async (
         successCount += multicast.successCount;
         failureCount += multicast.failureCount;
 
+        const deliveryRows: CampaignDeliveryInsertRow[] = [];
+        const revokedTokenIds: number[] = [];
+
         for (let index = 0; index < multicast.responses.length; index += 1) {
           const response = multicast.responses[index];
           const recipient = fcmRecipients[index]?.item;
@@ -6918,30 +6984,35 @@ export const sendCampaign = async (
           }
 
           if (response.success) {
-            await sql`
-              INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
-              VALUES (
-                ${campaignId},
-                ${shopDomain},
-                ${Number(recipient.subscriber_id)},
-                ${Number(recipient.token_id)},
-                ${response.messageId ?? null}
-              )
-              ON CONFLICT (campaign_id, token_id) DO NOTHING
-            `;
+            deliveryRows.push({
+              campaignId,
+              shopDomain,
+              subscriberId: Number(recipient.subscriber_id),
+              tokenId: Number(recipient.token_id),
+              messageId: response.messageId ?? null,
+            });
             continue;
           }
 
           const code = response.error?.code ?? '';
           if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
-            await sql`
-              UPDATE subscriber_tokens
-              SET status = 'revoked', updated_at = NOW()
-              WHERE id = ${Number(recipient.token_id)}
-            `;
+            revokedTokenIds.push(Number(recipient.token_id));
           }
         }
+
+        await insertCampaignDeliveriesBatch(sql, deliveryRows);
+
+        for (const tokenId of revokedTokenIds) {
+          await sql`
+            UPDATE subscriber_tokens
+            SET status = 'revoked', updated_at = NOW()
+            WHERE id = ${tokenId}
+          `;
+        }
       }
+
+      const vapidDeliveryRows: CampaignDeliveryInsertRow[] = [];
+      const vapidRevokedTokenIds: number[] = [];
 
       for (const { item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, actions, primaryTrackUrl, button1TrackUrl, button2TrackUrl } of vapidRecipients) {
         try {
@@ -6973,29 +7044,31 @@ export const sendCampaign = async (
 
           successCount += 1;
 
-          await sql`
-            INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
-            VALUES (
-              ${campaignId},
-              ${shopDomain},
-              ${Number(item.subscriber_id)},
-              ${Number(item.token_id)},
-              ${vapidMessageId}
-            )
-            ON CONFLICT (campaign_id, token_id) DO NOTHING
-          `;
+          vapidDeliveryRows.push({
+            campaignId,
+            shopDomain,
+            subscriberId: Number(item.subscriber_id),
+            tokenId: Number(item.token_id),
+            messageId: vapidMessageId,
+          });
         } catch (error) {
           failureCount += 1;
 
           const message = error instanceof Error ? error.message : String(error ?? '');
           if (message.includes('410') || message.includes('404') || message.toLowerCase().includes('unsub')) {
-            await sql`
-              UPDATE subscriber_tokens
-              SET status = 'revoked', updated_at = NOW()
-              WHERE id = ${Number(item.token_id)}
-            `;
+            vapidRevokedTokenIds.push(Number(item.token_id));
           }
         }
+      }
+
+      await insertCampaignDeliveriesBatch(sql, vapidDeliveryRows);
+
+      for (const tokenId of vapidRevokedTokenIds) {
+        await sql`
+          UPDATE subscriber_tokens
+          SET status = 'revoked', updated_at = NOW()
+          WHERE id = ${tokenId}
+        `;
       }
 
       processedRecipients += chunk.length;

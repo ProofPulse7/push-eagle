@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { recordSubscriberActivity, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
@@ -209,49 +210,55 @@ export async function POST(request: Request) {
       }
     }
 
-    const cartSignalIdentity = await resolveIdentityFromCartSignals(shopDomain, payload.token ?? null);
-
-    const attributeExternalId = getCartAttribute(payload, '_push_eagle_external_id');
-    const fallbackExternalId = deriveExternalId(shopDomain, payload.token ?? null);
-    const resolvedExternalId = attributeExternalId
-      || cartSignalIdentity.externalId
-      || fallbackExternalId;
-    const externalId = resolvedExternalId;
-    if (!externalId) {
+    if (!payload.token) {
       return NextResponse.json({ ok: true, shopDomain, skipped: 'missing-token' });
     }
 
-    const identitySource = attributeExternalId
-      ? 'attribute'
-      : cartSignalIdentity.externalId
-        ? 'signal'
-        : 'fallback_cart_token';
+    deferAfterResponse(async () => {
+      const cartSignalIdentity = await resolveIdentityFromCartSignals(shopDomain, payload.token ?? null);
 
-    const subscriberClientIdentity = await resolveSubscriberClientId(shopDomain, externalId);
-    const shopifyAnalyticsClientId = getCartAttribute(payload, '_push_eagle_shopify_analytics_client_id')
-      || subscriberClientIdentity.shopifyAnalyticsClientId;
-    const clientId = getCartAttribute(payload, '_push_eagle_client_id')
-      || cartSignalIdentity.clientId
-      || subscriberClientIdentity.clientId
-      || shopifyAnalyticsClientId;
+      const attributeExternalId = getCartAttribute(payload, '_push_eagle_external_id');
+      const fallbackExternalId = deriveExternalId(shopDomain, payload.token ?? null);
+      const resolvedExternalId = attributeExternalId
+        || cartSignalIdentity.externalId
+        || fallbackExternalId;
+      const externalId = resolvedExternalId;
+      if (!externalId) {
+        return;
+      }
 
-    const firstLineItem = (payload.line_items ?? [])[0];
-    await recordSubscriberActivity({
-      shopDomain,
-      externalId,
-      eventType: 'add_to_cart',
-      pageUrl: firstLineItem?.url ?? '/cart',
-      productId: firstLineItem?.product_id ? String(firstLineItem.product_id) : null,
-      cartToken: payload.token ?? null,
-      metadata: {
-        cartId: payload.id ? String(payload.id) : null,
-        variantId: firstLineItem?.variant_id ? String(firstLineItem.variant_id) : null,
-        quantity: firstLineItem?.quantity ?? null,
-        updatedAt: payload.updated_at ?? null,
-        clientId,
-        shopifyAnalyticsClientId,
-        cartIdentitySource: identitySource,
-      },
+      const identitySource = attributeExternalId
+        ? 'attribute'
+        : cartSignalIdentity.externalId
+          ? 'signal'
+          : 'fallback_cart_token';
+
+      const subscriberClientIdentity = await resolveSubscriberClientId(shopDomain, externalId);
+      const shopifyAnalyticsClientId = getCartAttribute(payload, '_push_eagle_shopify_analytics_client_id')
+        || subscriberClientIdentity.shopifyAnalyticsClientId;
+      const clientId = getCartAttribute(payload, '_push_eagle_client_id')
+        || cartSignalIdentity.clientId
+        || subscriberClientIdentity.clientId
+        || shopifyAnalyticsClientId;
+
+      const firstLineItem = (payload.line_items ?? [])[0];
+      await recordSubscriberActivity({
+        shopDomain,
+        externalId,
+        eventType: 'add_to_cart',
+        pageUrl: firstLineItem?.url ?? '/cart',
+        productId: firstLineItem?.product_id ? String(firstLineItem.product_id) : null,
+        cartToken: payload.token ?? null,
+        metadata: {
+          cartId: payload.id ? String(payload.id) : null,
+          variantId: firstLineItem?.variant_id ? String(firstLineItem.variant_id) : null,
+          quantity: firstLineItem?.quantity ?? null,
+          updatedAt: payload.updated_at ?? null,
+          clientId,
+          shopifyAnalyticsClientId,
+          cartIdentitySource: identitySource,
+        },
+      });
     });
 
     return NextResponse.json({ ok: true, shopDomain });

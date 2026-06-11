@@ -1,7 +1,6 @@
 'use client';
 
 import { useMemo } from 'react';
-import type { DateRange } from 'react-day-picker';
 import { ArrowUpRight } from 'lucide-react';
 import Link from 'next/link';
 
@@ -20,9 +19,15 @@ type CampaignRow = {
   clicks: number;
 };
 
-export function TopCampaigns({ dateRange, shopDomain }: { dateRange: DateRange | undefined; shopDomain?: string }) {
-  const from = dateRange?.from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const to = dateRange?.to ?? new Date();
+export function TopCampaigns({
+  from,
+  to,
+  shopDomain,
+}: {
+  from: Date;
+  to: Date;
+  shopDomain?: string;
+}) {
   const { data: payload, isLoading } = useAnalyticsStats(from, to);
 
   const campaigns = useMemo<CampaignRow[]>(() => {

@@ -3,6 +3,9 @@ import { neon } from '@neondatabase/serverless';
 import { env } from '@/lib/config/env';
 import { isValidPostgresConnectionString, sanitizePostgresConnectionString } from '@/lib/config/sanitize-connection-string';
 
+let cachedSql: ReturnType<typeof neon> | null = null;
+let cachedConnectionString: string | null = null;
+
 export const getNeonSql = () => {
   const raw = env.NEON_DATABASE_URL || env.DATABASE_URL;
   const connectionString = sanitizePostgresConnectionString(raw);
@@ -17,5 +20,10 @@ export const getNeonSql = () => {
     );
   }
 
-  return neon(connectionString);
+  if (!cachedSql || cachedConnectionString !== connectionString) {
+    cachedSql = neon(connectionString);
+    cachedConnectionString = connectionString;
+  }
+
+  return cachedSql;
 };

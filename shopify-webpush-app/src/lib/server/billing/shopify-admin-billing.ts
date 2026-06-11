@@ -130,15 +130,18 @@ export const createRecurringAppSubscription = async (input: {
     throw new Error(userError);
   }
 
-  const confirmationUrl = result?.confirmationUrl;
-  if (!confirmationUrl) {
+  const status = String(result?.appSubscription?.status ?? 'PENDING').toUpperCase();
+  const confirmationUrl = result?.confirmationUrl ?? null;
+
+  if (!confirmationUrl && status !== 'ACTIVE') {
     throw new Error('Shopify did not return a confirmation URL.');
   }
 
   return {
     confirmationUrl,
     subscriptionId: result?.appSubscription?.id ?? null,
-    status: result?.appSubscription?.status ?? 'PENDING',
+    status,
+    autoActivated: !confirmationUrl && status === 'ACTIVE',
   };
 };
 

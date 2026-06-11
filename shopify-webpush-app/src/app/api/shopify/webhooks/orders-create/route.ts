@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
-import { enqueueIngestionJob, processIngestionJob, registerWebhookEvent } from '@/lib/server/data/store';
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
+import { enqueueIngestionJob, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getCustomerExternalId } from '@/lib/server/storefront-identity';
 
@@ -268,69 +269,59 @@ export async function POST(request: Request) {
       }
     }
 
-    const externalIdFromNotes = getExternalIdFromNoteAttributes(payload.note_attributes);
-    const cartTokenFromNotes = getCartTokenFromNoteAttributes(payload.note_attributes);
-    const cartToken = cartTokenFromNotes ?? payload.checkout_token ?? payload.cart_token ?? null;
-    const clientIdFromNotes = getClientIdFromNoteAttributes(payload.note_attributes);
-    const browserIp = payload.client_details?.browser_ip ?? payload.browser_ip ?? null;
     const userAgent = payload.client_details?.user_agent ?? request.headers.get('user-agent');
-    const externalIdFromCartToken = await findExternalIdByCartToken(shopDomain, cartToken);
-    const externalIdFromFingerprint = await findExternalIdByFingerprint(shopDomain, browserIp, userAgent);
-    const customerExternalId = getCustomerExternalId({
-      customerId: payload.customer?.id ? String(payload.customer.id) : null,
-      email: payload.customer?.email ?? null,
-    });
-    const externalId = externalIdFromNotes ?? externalIdFromCartToken ?? externalIdFromFingerprint ?? customerExternalId;
 
-    const orderId = String(payload.id ?? payload.order_number ?? `shopify-${Date.now()}`);
-    const totalPriceCents = Math.round(Number(payload.total_price ?? 0) * 100);
-    const dedupeKey = eventId ? `orders-create:${eventId}` : `orders-create:${shopDomain}:${orderId}`;
-
-    const jobId = await enqueueIngestionJob({
-      shopDomain,
-      jobType: 'shopify_order_create',
-      dedupeKey,
-      payload: {
-        shopDomain,
-        orderId,
-        externalId,
-        cartToken,
-        clientId: clientIdFromNotes,
+    deferAfterResponse(async () => {
+      const externalIdFromNotes = getExternalIdFromNoteAttributes(payload.note_attributes);
+      const cartTokenFromNotes = getCartTokenFromNoteAttributes(payload.note_attributes);
+      const cartToken = cartTokenFromNotes ?? payload.checkout_token ?? payload.cart_token ?? null;
+      const clientIdFromNotes = getClientIdFromNoteAttributes(payload.note_attributes);
+      const browserIp = payload.client_details?.browser_ip ?? payload.browser_ip ?? null;
+      const externalIdFromCartToken = await findExternalIdByCartToken(shopDomain, cartToken);
+      const externalIdFromFingerprint = await findExternalIdByFingerprint(shopDomain, browserIp, userAgent);
+      const customerExternalId = getCustomerExternalId({
         customerId: payload.customer?.id ? String(payload.customer.id) : null,
         email: payload.customer?.email ?? null,
-        firstName: payload.customer?.first_name ?? null,
-        lastName: payload.customer?.last_name ?? null,
-        customerTags: normalizeCustomerTags(payload.customer?.tags),
-        totalPriceCents,
-        createdAt: payload.created_at ?? null,
-        lineItems: (payload.line_items ?? []).map((item) => ({
-          productId: item.product_id ? String(item.product_id) : null,
-          productTitle: item.title ?? null,
-          collectionHint: item.product_type ?? item.vendor ?? null,
-        })),
-        landingSite: payload.landing_site ?? null,
-        browserIp,
-        userAgent,
-      },
+      });
+      const externalId = externalIdFromNotes ?? externalIdFromCartToken ?? externalIdFromFingerprint ?? customerExternalId;
+
+      const orderId = String(payload.id ?? payload.order_number ?? `shopify-${Date.now()}`);
+      const totalPriceCents = Math.round(Number(payload.total_price ?? 0) * 100);
+      const dedupeKey = eventId ? `orders-create:${eventId}` : `orders-create:${shopDomain}:${orderId}`;
+
+      await enqueueIngestionJob({
+        shopDomain,
+        jobType: 'shopify_order_create',
+        dedupeKey,
+        payload: {
+          shopDomain,
+          orderId,
+          externalId,
+          cartToken,
+          clientId: clientIdFromNotes,
+          customerId: payload.customer?.id ? String(payload.customer.id) : null,
+          email: payload.customer?.email ?? null,
+          firstName: payload.customer?.first_name ?? null,
+          lastName: payload.customer?.last_name ?? null,
+          customerTags: normalizeCustomerTags(payload.customer?.tags),
+          totalPriceCents,
+          createdAt: payload.created_at ?? null,
+          lineItems: (payload.line_items ?? []).map((item) => ({
+            productId: item.product_id ? String(item.product_id) : null,
+            productTitle: item.title ?? null,
+            collectionHint: item.product_type ?? item.vendor ?? null,
+          })),
+          landingSite: payload.landing_site ?? null,
+          browserIp,
+          userAgent,
+        },
+      });
     });
-
-    let processedNow = false;
-    let processingError: string | null = null;
-
-    if (jobId) {
-      const processResult = await processIngestionJob(jobId);
-      processedNow = Boolean(processResult.processed);
-      processingError = processResult.error ?? null;
-    }
 
     return NextResponse.json({
       ok: true,
       shopDomain,
       queued: true,
-      jobId,
-      processedNow,
-      processingError,
-      cartToken,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to process order webhook.';

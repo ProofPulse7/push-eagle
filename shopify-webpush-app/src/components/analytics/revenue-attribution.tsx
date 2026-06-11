@@ -1,82 +1,34 @@
 
 'use client';
 
-import { Pie, PieChart, ResponsiveContainer, Cell, Text } from 'recharts';
+import dynamic from 'next/dynamic';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { formatCurrency } from '@/lib/utils';
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import { useAnalyticsStats } from '@/hooks/queries/use-app-queries';
-import type { DateRange } from 'react-day-picker';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
 
+const RevenueAttributionChart = dynamic(() => import('./revenue-attribution-chart'), {
+  ssr: false,
+  loading: () => <Skeleton className="mx-auto aspect-square w-full max-w-[250px] rounded-full" />,
+});
 
 const emptyData = [
   { source: 'campaigns', revenue: 0, fill: 'var(--color-campaigns)' },
   { source: 'automations', revenue: 0, fill: 'var(--color-automations)' },
 ];
 
-const chartConfig = {
-  revenue: {
-    label: 'Revenue',
-  },
-  campaigns: {
-    label: 'Campaigns',
-    color: 'hsl(var(--chart-1))',
-  },
-  automations: {
-    label: 'Automations',
-    color: 'hsl(var(--chart-2))',
-  },
-} satisfies ChartConfig;
-
-// Custom label for the pie chart slices
-const renderCustomizedLabel = ({
-  cx,
-  cy,
-  midAngle,
-  innerRadius,
-  outerRadius,
-  percent,
+export function RevenueAttribution({
+  from,
+  to,
+  shopDomain,
 }: {
-  cx: number;
-  cy: number;
-  midAngle: number;
-  innerRadius: number;
-  outerRadius: number;
-  percent: number;
-}) => {
-  const RADIAN = Math.PI / 180;
-  // A bit of tweaking to position the label inside the slice
-  const radius = innerRadius + (outerRadius - innerRadius) * 0.6;
-  const x = cx + radius * Math.cos(-midAngle * RADIAN);
-  const y = cy + radius * Math.sin(-midAngle * RADIAN);
-
-  return (
-    <text
-      x={x}
-      y={y}
-      fill="white"
-      textAnchor="middle"
-      dominantBaseline="central"
-      className="text-base font-bold"
-    >
-      {`${(percent * 100).toFixed(0)}%`}
-    </text>
-  );
-};
-
-
-export function RevenueAttribution({ dateRange, shopDomain }: { dateRange: DateRange | undefined; shopDomain?: string }) {
-  const [isClient, setIsClient] = useState(false);
-  const from = dateRange?.from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const to = dateRange?.to ?? new Date();
+  from: Date;
+  to: Date;
+  shopDomain?: string;
+}) {
   const { data: payload, isLoading } = useAnalyticsStats(from, to);
-
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
 
   const data = useMemo(() => {
     if (!payload?.ok) return emptyData;
@@ -87,7 +39,7 @@ export function RevenueAttribution({ dateRange, shopDomain }: { dateRange: DateR
     ];
   }, [payload]);
 
-  if (!isClient || (isLoading && !payload)) {
+  if (isLoading && !payload) {
     return (
       <Card className="flex flex-col h-full">
         <CardHeader>
@@ -121,34 +73,7 @@ export function RevenueAttribution({ dateRange, shopDomain }: { dateRange: DateR
         <CardDescription>Revenue from manual campaigns vs. automated flows.</CardDescription>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col items-center justify-center relative pt-0 pb-4">
-        <ChartContainer
-          config={chartConfig}
-          className="mx-auto aspect-square w-full max-w-[250px]"
-        >
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <ChartTooltip
-                cursor={false}
-                content={<ChartTooltipContent hideLabel />}
-              />
-              <Pie
-                data={data}
-                dataKey="revenue"
-                nameKey="source"
-                innerRadius={50}
-                outerRadius={110}
-                paddingAngle={2}
-                strokeWidth={2}
-                labelLine={false}
-                label={renderCustomizedLabel}
-              >
-                {data.map((entry) => (
-                    <Cell key={entry.source} fill={entry.fill} className="outline-none" />
-                ))}
-              </Pie>
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartContainer>
+        <RevenueAttributionChart data={data} />
       </CardContent>
       <CardContent className="flex flex-col gap-3 text-sm pt-4 mt-auto">
         {data.map((entry) => {

@@ -1,5 +1,5 @@
 import { BASIC_PLAN } from '@/lib/server/billing/plans';
-import { upsertMerchantBilling } from '@/lib/server/billing/merchant-billing';
+import { markBillingCheckoutPending } from '@/lib/server/billing/merchant-billing';
 import { resolveBillingTestMode } from '@/lib/server/billing/billing-test-mode';
 import { createRecurringAppSubscription } from '@/lib/server/billing/shopify-admin-billing';
 import { ensureShopifyOfflineAccessToken } from '@/lib/server/billing/refresh-shopify-session';
@@ -31,15 +31,6 @@ export const startPlanSubscriptionCheckout = async (input: {
 
   const test = await resolveBillingTestMode(input.shopDomain, token);
 
-  const billing = await upsertMerchantBilling({
-    shopDomain: input.shopDomain,
-    planKey: input.planKey,
-    tierId: input.tierId ?? null,
-    impressionLimit: input.impressionLimit,
-    priceUsd: input.priceUsd,
-    status: 'pending',
-  });
-
   const result = await createRecurringAppSubscription({
     shopDomain: input.shopDomain,
     planName: input.planName,
@@ -48,11 +39,20 @@ export const startPlanSubscriptionCheckout = async (input: {
     test,
   });
 
+  await markBillingCheckoutPending({
+    shopDomain: input.shopDomain,
+    shopifySubscriptionId: result.subscriptionId,
+  });
+
   return {
-    billing,
     test,
     confirmationUrl: result.confirmationUrl,
     subscriptionId: result.subscriptionId,
+    autoActivated: result.autoActivated ?? false,
+    planKey: input.planKey,
+    tierId: input.tierId ?? null,
+    impressionLimit: input.impressionLimit,
+    priceUsd: input.priceUsd,
   };
 };
 

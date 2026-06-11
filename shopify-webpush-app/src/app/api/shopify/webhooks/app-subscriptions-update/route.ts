@@ -1,16 +1,15 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
-import { BUSINESS_TIERS } from '@/lib/server/billing/plans';
+import { BASIC_PLAN } from '@/lib/server/billing/plans';
 import { upsertMerchantBilling } from '@/lib/server/billing/merchant-billing';
+import {
+  handleDeclinedAppSubscription,
+  matchTierByPrice,
+} from '@/lib/server/billing/sync-billing-from-shopify';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
-
-const matchTierByPrice = (amount: number) => {
-  const sorted = [...BUSINESS_TIERS].sort((a, b) => b.priceUsd - a.priceUsd);
-  return sorted.find((tier) => Math.abs(tier.priceUsd - amount) < 0.01) ?? BUSINESS_TIERS[0];
-};
 
 export async function POST(request: Request) {
   try {
@@ -39,24 +38,29 @@ export async function POST(request: Request) {
 
     if (status === 'ACTIVE') {
       const tier = matchTierByPrice(price);
-      await upsertMerchantBilling({
-        shopDomain,
-        planKey: 'business',
-        tierId: tier.id,
-        impressionLimit: tier.impressions,
-        priceUsd: tier.priceUsd,
-        shopifySubscriptionId: subscription.admin_graphql_api_id ?? null,
-        status: 'active',
-      });
+      await upsertMerchantBilling(
+        price <= 0.001
+          ? {
+              shopDomain,
+              planKey: 'basic',
+              tierId: null,
+              impressionLimit: BASIC_PLAN.impressions,
+              priceUsd: BASIC_PLAN.priceUsd,
+              shopifySubscriptionId: subscription.admin_graphql_api_id ?? null,
+              status: 'active',
+            }
+          : {
+              shopDomain,
+              planKey: 'business',
+              tierId: tier.id,
+              impressionLimit: tier.impressions,
+              priceUsd: tier.priceUsd,
+              shopifySubscriptionId: subscription.admin_graphql_api_id ?? null,
+              status: 'active',
+            },
+      );
     } else if (status === 'CANCELLED' || status === 'DECLINED' || status === 'EXPIRED') {
-      await upsertMerchantBilling({
-        shopDomain,
-        planKey: 'basic',
-        tierId: null,
-        impressionLimit: 10_000,
-        priceUsd: 0,
-        status: 'active',
-      });
+      await handleDeclinedAppSubscription(shopDomain);
     }
 
     return NextResponse.json({ ok: true, shopDomain });

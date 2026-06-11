@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import {
   useInfiniteQuery,
   useMutation,
@@ -9,6 +10,7 @@ import {
 } from '@tanstack/react-query';
 
 import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
+import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { clearPendingSettings } from '@/lib/client/pending-settings';
 import {
   hydrateAppCache,
@@ -53,6 +55,7 @@ export function useCampaigns() {
     queryFn: () =>
       fetchJsonWithShop<{ campaigns: unknown[] }>('/api/campaigns', shop),
     enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
     placeholderData: (previous) => previous,
   });
 }
@@ -67,6 +70,7 @@ export function useAutomationsOverview() {
         shop,
       ),
     enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
     placeholderData: (previous) => previous,
   });
 }
@@ -90,6 +94,7 @@ export function useSubscribersOverview() {
     queryFn: () =>
       fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
     enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
     placeholderData: (previous) => previous,
   });
 }
@@ -132,18 +137,23 @@ export function useBrandingSettings() {
 
 export function useCampaignStats(from?: Date, to?: Date) {
   const shop = useShopDomain();
-  const fromIso = from?.toISOString() ?? '';
-  const toIso = to?.toISOString() ?? '';
+  const { fromIso, toIso } = useMemo(() => {
+    const range = resolveAnalyticsDateRange(
+      from && to ? { from, to } : undefined,
+    );
+    return { fromIso: range.fromIso, toIso: range.toIso };
+  }, [from?.getTime(), to?.getTime()]);
 
   return useQuery({
     queryKey: queryKeys.campaignStats(shop, fromIso, toIso),
     queryFn: () => {
       const params = new URLSearchParams({ shop });
-      if (fromIso) params.set('from', fromIso);
-      if (toIso) params.set('to', toIso);
+      params.set('from', fromIso);
+      params.set('to', toIso);
       return fetchJson<Record<string, unknown>>(`/api/campaigns/stats?${params.toString()}`);
     },
     enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
     placeholderData: (previous) => previous,
   });
 }
@@ -169,33 +179,41 @@ export function useSubscribersList(sortOrder: 'asc' | 'desc', pageSize = 100) {
       return loaded;
     },
     enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
   });
 }
 
 export function useDashboardSummary() {
   const shop = useShopDomain();
-  return useQuery({
-    queryKey: queryKeys.dashboardSummary(shop),
-    queryFn: async () => {
-      const [overview, campaignStats, subscriberKpis] = await Promise.all([
-        fetchJsonWithShop<Record<string, unknown>>('/api/settings/overview', shop),
-        fetchJsonWithShop<Record<string, unknown>>(
-          `/api/campaigns/stats?from=${encodeURIComponent(new Date(Date.now() - 30 * 86400000).toISOString())}&to=${encodeURIComponent(new Date().toISOString())}`,
-          shop,
-        ),
-        fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
-      ]);
-      return { overview, campaignStats, subscriberKpis };
-    },
-    enabled: Boolean(shop),
-    placeholderData: (previous) => previous,
-  });
+  const range = useMemo(() => resolveAnalyticsDateRange(), []);
+  const overview = useMerchantOverview();
+  const campaignStats = useCampaignStats(range.from, range.to);
+  const subscriberKpis = useSubscribersOverview();
+
+  const data =
+    overview.data && campaignStats.data && subscriberKpis.data
+      ? {
+          overview: overview.data,
+          campaignStats: campaignStats.data,
+          subscriberKpis: subscriberKpis.data,
+        }
+      : undefined;
+
+  return {
+    data,
+    isLoading: overview.isLoading || campaignStats.isLoading || subscriberKpis.isLoading,
+    isFetching: overview.isFetching || campaignStats.isFetching || subscriberKpis.isFetching,
+    isError: overview.isError || campaignStats.isError || subscriberKpis.isError,
+    error: overview.error ?? campaignStats.error ?? subscriberKpis.error,
+  };
 }
 
 export function useAnalyticsStats(from: Date, to: Date) {
   const shop = useShopDomain();
-  const fromIso = from.toISOString();
-  const toIso = to.toISOString();
+  const { fromIso, toIso } = useMemo(() => {
+    const range = resolveAnalyticsDateRange({ from, to });
+    return { fromIso: range.fromIso, toIso: range.toIso };
+  }, [from.getTime(), to.getTime()]);
 
   return useQuery({
     queryKey: queryKeys.analyticsStats(shop, fromIso, toIso),
@@ -211,8 +229,10 @@ export function useAnalyticsStats(from: Date, to: Date) {
 
 export function useSubscriberGrowth(from: Date, to: Date) {
   const shop = useShopDomain();
-  const fromIso = from.toISOString();
-  const toIso = to.toISOString();
+  const { fromIso, toIso } = useMemo(() => {
+    const range = resolveAnalyticsDateRange({ from, to });
+    return { fromIso: range.fromIso, toIso: range.toIso };
+  }, [from.getTime(), to.getTime()]);
 
   return useQuery({
     queryKey: queryKeys.subscribersGrowth(shop, fromIso, toIso),
@@ -221,6 +241,7 @@ export function useSubscriberGrowth(from: Date, to: Date) {
         `/api/subscribers/growth?shop=${encodeURIComponent(shop)}&from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`,
       ),
     enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
     placeholderData: (previous) => previous,
   });
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { recordSubscriberActivity, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getCustomerExternalId } from '@/lib/server/storefront-identity';
@@ -89,21 +90,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, shopDomain, skipped: 'missing-external-id' });
     }
 
-    const firstLineItem = (payload.line_items ?? [])[0];
-    await recordSubscriberActivity({
-      shopDomain,
-      externalId,
-      eventType: 'checkout_start',
-      pageUrl: payload.abandoned_checkout_url ?? firstLineItem?.url ?? '/checkout',
-      productId: firstLineItem?.product_id ? String(firstLineItem.product_id) : null,
-      cartToken: payload.token ?? null,
-      metadata: {
-        checkoutId: payload.id ? String(payload.id) : null,
-        variantId: firstLineItem?.variant_id ? String(firstLineItem.variant_id) : null,
-        quantity: firstLineItem?.quantity ?? null,
-        updatedAt: payload.updated_at ?? null,
-        sourceTopic: topic,
-      },
+    deferAfterResponse(async () => {
+      const firstLineItem = (payload.line_items ?? [])[0];
+      await recordSubscriberActivity({
+        shopDomain,
+        externalId,
+        eventType: 'checkout_start',
+        pageUrl: payload.abandoned_checkout_url ?? firstLineItem?.url ?? '/checkout',
+        productId: firstLineItem?.product_id ? String(firstLineItem.product_id) : null,
+        cartToken: payload.token ?? null,
+        metadata: {
+          checkoutId: payload.id ? String(payload.id) : null,
+          variantId: firstLineItem?.variant_id ? String(firstLineItem.variant_id) : null,
+          quantity: firstLineItem?.quantity ?? null,
+          updatedAt: payload.updated_at ?? null,
+          sourceTopic: topic,
+        },
+      });
     });
 
     return NextResponse.json({ ok: true, shopDomain });

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { processFulfillmentUpdate, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
@@ -46,16 +47,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: 'Missing fulfillment id or order id.' }, { status: 400 });
     }
 
-    await processFulfillmentUpdate({
-      shopDomain,
-      fulfillmentId: String(payload.id),
-      orderId: String(payload.order_id),
-      status: payload.status ?? null,
-      shipmentStatus: payload.shipment_status ?? null,
-      trackingCompany: payload.tracking_company ?? null,
-      trackingNumbers: Array.isArray(payload.tracking_numbers) ? payload.tracking_numbers : [],
-      trackingUrls: Array.isArray(payload.tracking_urls) ? payload.tracking_urls : [],
-      updatedAt: payload.updated_at ?? null,
+    deferAfterResponse(async () => {
+      await processFulfillmentUpdate({
+        shopDomain,
+        fulfillmentId: String(payload.id),
+        orderId: String(payload.order_id),
+        status: payload.status ?? null,
+        shipmentStatus: payload.shipment_status ?? null,
+        trackingCompany: payload.tracking_company ?? null,
+        trackingNumbers: Array.isArray(payload.tracking_numbers) ? payload.tracking_numbers : [],
+        trackingUrls: Array.isArray(payload.tracking_urls) ? payload.tracking_urls : [],
+        updatedAt: payload.updated_at ?? null,
+      });
     });
 
     return NextResponse.json({ ok: true, shopDomain });

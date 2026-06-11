@@ -15,6 +15,7 @@ import { DevicePerformance } from '@/components/analytics/device-performance';
 import { formatCurrency } from '@/lib/utils';
 import { DateRangePicker } from '@/components/analytics/date-range-picker';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
+import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { useAnalyticsStats } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
@@ -29,8 +30,7 @@ export default function AnalyticsPage() {
   const shopDomain = useShopDomain();
   const [date, setDate] = useState<DateRange | undefined>(undefined);
 
-  const from = date?.from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const to = date?.to ?? new Date();
+  const { from, to } = useMemo(() => resolveAnalyticsDateRange(date), [date]);
   const { data: payload, isLoading, isFetching, isError, error } = useAnalyticsStats(from, to);
 
   const kpis = useMemo<KpiItem[]>(() => {
@@ -107,13 +107,13 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-          <PerformanceOverview dateRange={date} shopDomain={shopDomain} />
-          <RevenueAttribution dateRange={date} shopDomain={shopDomain} />
+          <PerformanceOverview from={from} to={to} shopDomain={shopDomain} />
+          <RevenueAttribution from={from} to={to} shopDomain={shopDomain} />
         </div>
 
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-          <TopCampaigns dateRange={date} shopDomain={shopDomain} />
-          <TopAutomations dateRange={date} shopDomain={shopDomain} />
+          <TopCampaigns from={from} to={to} shopDomain={shopDomain} />
+          <TopAutomations from={from} to={to} shopDomain={shopDomain} />
         </div>
 
         <DevicePerformance shopDomain={shopDomain} />

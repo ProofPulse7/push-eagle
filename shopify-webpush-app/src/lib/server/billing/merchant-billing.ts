@@ -220,6 +220,32 @@ export const getMerchantBilling = async (
 export const getMerchantBillingFast = async (shopDomain: string) =>
   getMerchantBilling(shopDomain, { reconcileUsage: false });
 
+export const markBillingCheckoutPending = async (input: {
+  shopDomain: string;
+  shopifySubscriptionId?: string | null;
+}) => {
+  await getMerchantBilling(input.shopDomain);
+  const sql = getNeonSql();
+  await sql`
+    UPDATE merchant_billing
+    SET
+      shopify_subscription_id = COALESCE(${input.shopifySubscriptionId ?? null}, shopify_subscription_id),
+      status = 'pending',
+      updated_at = NOW()
+    WHERE shop_domain = ${input.shopDomain}
+  `;
+};
+
+export const clearBillingCheckoutPending = async (shopDomain: string) => {
+  await ensureBillingSchema(shopDomain);
+  const sql = getNeonSql();
+  await sql`
+    UPDATE merchant_billing
+    SET status = 'active', updated_at = NOW()
+    WHERE shop_domain = ${shopDomain} AND status = 'pending'
+  `;
+};
+
 export const upsertMerchantBilling = async (input: {
   shopDomain: string;
   planKey: PlanKey;

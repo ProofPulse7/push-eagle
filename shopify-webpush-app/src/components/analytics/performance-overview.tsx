@@ -1,11 +1,9 @@
 
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
-import type { DateRange } from 'react-day-picker';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis, Area, AreaChart } from 'recharts';
+import dynamic from 'next/dynamic';
+import { useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { formatCurrency } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -13,38 +11,22 @@ import { addDays, eachDayOfInterval, eachMonthOfInterval, differenceInDays, form
 import { AreaChart as AreaChartIcon, BarChart3 } from 'lucide-react';
 import { useAnalyticsStats } from '@/hooks/queries/use-app-queries';
 
-const chartConfig = {
-  revenue: {
-    label: 'Revenue',
-    color: 'hsl(var(--primary))',
-  },
-} satisfies ChartConfig;
+const PerformanceOverviewChart = dynamic(() => import('./performance-overview-chart'), {
+  ssr: false,
+  loading: () => <Skeleton className="h-80 w-full" />,
+});
 
-const getXAxisProps = (dataCount: number) => {
-    if (dataCount > 14) {
-        return {
-            angle: -90,
-            textAnchor: 'end' as const,
-            dy: 0,
-            dx: -5,
-            height: 50,
-            interval: Math.floor(dataCount / 20) > 0 ? Math.floor(dataCount / 20) : 0,
-        };
-    }
-    return { angle: 0, textAnchor: 'middle' as const, height: 30, interval: 0 };
-};
-
-
-export function PerformanceOverview({ dateRange, shopDomain }: { dateRange: DateRange | undefined; shopDomain?: string }) {
+export function PerformanceOverview({
+  from,
+  to,
+  shopDomain,
+}: {
+  from: Date;
+  to: Date;
+  shopDomain?: string;
+}) {
   const [chartType, setChartType] = useState<'bar' | 'area'>('bar');
-  const [isClient, setIsClient] = useState(false);
 
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
-
-  const from = dateRange?.from ?? addDays(new Date(), -29);
-  const to = dateRange?.to ?? new Date();
   const { data: payload, isLoading } = useAnalyticsStats(from, to);
 
   const chartData = useMemo(() => {
@@ -89,10 +71,6 @@ export function PerformanceOverview({ dateRange, shopDomain }: { dateRange: Date
 
   const showSkeleton = isLoading && !payload;
 
-  if (!isClient) {
-    return <Skeleton className="h-96 w-full" />;
-  }
-
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -113,27 +91,7 @@ export function PerformanceOverview({ dateRange, shopDomain }: { dateRange: Date
         {showSkeleton ? (
           <Skeleton className="h-80 w-full" />
         ) : (
-          <ChartContainer config={chartConfig} className="h-80 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              {chartType === 'bar' ? (
-                <BarChart data={chartData.data}>
-                  <CartesianGrid vertical={false} />
-                  <XAxis dataKey="date" tickLine={false} axisLine={false} {...getXAxisProps(chartData.data.length)} />
-                  <YAxis tickFormatter={(v) => formatCurrency(v)} tickLine={false} axisLine={false} />
-                  <ChartTooltip content={<ChartTooltipContent formatter={(v) => formatCurrency(Number(v))} />} />
-                  <Bar dataKey="revenue" fill="var(--color-revenue)" radius={4} />
-                </BarChart>
-              ) : (
-                <AreaChart data={chartData.data}>
-                  <CartesianGrid vertical={false} />
-                  <XAxis dataKey="date" tickLine={false} axisLine={false} {...getXAxisProps(chartData.data.length)} />
-                  <YAxis tickFormatter={(v) => formatCurrency(v)} tickLine={false} axisLine={false} />
-                  <ChartTooltip content={<ChartTooltipContent formatter={(v) => formatCurrency(Number(v))} />} />
-                  <Area type="monotone" dataKey="revenue" fill="var(--color-revenue)" stroke="var(--color-revenue)" />
-                </AreaChart>
-              )}
-            </ResponsiveContainer>
-          </ChartContainer>
+          <PerformanceOverviewChart chartType={chartType} data={chartData.data} />
         )}
       </CardContent>
     </Card>

@@ -1,10 +1,8 @@
-
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis, Area, AreaChart } from 'recharts';
+import dynamic from 'next/dynamic';
+import { useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { formatCurrency } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
@@ -13,21 +11,14 @@ import { AreaChart as AreaChartIcon, BarChart3 } from 'lucide-react';
 import { useAnalyticsStats } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
-const chartConfig = {
-  revenue: {
-    label: 'Revenue',
-    color: 'hsl(var(--primary))',
-  },
-} satisfies ChartConfig;
+const DashboardPerformanceChart = dynamic(() => import('./dashboard-performance-chart'), {
+  ssr: false,
+  loading: () => <Skeleton className="h-80 w-full" />,
+});
 
 export function PerformanceChart() {
   const shopDomain = useShopDomain();
   const [chartType, setChartType] = useState<'bar' | 'area'>('bar');
-  const [isClient, setIsClient] = useState(false);
-
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
 
   const to = new Date();
   const from = addDays(to, -6);
@@ -61,10 +52,6 @@ export function PerformanceChart() {
 
   const showSkeleton = isLoading && !payload;
 
-  if (!isClient) {
-    return <Skeleton className="h-80 w-full" />;
-  }
-
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -85,27 +72,7 @@ export function PerformanceChart() {
         {showSkeleton ? (
           <Skeleton className="h-80 w-full" />
         ) : (
-          <ChartContainer config={chartConfig} className="h-80 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              {chartType === 'bar' ? (
-                <BarChart data={chartData.data}>
-                  <CartesianGrid vertical={false} />
-                  <XAxis dataKey="date" tickLine={false} axisLine={false} />
-                  <YAxis tickFormatter={(v) => formatCurrency(v)} tickLine={false} axisLine={false} />
-                  <ChartTooltip content={<ChartTooltipContent formatter={(v) => formatCurrency(Number(v))} />} />
-                  <Bar dataKey="revenue" fill="var(--color-revenue)" radius={4} />
-                </BarChart>
-              ) : (
-                <AreaChart data={chartData.data}>
-                  <CartesianGrid vertical={false} />
-                  <XAxis dataKey="date" tickLine={false} axisLine={false} />
-                  <YAxis tickFormatter={(v) => formatCurrency(v)} tickLine={false} axisLine={false} />
-                  <ChartTooltip content={<ChartTooltipContent formatter={(v) => formatCurrency(Number(v))} />} />
-                  <Area type="monotone" dataKey="revenue" fill="var(--color-revenue)" stroke="var(--color-revenue)" />
-                </AreaChart>
-              )}
-            </ResponsiveContainer>
-          </ChartContainer>
+          <DashboardPerformanceChart chartType={chartType} data={chartData.data} />
         )}
       </CardContent>
     </Card>

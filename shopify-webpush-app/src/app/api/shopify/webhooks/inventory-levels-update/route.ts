@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { processInventoryLevelUpdate, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
@@ -41,11 +42,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: 'Missing inventory item id.' }, { status: 400 });
     }
 
-    await processInventoryLevelUpdate({
-      shopDomain,
-      inventoryItemId: String(payload.inventory_item_id),
-      available: typeof payload.available === 'number' ? payload.available : null,
-      updatedAt: payload.updated_at ?? null,
+    deferAfterResponse(async () => {
+      await processInventoryLevelUpdate({
+        shopDomain,
+        inventoryItemId: String(payload.inventory_item_id),
+        available: typeof payload.available === 'number' ? payload.available : null,
+        updatedAt: payload.updated_at ?? null,
+      });
     });
 
     return NextResponse.json({ ok: true, shopDomain });

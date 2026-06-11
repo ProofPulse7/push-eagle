@@ -1,3 +1,4 @@
+import { endOfDay, startOfDay } from 'date-fns';
 import { NextResponse } from 'next/server';
 
 import {
@@ -27,8 +28,8 @@ const CACHE_HEADERS = {
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const analyticsTo = new Date();
-    const analyticsFrom = new Date(analyticsTo.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const analyticsTo = endOfDay(new Date());
+    const analyticsFrom = startOfDay(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
 
     const [
       merchantOverview,

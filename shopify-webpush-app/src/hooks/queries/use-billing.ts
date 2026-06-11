@@ -41,7 +41,11 @@ export function useConfirmBilling() {
 
   return useMutation({
     mutationFn: () =>
-      fetchJson<{ activated?: boolean }>('/api/billing/confirm', {
+      fetchJson<{
+        activated?: boolean;
+        billing?: Record<string, unknown>;
+        message?: string;
+      }>('/api/billing/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopDomain: shop }),

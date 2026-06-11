@@ -1,16 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import {
-  BASIC_PLAN,
-  getBusinessTier,
-} from '@/lib/server/billing/plans';
-import {
-  basicCheckoutPlanName,
-  startPlanSubscriptionCheckout,
-} from '@/lib/server/billing/start-plan-checkout';
+import { activateSubscribedPlan, runPlanSubscribe } from '@/lib/server/billing/run-plan-subscribe';
 import { buildShopifyReauthorizeUrl } from '@/lib/server/billing/shopify-offline-token-refresh';
-import { env } from '@/lib/config/env';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -19,6 +11,8 @@ const bodySchema = z.object({
   shopDomain: z.string().optional(),
   planKey: z.enum(['basic', 'business']),
   tierId: z.string().optional(),
+  host: z.string().optional(),
+  embedded: z.string().optional(),
 });
 
 export async function POST(request: Request) {
@@ -26,51 +20,31 @@ export async function POST(request: Request) {
   try {
     const body = bodySchema.parse(await request.json());
     shopDomain = extractShopDomain(request, body.shopDomain);
-    const appUrl = env.NEXT_PUBLIC_APP_URL;
-    const returnUrl = new URL('/plans', appUrl);
-    returnUrl.searchParams.set('shop', shopDomain);
-    returnUrl.searchParams.set('billing', 'return');
 
-    if (body.planKey === 'basic') {
-      const result = await startPlanSubscriptionCheckout({
-        shopDomain,
-        planKey: 'basic',
-        planName: basicCheckoutPlanName(),
-        priceUsd: BASIC_PLAN.priceUsd,
-        returnUrl: returnUrl.toString(),
-        impressionLimit: BASIC_PLAN.impressions,
-        tierId: null,
-      });
+    const result = await runPlanSubscribe({
+      shopDomain,
+      planKey: body.planKey,
+      tierId: body.tierId,
+      host: body.host,
+      embedded: body.embedded,
+    });
 
+    if (result.autoActivated) {
+      const billing = await activateSubscribedPlan(shopDomain, result);
       return NextResponse.json({
         ok: true,
-        confirmationUrl: result.confirmationUrl,
+        activated: true,
+        confirmationUrl: null,
         subscriptionId: result.subscriptionId,
-        billing: result.billing,
+        billing,
         test: result.test,
       });
     }
-
-    const tier = getBusinessTier(body.tierId || '');
-    if (!tier) {
-      return NextResponse.json({ ok: false, error: 'Invalid business tier.' }, { status: 400 });
-    }
-
-    const result = await startPlanSubscriptionCheckout({
-      shopDomain,
-      planKey: 'business',
-      planName: `Push Eagle Business (${tier.impressions.toLocaleString()} impressions)`,
-      priceUsd: tier.priceUsd,
-      returnUrl: returnUrl.toString(),
-      impressionLimit: tier.impressions,
-      tierId: tier.id,
-    });
 
     return NextResponse.json({
       ok: true,
       confirmationUrl: result.confirmationUrl,
       subscriptionId: result.subscriptionId,
-      billing: result.billing,
       test: result.test,
     });
   } catch (error) {

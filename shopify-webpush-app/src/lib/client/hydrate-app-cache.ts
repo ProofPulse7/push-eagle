@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 
+import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { queryKeys } from '@/lib/client/query-keys';
 
 export type AppBootstrapPayload = {
@@ -87,9 +88,7 @@ export const hydrateAppCache = (
     });
   }
 
-  const now = new Date();
-  const from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const to = now.toISOString();
+  const defaultRange = resolveAnalyticsDateRange();
 
   queryClient.setQueryData(queryKeys.dashboardSummary(shopDomain), {
     ok: true,
@@ -98,13 +97,16 @@ export const hydrateAppCache = (
     subscriberKpis: payload.subscriberKpis,
   });
 
-  queryClient.setQueryData(queryKeys.campaignStats(shopDomain, from, to), {
-    ok: true,
-    stats: payload.campaignStats,
-  });
+  queryClient.setQueryData(
+    queryKeys.campaignStats(shopDomain, defaultRange.fromIso, defaultRange.toIso),
+    {
+      ok: true,
+      stats: payload.campaignStats,
+    },
+  );
 
-  const analyticsFrom = payload.analyticsFrom ?? from;
-  const analyticsTo = payload.analyticsTo ?? to;
+  const analyticsFrom = payload.analyticsFrom ?? defaultRange.fromIso;
+  const analyticsTo = payload.analyticsTo ?? defaultRange.toIso;
   if (payload.analyticsStats) {
     queryClient.setQueryData(queryKeys.analyticsStats(shopDomain, analyticsFrom, analyticsTo), {
       ok: true,

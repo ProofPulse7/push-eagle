@@ -58,8 +58,9 @@ export function SubscribersTable() {
 
     return (
         <div>
+            <div className="max-h-[min(70vh,720px)] overflow-auto rounded-md border">
             <Table>
-                <TableHeader>
+                <TableHeader className="sticky top-0 z-10 bg-muted">
                     <TableRow className="bg-muted border-b hover:bg-muted">
                         <TableHead className="font-bold text-base py-4 text-foreground">Subscriber</TableHead>
                         <TableHead className="font-bold text-base py-4 text-foreground">Subscriber ID</TableHead>
@@ -77,7 +78,11 @@ export function SubscribersTable() {
                 </TableHeader>
                 <TableBody>
                     {visibleSubscribers.map((subscriber, index) => (
-                        <TableRow key={`${subscriber.subscriberId}-${index}`} className={cn(index % 2 === 0 ? 'bg-card' : 'bg-muted/50')}>
+                        <TableRow
+                            key={`${subscriber.subscriberId}-${index}`}
+                            className={cn(index % 2 === 0 ? 'bg-card' : 'bg-muted/50')}
+                            style={{ contentVisibility: 'auto', containIntrinsicSize: '0 52px' }}
+                        >
                             <TableCell className="font-medium">{subscriber.subscriber}</TableCell>
                             <TableCell>{subscriber.subscriberId}</TableCell>
                             <TableCell>{subscriber.createdAt}</TableCell>
@@ -96,6 +101,7 @@ export function SubscribersTable() {
                     )}
                 </TableBody>
             </Table>
+            </div>
             <div className="text-center mt-4">
                 {hasNextPage && (
                     <Button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>

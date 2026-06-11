@@ -24,6 +24,12 @@ export const redirectToShopifyConnectIfNeeded = async (input: {
     return;
   }
 
+  // Embedded admin loads must not server-redirect (causes infinite reload in the apps shell).
+  if (pickParam(searchParams.embedded) === '1') {
+    await ensureShopifyOfflineAccessToken(shopDomain);
+    return;
+  }
+
   if (pickParam(searchParams.from_sso) === '1' || pickParam(searchParams.oauth_attempt) === '1') {
     await ensureShopifyOfflineAccessToken(shopDomain);
     return;
