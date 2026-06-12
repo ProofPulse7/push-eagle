@@ -15,6 +15,7 @@ database.sqlite
 
 .env
 .env.*
+!.env.example
 
 # Firebase service account keys
 *firebase-adminsdk*.json

@@ -31,6 +31,58 @@ Shopify Admin → push-eagle-dashboard.vercel.app/dashboard  (web app UI)
 
 Both apps share the **same Neon database** (`public.Session`, `shopify_store_credentials`, merchants).
 
+## Neon database migration (new Neon project)
+
+**Code change is not required.** Both apps read Postgres only from environment variables. Point them at the new Neon project and initialize schema once.
+
+### Environment variables to update (Vercel)
+
+| Project | Variable | Value |
+|---------|----------|--------|
+| `push-eagle` (Remix) | `DATABASE_URL` | New Neon pooled connection string (`postgresql://…/neondb?sslmode=require`) |
+| `push-eagle-dashboard` (Next.js) | `NEON_DATABASE_URL` | **Same URL** as Remix `DATABASE_URL` |
+| `push-eagle-dashboard` (Next.js) | `SHOPIFY_SESSION_DATABASE_URL` | Same URL (optional; auto-derived from `NEON_DATABASE_URL` if omitted) |
+| `push-eagle-dashboard` (Next.js) | `DATABASE_URL` | Optional duplicate of `NEON_DATABASE_URL` |
+
+Use the **pooler** host (`…-pooler…neon.tech`). Prefer `sslmode=require` only. If a client fails with `channel_binding=require`, remove that query param.
+
+**Do not** wrap URLs in quotes in Vercel.
+
+### One-time schema setup on a fresh database
+
+The dashboard creates all business tables automatically on first API use via `ensureSchema()` in `store.ts`. For a controlled init before deploy:
+
+```bash
+cd shopify-webpush-app
+NEON_DATABASE_URL="postgresql://USER:PASS@HOST/neondb?sslmode=require" npm run db:init-schema
+```
+
+The Remix app creates the OAuth `Session` table on deploy/build via Prisma:
+
+```bash
+# From repo root (push-eagle)
+DATABASE_URL="postgresql://USER:PASS@HOST/neondb?sslmode=require" npx prisma db push
+```
+
+Or deploy Remix to Vercel once after setting `DATABASE_URL` — the build runs `prisma db push`.
+
+`shopify_store_credentials` is created automatically on first OAuth/billing sync (lazy DDL).
+
+### Data migration (important)
+
+Updating env vars alone gives you an **empty** database. Existing merchants, subscribers, campaigns, and analytics **stay on the old Neon project** unless you migrate data.
+
+To move production data: use Neon branch copy, `pg_dump` / `pg_restore`, or Neon’s logical replication between projects. After cutover, revoke or delete the old project so nothing still points at it.
+
+### Local development
+
+Set the same URL in:
+
+- Repo root `.env` → `DATABASE_URL` (Remix / Prisma)
+- `shopify-webpush-app/.env.local` → `NEON_DATABASE_URL`
+
+Never commit real connection strings to git.
+
 ## Local development (`shopify app dev`)
 
 Running `shopify app dev` on your PC:

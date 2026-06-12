@@ -3,11 +3,12 @@ import dotenv from 'dotenv';
 import { neon } from '@neondatabase/serverless';
 
 dotenv.config({ path: '.env.local' });
+dotenv.config({ path: '../.env' });
 
-const connectionString = process.env.NEON_DATABASE_URL;
+const connectionString = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
 
 if (!connectionString) {
-  throw new Error('Missing NEON_DATABASE_URL in .env.local');
+  throw new Error('Missing NEON_DATABASE_URL or DATABASE_URL in .env.local or root .env');
 }
 
 const sql = neon(connectionString);
