@@ -27,18 +27,22 @@ export const recordPixelEvent = async (event: PixelEvent): Promise<string> => {
   const eventId = randomUUID();
 
   if (isD1EventsEnabled()) {
-    await insertD1PixelEvent({
-      id: eventId,
-      shopDomain: event.shopDomain,
-      externalId: event.externalId,
-      eventType: event.eventType,
-      pageUrl: event.pageUrl,
-      productId: event.productId,
-      cartToken: event.cartToken,
-      clientId: event.clientId,
-      metadata: event.metadata,
-    });
-    return eventId;
+    try {
+      await insertD1PixelEvent({
+        id: eventId,
+        shopDomain: event.shopDomain,
+        externalId: event.externalId,
+        eventType: event.eventType,
+        pageUrl: event.pageUrl,
+        productId: event.productId,
+        cartToken: event.cartToken,
+        clientId: event.clientId,
+        metadata: event.metadata,
+      });
+      return eventId;
+    } catch (error) {
+      console.error('[d1-events] pixel write failed, falling back to Neon', error);
+    }
   }
 
   const sql = getNeonSql();

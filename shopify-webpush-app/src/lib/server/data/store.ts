@@ -4847,16 +4847,33 @@ export const recordSubscriberActivity = async (input: {
 
   const { insertD1ActivityEvent, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
   if (isD1EventsEnabled()) {
-    await insertD1ActivityEvent({
-      id: eventId,
-      shopDomain: input.shopDomain,
-      externalId: input.externalId,
-      eventType: input.eventType,
-      pageUrl: input.pageUrl,
-      productId: input.productId,
-      cartToken: input.cartToken,
-      metadata: input.metadata,
-    });
+    try {
+      await insertD1ActivityEvent({
+        id: eventId,
+        shopDomain: input.shopDomain,
+        externalId: input.externalId,
+        eventType: input.eventType,
+        pageUrl: input.pageUrl,
+        productId: input.productId,
+        cartToken: input.cartToken,
+        metadata: input.metadata,
+      });
+    } catch (error) {
+      console.error('[d1-events] activity write failed, falling back to Neon', error);
+      await sql`
+        INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
+        VALUES (
+          ${eventId},
+          ${input.shopDomain},
+          ${input.externalId},
+          ${input.eventType},
+          ${input.pageUrl ?? null},
+          ${input.productId ?? null},
+          ${input.cartToken ?? null},
+          ${JSON.stringify(input.metadata ?? {})}::jsonb
+        )
+      `;
+    }
   } else {
     await sql`
       INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
