@@ -24,8 +24,22 @@ export function AppBootstrapLoader({ children }: { children: React.ReactNode }) 
       void queryClient.invalidateQueries({ queryKey: ['pe', shop] });
     };
 
-    const interval = window.setInterval(refresh, 5 * 60 * 1000);
-    return () => window.clearInterval(interval);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refresh();
+      }
+    };
+
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisible);
+
+    const interval = window.setInterval(refresh, 15 * 60 * 1000);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [queryClient, shop]);
 
   useEffect(() => {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { sendCampaign } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -11,19 +12,40 @@ const schema = z.object({
   campaignId: z.string().min(1),
   shopDomain: z.string().optional(),
   maxBatches: z.number().int().min(1).max(2000).optional(),
+  async: z.boolean().optional(),
 });
 
 export async function POST(request: Request) {
   try {
     const body = schema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
-    const result = await sendCampaign(shopDomain, body.campaignId, {
-      maxBatches: body.maxBatches ?? 20,
-    });
+    const maxBatches = body.maxBatches ?? 20;
+    const runAsync = body.async !== false;
+
+    if (runAsync) {
+      deferAfterResponse(async () => {
+        await sendCampaign(shopDomain, body.campaignId, { maxBatches });
+      });
+
+      return NextResponse.json({
+        ok: true,
+        campaignId: body.campaignId,
+        async: true,
+        queued: true,
+        completed: false,
+        successCount: 0,
+        recipientCount: null,
+        remainingRecipients: null,
+        message: 'Campaign delivery started in the background.',
+      });
+    }
+
+    const result = await sendCampaign(shopDomain, body.campaignId, { maxBatches });
 
     return NextResponse.json({
       ok: true,
       campaignId: body.campaignId,
+      async: false,
       ...result,
     });
   } catch (error) {

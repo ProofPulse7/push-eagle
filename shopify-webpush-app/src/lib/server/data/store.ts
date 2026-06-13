@@ -841,6 +841,24 @@ const ensureSchema = async () => {
         metadata JSONB
       )`;
 
+      await sql`CREATE TABLE IF NOT EXISTS merchant_daily_stats (
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        stat_date DATE NOT NULL,
+        campaign_impressions BIGINT NOT NULL DEFAULT 0,
+        campaign_clicks BIGINT NOT NULL DEFAULT 0,
+        campaign_revenue_cents BIGINT NOT NULL DEFAULT 0,
+        automation_impressions BIGINT NOT NULL DEFAULT 0,
+        automation_clicks BIGINT NOT NULL DEFAULT 0,
+        automation_revenue_cents BIGINT NOT NULL DEFAULT 0,
+        new_subscribers BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (shop_domain, stat_date)
+      )`;
+
+      await sql`ALTER TABLE segments ADD COLUMN IF NOT EXISTS estimated_subscriber_count INTEGER`;
+      await sql`ALTER TABLE segments ADD COLUMN IF NOT EXISTS estimated_count_at TIMESTAMPTZ`;
+      await sql`ALTER TABLE automation_jobs ADD COLUMN IF NOT EXISTS queue_enqueued_at TIMESTAMPTZ`;
+
       await sql`CREATE TABLE IF NOT EXISTS campaign_schedules (
         id TEXT PRIMARY KEY,
         campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -978,9 +996,12 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_order ON shopify_order_items(shop_domain, order_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_product ON shopify_order_items(shop_domain, product_title)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_segments_shop_created ON segments(shop_domain, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_merchant_daily_stats_shop_date ON merchant_daily_stats(shop_domain, stat_date DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_processed_at ON ingestion_jobs(processed_at) WHERE status = 'processed'`;
       await sql`CREATE INDEX IF NOT EXISTS idx_media_assets_shop_created ON media_assets(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_rules_shop_rule ON automation_rules(shop_domain, rule_key)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_due ON automation_jobs(shop_domain, status, due_at)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_queue_promote ON automation_jobs(status, queue_enqueued_at, due_at) WHERE status = 'pending'`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_payload_external ON automation_jobs(shop_domain, ((payload ->> 'externalId'))) WHERE (payload ->> 'externalId') IS NOT NULL`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_jobs_dedupe ON automation_jobs(shop_domain, dedupe_key) WHERE dedupe_key IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_external_created ON subscriber_activity_events(shop_domain, external_id, created_at DESC)`;
@@ -2561,6 +2582,82 @@ const resolveAutomationExternalIds = async (input: {
 
   const sql = getNeonSql();
   const windowStart = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const windowStartIso = windowStart.toISOString();
+
+  const { isD1EventsEnabled, queryD1TrackingRowsForAutomation } = await import('@/lib/server/integrations/d1-events');
+  if (isD1EventsEnabled()) {
+    const d1Rows = await queryD1TrackingRowsForAutomation({
+      shopDomain: input.shopDomain,
+      cartToken: normalizedCartToken,
+      clientId: normalizedClientId,
+      windowStartIso,
+    });
+
+    const cartRows = d1Rows;
+    const cartRelatedClientIds = Array.from(
+      new Set(
+        cartRows
+          .map((row) => (row.client_id ? String(row.client_id).trim() : ''))
+          .filter((value) => value.length > 0),
+      ),
+    );
+
+    const fallbackClientIds = Array.from(
+      new Set(
+        [normalizedClientId, ...cartRelatedClientIds].filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    const externalIdsFromTracking = Array.from(
+      new Set(
+        cartRows
+          .map((row) => String(row.external_id ?? '').trim())
+          .filter((value) => value.length > 0),
+      ),
+    );
+
+    const aliasRows = externalIdAliases.length > 0
+      ? await sql`
+        SELECT DISTINCT s.external_id
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id
+        WHERE s.shop_domain = ${input.shopDomain}
+          AND s.external_id = ANY(${externalIdAliases})
+          AND t.shop_domain = ${input.shopDomain}
+          AND t.status = 'active'
+        LIMIT 100
+      `
+      : [];
+
+    const clientIdSubscriberFallback =
+      fallbackClientIds.length > 0 && aliasRows.length === 0
+        ? await sql`
+          SELECT DISTINCT s.external_id
+          FROM subscribers s
+          JOIN subscriber_tokens t ON t.subscriber_id = s.id
+          WHERE s.shop_domain = ${input.shopDomain}
+            AND t.shop_domain = ${input.shopDomain}
+            AND t.status = 'active'
+            AND (
+              COALESCE(s.device_context ->> 'clientId', '') = ANY(${fallbackClientIds})
+              OR COALESCE(s.device_context ->> 'shopifyAnalyticsClientId', '') = ANY(${fallbackClientIds})
+            )
+          LIMIT 100
+        `
+        : [];
+
+    const resolvedExternalIds = Array.from(
+      new Set([
+        ...externalIdsFromTracking,
+        ...externalIdAliases,
+        ...aliasRows.map((row) => String(row.external_id)),
+        ...clientIdSubscriberFallback.map((row) => String(row.external_id)),
+        ...(normalizedExternalId ? [normalizedExternalId] : []),
+      ].filter(Boolean)),
+    );
+
+    return resolvedExternalIds;
+  }
 
   const cartRows = normalizedCartToken
     ? await sql`
@@ -2949,6 +3046,135 @@ export const pruneAutomationData = async () => {
   `;
 };
 
+export const rollupMerchantDailyStats = async () => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const statDate = yesterday.toISOString().slice(0, 10);
+  const dayStart = new Date(`${statDate}T00:00:00.000Z`);
+  const dayEnd = new Date(`${statDate}T23:59:59.999Z`);
+
+  const rows = await sql`
+    INSERT INTO merchant_daily_stats (
+      shop_domain,
+      stat_date,
+      campaign_impressions,
+      campaign_clicks,
+      campaign_revenue_cents,
+      automation_impressions,
+      automation_clicks,
+      automation_revenue_cents,
+      new_subscribers,
+      updated_at
+    )
+    SELECT
+      m.shop_domain,
+      ${statDate}::date,
+      COALESCE(campaign_stats.impressions, 0)::BIGINT,
+      COALESCE(campaign_stats.clicks, 0)::BIGINT,
+      COALESCE(campaign_stats.revenue_cents, 0)::BIGINT,
+      COALESCE(auto_stats.impressions, 0)::BIGINT,
+      COALESCE(auto_click_stats.clicks, 0)::BIGINT,
+      (
+        COALESCE(auto_stats.revenue_cents, 0) + COALESCE(auto_click_stats.revenue_cents, 0)
+      )::BIGINT,
+      COALESCE(subscriber_stats.new_subscribers, 0)::BIGINT,
+      NOW()
+    FROM merchants m
+    LEFT JOIN LATERAL (
+      SELECT
+        COALESCE(SUM(delivery_count), 0) AS impressions,
+        COALESCE(SUM(click_count), 0) AS clicks,
+        COALESCE(SUM(revenue_cents), 0) AS revenue_cents
+      FROM campaigns
+      WHERE shop_domain = m.shop_domain
+        AND created_at >= ${dayStart}
+        AND created_at <= ${dayEnd}
+    ) campaign_stats ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*) AS impressions,
+        COALESCE(SUM(revenue_cents), 0) AS revenue_cents
+      FROM automation_deliveries
+      WHERE shop_domain = m.shop_domain
+        AND delivered_at >= ${dayStart}
+        AND delivered_at <= ${dayEnd}
+    ) auto_stats ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*) AS clicks,
+        COALESCE(SUM(revenue_cents), 0) AS revenue_cents
+      FROM automation_clicks
+      WHERE shop_domain = m.shop_domain
+        AND clicked_at >= ${dayStart}
+        AND clicked_at <= ${dayEnd}
+    ) auto_click_stats ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*) AS new_subscribers
+      FROM subscribers
+      WHERE shop_domain = m.shop_domain
+        AND created_at >= ${dayStart}
+        AND created_at <= ${dayEnd}
+    ) subscriber_stats ON TRUE
+    WHERE m.uninstalled_at IS NULL
+    ON CONFLICT (shop_domain, stat_date) DO UPDATE SET
+      campaign_impressions = EXCLUDED.campaign_impressions,
+      campaign_clicks = EXCLUDED.campaign_clicks,
+      campaign_revenue_cents = EXCLUDED.campaign_revenue_cents,
+      automation_impressions = EXCLUDED.automation_impressions,
+      automation_clicks = EXCLUDED.automation_clicks,
+      automation_revenue_cents = EXCLUDED.automation_revenue_cents,
+      new_subscribers = EXCLUDED.new_subscribers,
+      updated_at = NOW()
+    RETURNING shop_domain
+  `;
+
+  return {
+    statDate,
+    shopsUpdated: rows.length,
+  };
+};
+
+export const runRetentionMaintenance = async () => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  await pruneAutomationData();
+
+  const ingestionDeleted = await sql`
+    DELETE FROM ingestion_jobs
+    WHERE status = 'processed'
+      AND processed_at IS NOT NULL
+      AND processed_at < NOW() - INTERVAL '7 days'
+    RETURNING id
+  `;
+
+  const heartbeatsDeleted = await sql`
+    DELETE FROM cron_heartbeats
+    WHERE started_at < NOW() - INTERVAL '7 days'
+    RETURNING id
+  `;
+
+  const { archiveOldPixelEvents } = await import('@/lib/server/automation/pixel-events');
+  const pixelArchive = await archiveOldPixelEvents(14, 2000);
+
+  const { pruneD1TrackingEvents, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
+  const d1Prune = isD1EventsEnabled() ? await pruneD1TrackingEvents(14, 2000) : null;
+
+  const now = new Date();
+  const dailyRollup =
+    now.getUTCHours() === 3 && now.getUTCMinutes() === 0 ? await rollupMerchantDailyStats() : null;
+
+  return {
+    ingestionJobsDeleted: ingestionDeleted.length,
+    heartbeatsDeleted: heartbeatsDeleted.length,
+    pixelArchive,
+    d1Prune,
+    dailyRollup,
+  };
+};
+
 export const enqueueAutomationJob = async (input: {
   shopDomain: string;
   ruleKey: AutomationRuleKey;
@@ -2989,7 +3215,13 @@ export const enqueueAutomationJob = async (input: {
     RETURNING id
   `;
 
-  return rows[0] ? String(rows[0].id) : null;
+  const insertedId = rows[0] ? String(rows[0].id) : null;
+  if (insertedId) {
+    const { queueAutomationJobAfterInsert } = await import('@/lib/server/automation/queue-scheduler');
+    queueAutomationJobAfterInsert(insertedId, dueAt);
+  }
+
+  return insertedId;
 };
 
 export const startCronHeartbeat = async (jobName: string, metadata?: Record<string, unknown> | null) => {
@@ -3360,6 +3592,10 @@ export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIn
     WHERE j.status = 'pending'
       AND j.due_at <= NOW()
       AND (
+        j.queue_enqueued_at IS NULL
+        OR j.due_at <= NOW() - INTERVAL '90 seconds'
+      )
+      AND (
         ${safeShardCount} = 1
         OR MOD(ABS(hashtext(j.id)), ${safeShardCount}) = ${safeShardIndex}
       )
@@ -3409,6 +3645,10 @@ export const listDueAutomationJobsByRule = async (
     WHERE j.status = 'pending'
       AND j.rule_key = ${ruleKey}
       AND j.due_at <= NOW()
+      AND (
+        j.queue_enqueued_at IS NULL
+        OR j.due_at <= NOW() - INTERVAL '90 seconds'
+      )
       AND (
         ${safeShardCount} = 1
         OR MOD(ABS(hashtext(j.id)), ${safeShardCount}) = ${safeShardIndex}
@@ -3463,6 +3703,16 @@ export const processDueAutomationJobsForShop = async (shopDomain: string, limit 
     failedCount: processed.filter((item) => !item.processed && item.error).length,
     processed,
   };
+};
+
+const rescheduleAutomationJobAfterDefer = async (jobId: string, dueAt: Date) => {
+  const { clearAutomationJobQueueMarker, rescheduleAutomationJobInQueue } = await import(
+    '@/lib/server/automation/queue-scheduler'
+  );
+  await clearAutomationJobQueueMarker(jobId);
+  void rescheduleAutomationJobInQueue(jobId, dueAt).catch((error) => {
+    console.error('[automation-queue] defer reschedule failed', jobId, error);
+  });
 };
 
 export const processAutomationJob = async (jobId: string) => {
@@ -3578,14 +3828,17 @@ export const processAutomationJob = async (jobId: string) => {
         WHERE id = ${jobId}
       `;
     } else {
+      const deferredDueAt = new Date(Date.now() + 60_000);
       await sql`
         UPDATE automation_jobs
         SET status = 'pending',
             error_message = ${errorMessage},
-            due_at = NOW() + INTERVAL '1 minute',
+            due_at = ${deferredDueAt},
+            queue_enqueued_at = NULL,
             updated_at = NOW()
         WHERE id = ${jobId}
       `;
+      await rescheduleAutomationJobAfterDefer(jobId, deferredDueAt);
     }
     return { processed: false, error: errorMessage };
   }
@@ -3798,14 +4051,17 @@ export const processAutomationJob = async (jobId: string) => {
 
           if (previousPendingRows[0]?.id) {
             const waitMessage = `Waiting for previous welcome step (${previousStepKey}) before sending ${payloadStepKey}.`;
+            const deferredDueAt = new Date(Date.now() + 90_000);
             await sql`
               UPDATE automation_jobs
               SET status = 'pending',
                   error_message = ${waitMessage},
-                  due_at = NOW() + INTERVAL '90 seconds',
+                  due_at = ${deferredDueAt},
+                  queue_enqueued_at = NULL,
                   updated_at = NOW()
               WHERE id = ${jobId}
             `;
+            await rescheduleAutomationJobAfterDefer(jobId, deferredDueAt);
             return { processed: false, error: waitMessage };
           }
         }
@@ -4136,14 +4392,17 @@ export const processAutomationJob = async (jobId: string) => {
 
           if ((previousStepStatus === 'pending' && !previousStepLooksStuck) || previousStepStatus === 'processing' || previousStepStatus === 'sent') {
             const waitMessage = `Waiting for previous cart reminder step (${previousStepKey}) before sending ${payloadStepKey}.`;
+            const deferredDueAt = new Date(Date.now() + 60_000);
             await sql`
               UPDATE automation_jobs
               SET status = 'pending',
                   error_message = ${waitMessage},
-                  due_at = NOW() + INTERVAL '1 minute',
+                  due_at = ${deferredDueAt},
+                  queue_enqueued_at = NULL,
                   updated_at = NOW()
               WHERE id = ${jobId}
             `;
+            await rescheduleAutomationJobAfterDefer(jobId, deferredDueAt);
             return { processed: false, error: waitMessage };
           }
 
@@ -4547,15 +4806,23 @@ export const processAutomationJob = async (jobId: string) => {
     return { processed: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to send automation message.';
-    const retryInterval = claim.rule_key === 'welcome_subscriber' ? '1 minute' : '5 minutes';
+    const retryMinutes = claim.rule_key === 'welcome_subscriber' ? 1 : 5;
+    const shouldFail = Number(claim.attempts ?? 0) >= 5;
+    const deferredDueAt = shouldFail ? null : new Date(Date.now() + retryMinutes * 60_000);
+
     await sql`
       UPDATE automation_jobs
       SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
           error_message = ${message},
-          due_at = CASE WHEN attempts >= 5 THEN due_at ELSE NOW() + ${retryInterval}::interval END,
+          due_at = CASE WHEN attempts >= 5 THEN due_at ELSE ${deferredDueAt} END,
+          queue_enqueued_at = NULL,
           updated_at = NOW()
       WHERE id = ${jobId}
     `;
+
+    if (deferredDueAt) {
+      await rescheduleAutomationJobAfterDefer(jobId, deferredDueAt);
+    }
 
     return { processed: false, error: message };
   }
@@ -4577,19 +4844,34 @@ export const recordSubscriberActivity = async (input: {
   await ensureAutomationRules(input.shopDomain);
 
   const eventId = randomUUID();
-  await sql`
-    INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
-    VALUES (
-      ${eventId},
-      ${input.shopDomain},
-      ${input.externalId},
-      ${input.eventType},
-      ${input.pageUrl ?? null},
-      ${input.productId ?? null},
-      ${input.cartToken ?? null},
-      ${JSON.stringify(input.metadata ?? {})}::jsonb
-    )
-  `;
+
+  const { insertD1ActivityEvent, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
+  if (isD1EventsEnabled()) {
+    await insertD1ActivityEvent({
+      id: eventId,
+      shopDomain: input.shopDomain,
+      externalId: input.externalId,
+      eventType: input.eventType,
+      pageUrl: input.pageUrl,
+      productId: input.productId,
+      cartToken: input.cartToken,
+      metadata: input.metadata,
+    });
+  } else {
+    await sql`
+      INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
+      VALUES (
+        ${eventId},
+        ${input.shopDomain},
+        ${input.externalId},
+        ${input.eventType},
+        ${input.pageUrl ?? null},
+        ${input.productId ?? null},
+        ${input.cartToken ?? null},
+        ${JSON.stringify(input.metadata ?? {})}::jsonb
+      )
+    `;
+  }
 
   const queueRule = async (ruleKey: AutomationRuleKey, fallbackDelayMinutes: number, dedupeKeyBase: string, payload: AutomationJobPayload) => {
     const rule = await getRuleConfig(input.shopDomain, ruleKey);
@@ -5576,6 +5858,15 @@ export const createSegment = async (input: CreateSegmentInput) => {
   const resolvedSegmentId = String(rows[0]?.id ?? segmentId);
 
   const subscriberIds = await resolveSubscriberIdsFromConditionGroups(input.shopDomain, input.conditionGroups || []);
+  await sql`
+    UPDATE segments
+    SET
+      estimated_subscriber_count = ${subscriberIds.size},
+      estimated_count_at = NOW()
+    WHERE id = ${resolvedSegmentId}
+      AND shop_domain = ${input.shopDomain}
+  `;
+
   return {
     id: resolvedSegmentId,
     name: input.name,
@@ -5591,13 +5882,59 @@ export const estimateSegmentAudience = async (shopDomain: string, conditionGroup
   return subscriberIds.size;
 };
 
-export const listSegments = async (shopDomain: string): Promise<SegmentSummary[]> => {
+const SEGMENT_COUNT_STALE_MS = 60 * 60 * 1000;
+
+export const refreshSegmentEstimatedCount = async (shopDomain: string, segmentId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT condition_groups
+    FROM segments
+    WHERE id = ${segmentId}
+      AND shop_domain = ${shopDomain}
+    LIMIT 1
+  `;
+
+  const row = rows[0];
+  if (!row) {
+    return 0;
+  }
+
+  const groups = parseConditionGroups(row.condition_groups);
+  const subscriberIds = await resolveSubscriberIdsFromConditionGroups(shopDomain, groups);
+  const count = subscriberIds.size;
+
+  await sql`
+    UPDATE segments
+    SET
+      estimated_subscriber_count = ${count},
+      estimated_count_at = NOW()
+    WHERE id = ${segmentId}
+      AND shop_domain = ${shopDomain}
+  `;
+
+  return count;
+};
+
+export type ListSegmentsOptions = {
+  preferCache?: boolean;
+  staleAfterMs?: number;
+};
+
+export const listSegments = async (
+  shopDomain: string,
+  options?: ListSegmentsOptions,
+): Promise<SegmentSummary[]> => {
   await ensureSchema();
   const sql = getNeonSql();
   await ensureMerchant(shopDomain);
 
+  const preferCache = Boolean(options?.preferCache);
+  const staleAfterMs = options?.staleAfterMs ?? SEGMENT_COUNT_STALE_MS;
+
   const rows = await sql`
-    SELECT id, name, condition_groups, created_at
+    SELECT id, name, condition_groups, created_at, estimated_subscriber_count, estimated_count_at
     FROM segments
     WHERE shop_domain = ${shopDomain}
     ORDER BY created_at DESC
@@ -5606,12 +5943,23 @@ export const listSegments = async (shopDomain: string): Promise<SegmentSummary[]
   const result: SegmentSummary[] = [];
   for (const row of rows) {
     const groups = parseConditionGroups(row.condition_groups);
-    const ids = await resolveSubscriberIdsFromConditionGroups(shopDomain, groups);
+    const cachedCount =
+      row.estimated_subscriber_count == null ? null : Number(row.estimated_subscriber_count);
+    const countAgeMs = row.estimated_count_at
+      ? Date.now() - new Date(String(row.estimated_count_at)).getTime()
+      : Number.POSITIVE_INFINITY;
+    const cacheIsFresh = cachedCount != null && Number.isFinite(countAgeMs) && countAgeMs <= staleAfterMs;
+
+    let subscriberCount = cachedCount ?? 0;
+    if (!preferCache && !cacheIsFresh) {
+      subscriberCount = await refreshSegmentEstimatedCount(shopDomain, String(row.id));
+    }
+
     result.push({
       id: String(row.id),
       name: String(row.name),
       type: 'Dynamic',
-      subscriberCount: ids.size,
+      subscriberCount,
       criteria: buildCriteriaSummary(groups),
       createdAt: row.created_at ? String(row.created_at) : new Date().toISOString(),
     });

@@ -7,21 +7,36 @@ const toInt = (value, fallback, min, max) => {
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 };
 
-const buildShardUrl = (baseUrl, params) => {
+const isAuthorized = (request, env) => {
+  const secret = String(env.CRON_SECRET ?? '').trim();
+  if (!secret) {
+    return false;
+  }
+
+  const bearer = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
+  const xSecret = request.headers.get('x-automation-secret') ?? '';
+  return bearer === secret || xSecret === secret;
+};
+
+const buildTickUrl = (env) => {
+  const baseUrl = env.CRON_TICK_URL || `${env.APP_URL}/api/cron/tick`;
   const url = new URL(baseUrl);
-  Object.entries(params).forEach(([key, value]) => {
-    url.searchParams.set(key, String(value));
-  });
+
+  url.searchParams.set('campaignShards', String(toInt(env.CAMPAIGN_SHARDS, 4, 1, 64)));
+  url.searchParams.set('automationShards', String(toInt(env.AUTOMATION_SHARDS, 6, 1, 64)));
+  url.searchParams.set('ingestionShards', String(toInt(env.INGESTION_SHARDS, 4, 1, 64)));
+  url.searchParams.set('maxCampaigns', String(toInt(env.MAX_CAMPAIGNS, 25, 1, 250)));
+  url.searchParams.set('maxBatches', String(toInt(env.MAX_BATCHES, 20, 1, 2000)));
+  url.searchParams.set('maxAutomationJobs', String(toInt(env.MAX_AUTOMATION_JOBS, 200, 1, 2000)));
+  url.searchParams.set('maxAutomationConcurrent', String(toInt(env.MAX_AUTOMATION_CONCURRENT, 80, 1, 200)));
+  url.searchParams.set('maxIngestionJobs', String(toInt(env.MAX_INGESTION_JOBS, 1000, 1, 5000)));
+  url.searchParams.set('maxIngestionConcurrent', String(toInt(env.MAX_INGESTION_CONCURRENT, 100, 1, 200)));
+
   return url.toString();
 };
 
-const runCampaignShard = async (env, shardIndex, shardCount, maxCampaigns, maxBatches) => {
-  const url = buildShardUrl(env.PROCESS_CAMPAIGNS_URL, {
-    shardIndex,
-    shardCount,
-    maxCampaigns,
-    maxBatches,
-  });
+const runCronTick = async (env) => {
+  const url = buildTickUrl(env);
 
   const response = await fetch(url, {
     method: 'GET',
@@ -30,7 +45,7 @@ const runCampaignShard = async (env, shardIndex, shardCount, maxCampaigns, maxBa
       'x-automation-secret': env.CRON_SECRET,
       'x-vercel-cron': '1',
       'user-agent': 'vercel-cron/1.0',
-      'x-worker-id': `cf-${shardIndex}`,
+      'x-worker-id': 'cf-cron-tick',
     },
   });
 
@@ -43,192 +58,104 @@ const runCampaignShard = async (env, shardIndex, shardCount, maxCampaigns, maxBa
   }
 
   return {
-    jobType: 'campaigns',
-    shardIndex,
     ok: response.ok,
     status: response.status,
     payload,
   };
 };
 
-const runAutomationShard = async (env, shardIndex, shardCount, maxJobs) => {
-  const url = buildShardUrl(env.PROCESS_AUTOMATIONS_URL, {
-    shardIndex,
-    shardCount,
-    maxJobs,
-    maxConcurrent: toInt(env.MAX_AUTOMATION_CONCURRENT, 80, 1, 200),
-  });
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${env.CRON_SECRET}`,
-      'x-automation-secret': env.CRON_SECRET,
-      'x-vercel-cron': '1',
-      'user-agent': 'vercel-cron/1.0',
-      'x-worker-id': `cf-auto-${shardIndex}`,
-    },
-  });
-
-  const text = await response.text();
-  let payload = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch (_error) {
-    payload = { raw: text.slice(0, 500) };
+const enqueueAutomationJob = async (request, env) => {
+  if (!isAuthorized(request, env)) {
+    return new Response(JSON.stringify({ ok: false, error: 'Unauthorized.' }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
   }
 
-  return {
-    jobType: 'automations',
-    shardIndex,
-    ok: response.ok,
-    status: response.status,
-    payload,
-  };
+  if (!env.AUTOMATION_QUEUE) {
+    return new Response(JSON.stringify({ ok: false, error: 'Automation queue binding missing.' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  const body = await request.json();
+  const jobId = String(body?.jobId ?? '').trim();
+  const delaySeconds = toInt(body?.delaySeconds, 0, 0, 43200);
+
+  if (!jobId) {
+    return new Response(JSON.stringify({ ok: false, error: 'jobId is required.' }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  await env.AUTOMATION_QUEUE.send({ jobId }, { delaySeconds });
+
+  return new Response(JSON.stringify({ ok: true, jobId, delaySeconds }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
 };
 
-const runAbandonedCartShard = async (env, shardIndex, shardCount, maxJobs) => {
-  const baseUrl = env.PROCESS_ABANDONED_CART_URL || env.PROCESS_AUTOMATIONS_URL;
-  const url = buildShardUrl(baseUrl, {
-    shardIndex,
-    shardCount,
-    maxJobs,
-    maxConcurrent: toInt(env.MAX_ABANDONED_CART_CONCURRENT, 80, 1, 200),
-  });
+const processAutomationQueueMessage = async (message, env) => {
+  const jobId = String(message.body?.jobId ?? '').trim();
+  if (!jobId) {
+    message.ack();
+    return;
+  }
 
-  const response = await fetch(url, {
-    method: 'GET',
+  const response = await fetch(`${env.APP_URL}/api/cron/process-automation-job`, {
+    method: 'POST',
     headers: {
       Authorization: `Bearer ${env.CRON_SECRET}`,
       'x-automation-secret': env.CRON_SECRET,
       'x-vercel-cron': '1',
-      'user-agent': 'vercel-cron/1.0',
-      'x-worker-id': `cf-cart-${shardIndex}`,
+      'content-type': 'application/json',
+      'x-worker-id': 'cf-automation-queue',
     },
+    body: JSON.stringify({ jobId }),
   });
 
-  const text = await response.text();
-  let payload = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch (_error) {
-    payload = { raw: text.slice(0, 500) };
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Automation job processing failed (${response.status}).`);
   }
 
-  return {
-    jobType: 'abandoned-cart',
-    shardIndex,
-    ok: response.ok,
-    status: response.status,
-    payload,
-  };
-};
-
-const runIngestionShard = async (env, shardIndex, shardCount, limit) => {
-  const url = buildShardUrl(env.PROCESS_INGESTION_URL, {
-    shardIndex,
-    shardCount,
-    limit,
-    maxConcurrent: toInt(env.MAX_INGESTION_CONCURRENT, 100, 1, 200),
-  });
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${env.CRON_SECRET}`,
-      'x-automation-secret': env.CRON_SECRET,
-      'x-vercel-cron': '1',
-      'user-agent': 'vercel-cron/1.0',
-      'x-worker-id': `cf-ingest-${shardIndex}`,
-    },
-  });
-
-  const text = await response.text();
-  let payload = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch (_error) {
-    payload = { raw: text.slice(0, 500) };
-  }
-
-  return {
-    jobType: 'ingestion',
-    shardIndex,
-    ok: response.ok,
-    status: response.status,
-    payload,
-  };
+  message.ack();
 };
 
 export default {
   async scheduled(_event, env, ctx) {
-    const campaignShards = toInt(env.CAMPAIGN_SHARDS, 4, 1, 64);
-    const automationShards = toInt(env.AUTOMATION_SHARDS, 6, 1, 64);
-    const ingestionShards = toInt(env.INGESTION_SHARDS, 4, 1, 64);
-    const abandonedCartShards = toInt(env.ABANDONED_CART_SHARDS, 2, 1, 64);
-    const maxCampaigns = toInt(env.MAX_CAMPAIGNS, 25, 1, 250);
-    const maxBatches = toInt(env.MAX_BATCHES, 20, 1, 2000);
-    const maxAutomationJobs = toInt(env.MAX_AUTOMATION_JOBS, 200, 1, 2000);
-    const maxAbandonedCartJobs = toInt(env.MAX_ABANDONED_CART_JOBS, 200, 1, 2000);
-    const maxIngestionJobs = toInt(env.MAX_INGESTION_JOBS, 1000, 1, 5000);
-
-    const jobs = [];
-    for (let shardIndex = 0; shardIndex < campaignShards; shardIndex += 1) {
-      jobs.push(runCampaignShard(env, shardIndex, campaignShards, maxCampaigns, maxBatches));
-    }
-
-    for (let shardIndex = 0; shardIndex < automationShards; shardIndex += 1) {
-      jobs.push(runAutomationShard(env, shardIndex, automationShards, maxAutomationJobs));
-    }
-
-    for (let shardIndex = 0; shardIndex < abandonedCartShards; shardIndex += 1) {
-      jobs.push(runAbandonedCartShard(env, shardIndex, abandonedCartShards, maxAbandonedCartJobs));
-    }
-
-    for (let shardIndex = 0; shardIndex < ingestionShards; shardIndex += 1) {
-      jobs.push(runIngestionShard(env, shardIndex, ingestionShards, maxIngestionJobs));
-    }
-
-    ctx.waitUntil(Promise.allSettled(jobs));
+    ctx.waitUntil(runCronTick(env));
   },
 
-  async fetch(_request, env) {
-    const campaignShards = toInt(env.CAMPAIGN_SHARDS, 4, 1, 64);
-    const automationShards = toInt(env.AUTOMATION_SHARDS, 6, 1, 64);
-    const ingestionShards = toInt(env.INGESTION_SHARDS, 4, 1, 64);
-    const abandonedCartShards = toInt(env.ABANDONED_CART_SHARDS, 2, 1, 64);
-    const maxCampaigns = toInt(env.MAX_CAMPAIGNS, 25, 1, 250);
-    const maxBatches = toInt(env.MAX_BATCHES, 20, 1, 2000);
-    const maxAutomationJobs = toInt(env.MAX_AUTOMATION_JOBS, 200, 1, 2000);
-    const maxAbandonedCartJobs = toInt(env.MAX_ABANDONED_CART_JOBS, 200, 1, 2000);
-    const maxIngestionJobs = toInt(env.MAX_INGESTION_JOBS, 1000, 1, 5000);
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      try {
+        await processAutomationQueueMessage(message, env);
+      } catch (error) {
+        console.error('[automation-queue]', error);
+        message.retry();
+      }
+    }
+  },
 
-    const campaignRuns = Array.from({ length: campaignShards }, (_, shardIndex) =>
-      runCampaignShard(env, shardIndex, campaignShards, maxCampaigns, maxBatches),
-    );
-    const automationRuns = Array.from({ length: automationShards }, (_, shardIndex) =>
-      runAutomationShard(env, shardIndex, automationShards, maxAutomationJobs),
-    );
-    const abandonedCartRuns = Array.from({ length: abandonedCartShards }, (_, shardIndex) =>
-      runAbandonedCartShard(env, shardIndex, abandonedCartShards, maxAbandonedCartJobs),
-    );
-    const ingestionRuns = Array.from({ length: ingestionShards }, (_, shardIndex) =>
-      runIngestionShard(env, shardIndex, ingestionShards, maxIngestionJobs),
-    );
+  async fetch(request, env) {
+    const url = new URL(request.url);
 
-    const results = await Promise.all([...campaignRuns, ...automationRuns, ...abandonedCartRuns, ...ingestionRuns]);
+    if (url.pathname === '/internal/enqueue-automation' && request.method === 'POST') {
+      return enqueueAutomationJob(request, env);
+    }
+
+    const result = await runCronTick(env);
 
     return new Response(JSON.stringify({
-      ok: true,
-      shards: {
-        campaigns: campaignShards,
-        automations: automationShards,
-        abandonedCart: abandonedCartShards,
-        ingestion: ingestionShards,
-      },
-      results,
+      ok: result.ok,
+      mode: 'consolidated-tick',
+      result,
     }), {
-      status: 200,
+      status: result.ok ? 200 : 500,
       headers: { 'content-type': 'application/json' },
     });
   },

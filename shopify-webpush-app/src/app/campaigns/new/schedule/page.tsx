@@ -344,6 +344,15 @@ export default function ScheduleCampaignPage() {
                     throw new Error(buildResponseError('Failed to send campaign.', sendPayload));
                 }
 
+                if (sendResult.async === true) {
+                    toast({
+                        title: 'Campaign Launched!',
+                        description: 'Your campaign is being delivered in the background.',
+                    });
+                    router.push('/campaigns');
+                    return;
+                }
+
                 if (sendResult.completed === false) {
                     toast({
                         title: 'Campaign Queued',

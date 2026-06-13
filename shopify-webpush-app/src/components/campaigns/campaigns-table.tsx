@@ -135,9 +135,14 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
 
     const loading = isLoading && !data;
 
-    // Update stats for sending campaigns every 10 seconds
+    // Poll stats only while campaigns are actively sending.
     useEffect(() => {
-        const interval = setInterval(updateCampaignStats, 10000);
+        const hasSendingCampaigns = campaigns.some((campaign) => campaign.status === 'Sending');
+        if (!hasSendingCampaigns) {
+            return;
+        }
+
+        const interval = setInterval(updateCampaignStats, 30000);
         return () => clearInterval(interval);
     }, [campaigns]);
     

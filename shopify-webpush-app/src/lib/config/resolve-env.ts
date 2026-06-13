@@ -38,6 +38,19 @@ const EnvSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().default(''),
   R2_SECRET_ACCESS_KEY: z.string().default(''),
   R2_PUBLIC_BASE_URL: z.string().default(''),
+  CLOUDFLARE_ACCOUNT_ID: z.string().default(''),
+  CLOUDFLARE_API_TOKEN: z.string().default(''),
+  CLOUDFLARE_KV_NAMESPACE_ID: z.string().default(''),
+  CLOUDFLARE_D1_DATABASE_ID: z.string().default(''),
+  CLOUDFLARE_WORKER_URL: z.string().default(''),
+  AUTOMATION_QUEUE_ENABLED: z
+    .string()
+    .default('false')
+    .transform((value) => value.trim().toLowerCase() === 'true'),
+  D1_EVENTS_ENABLED: z
+    .string()
+    .default('false')
+    .transform((value) => value.trim().toLowerCase() === 'true'),
   VAPID_PUBLIC_KEY: z.string().default(''),
   VAPID_PRIVATE_KEY: z.string().default(''),
   VAPID_SUBJECT: z.string().default('mailto:support@push-eagle.com'),

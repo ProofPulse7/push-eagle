@@ -5,21 +5,31 @@ compatibility_date = "2024-09-23"
 [triggers]
 crons = ["* * * * *"]
 
+[[queues.producers]]
+binding = "AUTOMATION_QUEUE"
+queue = "push-eagle-automation-jobs"
+
+[[queues.consumers]]
+queue = "push-eagle-automation-jobs"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "push-eagle-automation-jobs-dlq"
+
 [vars]
 APP_URL = "https://push-eagle-dashboard.vercel.app"
-PROCESS_CAMPAIGNS_URL = "https://push-eagle-dashboard.vercel.app/api/cron/process-campaigns"
-PROCESS_AUTOMATIONS_URL = "https://push-eagle-dashboard.vercel.app/api/cron/process-automations"
-PROCESS_ABANDONED_CART_URL = "https://push-eagle-dashboard.vercel.app/api/cron/process-abandoned-cart"
-PROCESS_INGESTION_URL = "https://push-eagle-dashboard.vercel.app/api/cron/process-ingestion"
+CRON_TICK_URL = "https://push-eagle-dashboard.vercel.app/api/cron/tick"
 CAMPAIGN_SHARDS = "4"
 AUTOMATION_SHARDS = "6"
-ABANDONED_CART_SHARDS = "2"
 INGESTION_SHARDS = "4"
 MAX_CAMPAIGNS = "25"
 MAX_BATCHES = "20"
 MAX_AUTOMATION_JOBS = "200"
 MAX_AUTOMATION_CONCURRENT = "80"
-MAX_ABANDONED_CART_JOBS = "200"
-MAX_ABANDONED_CART_CONCURRENT = "80"
 MAX_INGESTION_JOBS = "1000"
 MAX_INGESTION_CONCURRENT = "100"
+
+# Create resources before deploy:
+#   npx wrangler queues create push-eagle-automation-jobs
+#   npx wrangler queues create push-eagle-automation-jobs-dlq
+#   npx wrangler secret put CRON_SECRET
