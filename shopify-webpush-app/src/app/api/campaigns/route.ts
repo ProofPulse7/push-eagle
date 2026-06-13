@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { API_KV_TTL, invalidateShopDashboardCaches, withShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
 import { createCampaign, listCampaigns } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -44,11 +45,22 @@ const transformCampaign = (campaign: any) => ({
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const campaigns = await listCampaigns(shopDomain);
-    return NextResponse.json(
-      { ok: true, campaigns: campaigns.map(transformCampaign) },
-      { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=60' } },
+    const payload = await withShopApiKvCache(
+      shopDomain,
+      'campaigns',
+      API_KV_TTL.campaigns,
+      async () => {
+        const campaigns = await listCampaigns(shopDomain);
+        return {
+          ok: true as const,
+          campaigns: campaigns.map(transformCampaign),
+        };
+      },
     );
+
+    return NextResponse.json(payload, {
+      headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=180' },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to list campaigns.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
@@ -74,6 +86,8 @@ export async function POST(request: Request) {
       status: body.status,
       scheduledAt: body.scheduledAt,
     });
+
+    void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({ ok: true, campaign });
   } catch (error) {

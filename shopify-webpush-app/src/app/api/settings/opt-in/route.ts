@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
 import { getOptInSettings, updateOptInSettings } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -69,6 +70,8 @@ export async function PUT(request: Request) {
       iosWidgetTitle: body.iosWidgetTitle ?? current.iosWidgetTitle,
       iosWidgetMessage: body.iosWidgetMessage ?? current.iosWidgetMessage,
     });
+
+    void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({ ok: true, shopDomain, ...settings });
   } catch (error) {

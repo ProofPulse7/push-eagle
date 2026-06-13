@@ -31,11 +31,12 @@ export function useAppBootstrap() {
       return payload;
     },
     enabled: Boolean(shop),
-    staleTime: 15 * 60 * 1000,
+    staleTime: 30 * 60 * 1000,
+    refetchOnMount: false,
   });
 }
 
-const SETTINGS_STALE_MS = 5 * 60 * 1000;
+const SETTINGS_STALE_MS = 30 * 60 * 1000;
 
 export function useMerchantOverview() {
   const shop = useShopDomain();

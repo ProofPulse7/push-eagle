@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import {
+  API_KV_TTL,
+  invalidateShopDashboardCaches,
+  withShopApiKvCache,
+} from '@/lib/server/cache/api-kv-cache';
 import { createSegment, listSegments } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -44,11 +49,19 @@ const createSegmentSchema = z.object({
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const segments = await listSegments(shopDomain);
-    return NextResponse.json(
-      { ok: true, segments },
-      { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=60' } },
+    const payload = await withShopApiKvCache(
+      shopDomain,
+      'segments',
+      API_KV_TTL.segments,
+      async () => {
+        const segments = await listSegments(shopDomain, { preferCache: true });
+        return { ok: true as const, segments };
+      },
     );
+
+    return NextResponse.json(payload, {
+      headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=300' },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to list segments.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
@@ -65,6 +78,8 @@ export async function POST(request: Request) {
       name: body.name,
       conditionGroups: body.conditionGroups,
     });
+
+    void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({ ok: true, segment });
   } catch (error) {

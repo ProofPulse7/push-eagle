@@ -12,7 +12,7 @@ import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
 
-const ANALYTICS_KV_TTL_SECONDS = 180;
+const ANALYTICS_KV_TTL_SECONDS = 600;
 
 const getRequestErrorMessage = (error: unknown, fallback: string) => {
   if (error instanceof z.ZodError) {
@@ -60,7 +60,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json(payload, {
       headers: {
-        'Cache-Control': 'private, max-age=15, stale-while-revalidate=60',
+        'Cache-Control': 'private, max-age=120, stale-while-revalidate=600',
       },
     });
   } catch (error) {

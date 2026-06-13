@@ -5,7 +5,7 @@ type BootstrapCacheEntry = {
 
 const cache = new Map<string, BootstrapCacheEntry>();
 
-const DEFAULT_TTL_MS = 45_000;
+const DEFAULT_TTL_MS = 120_000;
 
 export const readBootstrapCache = (shopDomain: string) => {
   const entry = cache.get(shopDomain);

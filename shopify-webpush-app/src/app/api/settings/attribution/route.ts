@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
 import { getAttributionSettings, updateAttributionSettings } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -36,6 +37,8 @@ export async function PUT(request: Request) {
       clickWindowDays: body.clickWindowDays,
       impressionWindowDays: body.impressionWindowDays,
     });
+
+    void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({ ok: true, shopDomain, ...settings });
   } catch (error) {

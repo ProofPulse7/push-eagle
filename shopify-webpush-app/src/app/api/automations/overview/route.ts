@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { API_KV_TTL, withShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
 import { getAutomationOverview } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -15,16 +16,19 @@ const getRequestErrorMessage = (error: unknown) => {
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const overview = await getAutomationOverview(shopDomain);
-
-    return NextResponse.json(
-      { ok: true, ...overview },
-      {
-        headers: {
-          'Cache-Control': 'private, max-age=10, stale-while-revalidate=30',
-        },
+    const payload = await withShopApiKvCache(
+      shopDomain,
+      'automations-overview',
+      API_KV_TTL.automationsOverview,
+      async () => {
+        const overview = await getAutomationOverview(shopDomain);
+        return { ok: true as const, ...overview };
       },
     );
+
+    return NextResponse.json(payload, {
+      headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=300' },
+    });
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: getRequestErrorMessage(error) },

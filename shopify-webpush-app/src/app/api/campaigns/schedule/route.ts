@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { extractShopDomain } from '@/lib/server/shop-context';
 import {
@@ -97,6 +98,8 @@ export async function POST(request: NextRequest) {
         }
       }
     }
+
+    void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({
       ok: true,

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
 import { getPrivacySettings, updatePrivacySettings } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -42,6 +43,8 @@ export async function PUT(request: Request) {
       locationStoreOption: body.locationStoreOption,
       nameStoreOption: body.nameStoreOption,
     });
+
+    void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({ ok: true, shopDomain, ...settings });
   } catch (error) {
