@@ -14,6 +14,7 @@ import { Card, CardContent } from "../ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Skeleton } from "../ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
+import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
@@ -65,9 +66,16 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             id: String(campaign.id),
             name: campaign.title ?? 'Untitled Campaign',
             message: campaign.body ?? '',
-            imagePreviewUrl: campaign.image_url ?? null,
+            imagePreviewUrl: pickCampaignBarImageUrl({
+                imageUrl: campaign.image_url ?? campaign.imageUrl,
+                windowsImageUrl: campaign.windows_image_url ?? campaign.windowsImageUrl,
+                macosImageUrl: campaign.macos_image_url ?? campaign.macosImageUrl,
+                androidImageUrl: campaign.android_image_url ?? campaign.androidImageUrl,
+            }),
             sendTime: campaign.sent_at ?? campaign.created_at ?? new Date().toISOString(),
-            segment: campaign.segment_id ? `Segment ${campaign.segment_id}` : 'All Subscribers',
+            segment: campaign.segment_id === 'all' || !campaign.segment_id
+                ? 'All Subscribers'
+                : `Segment ${campaign.segment_id}`,
             reached: deliveryCount,
             clickRate: ctr,
             sales: Number(campaign.revenue_cents ?? 0) / 100,
@@ -91,7 +99,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
         }
     }, [isError, queryError]);
 
-    const loading = isLoading && !data;
+    const loading = isLoading && !data && campaigns.length === 0;
     
     const filteredCampaigns = useMemo(() => {
         let tabFiltered;
@@ -283,9 +291,9 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             <h2 className="text-xl font-semibold tracking-tight">Campaign History</h2>
             <Tabs defaultValue="sent" onValueChange={(value) => startTransition(() => setActiveTab(value))}>
                 <TabsList className="bg-white border shadow-sm">
-                    <TabsTrigger value="sent" className="data-[state=active]:bg-white">Sent <Badge variant={activeTab === 'sent' ? 'default' : 'secondary'} className="ml-2">{tabCounts.sent}</Badge></TabsTrigger>
-                    <TabsTrigger value="scheduled" className="data-[state=active]:bg-white">Scheduled <Badge variant={activeTab === 'scheduled' ? 'default' : 'secondary'} className="ml-2">{tabCounts.scheduled}</Badge></TabsTrigger>
-                    <TabsTrigger value="draft" className="data-[state=active]:bg-white">Drafts <Badge variant={activeTab === 'draft' ? 'default' : 'secondary'} className="ml-2">{tabCounts.draft}</Badge></TabsTrigger>
+                    <TabsTrigger value="sent" className="data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:font-semibold">Sent <Badge variant={activeTab === 'sent' ? 'default' : 'secondary'} className="ml-2">{tabCounts.sent}</Badge></TabsTrigger>
+                    <TabsTrigger value="scheduled" className="data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:font-semibold">Scheduled <Badge variant={activeTab === 'scheduled' ? 'default' : 'secondary'} className="ml-2">{tabCounts.scheduled}</Badge></TabsTrigger>
+                    <TabsTrigger value="draft" className="data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:font-semibold">Drafts <Badge variant={activeTab === 'draft' ? 'default' : 'secondary'} className="ml-2">{tabCounts.draft}</Badge></TabsTrigger>
                 </TabsList>
                 <TabsContent value={activeTab} className="mt-6">
                     {renderContent()}

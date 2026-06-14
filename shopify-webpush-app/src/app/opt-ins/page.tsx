@@ -13,7 +13,8 @@ import { Settings, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { useSettings } from '@/context/settings-context';
+import { useMerchantOverview, useOptInSettings, useSubscribersOverview } from '@/hooks/queries/use-app-queries';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 
 const StatBlock = ({ label, value }: { label: string, value: string | number }) => (
     <div className="flex flex-col gap-1">
@@ -43,72 +44,51 @@ const TopStat = ({ label, value, tooltipText }: { label: string, value: string |
 
 
 export default function OptInsPage() {
-  const { shopDomain } = useSettings();
+  const shopDomain = useShopDomain();
+  const { data: optInData } = useOptInSettings();
+  const { data: overviewData } = useMerchantOverview();
+  const { data: subscribersData } = useSubscribersOverview();
   const [livePromptType, setLivePromptType] = useState<'browser' | 'custom'>('custom');
   const [selectedPromptType, setSelectedPromptType] = useState<'browser' | 'custom'>('custom');
   const [savingPromptType, setSavingPromptType] = useState(false);
   const [iosWidgetEnabled, setIosWidgetEnabled] = useState(true);
-  const [stats, setStats] = useState({ viewed: 0, subscribed: 0, conversion: '0.0%' });
-  const [loading, setLoading] = useState(false);
-  const [settingsSummary, setSettingsSummary] = useState<{
-    title: string;
-    position: string;
-    desktopDelay: number;
-    mobileDelay: number;
-    hideForDays: number;
-    maxDisplaysPerSession: number;
-  } | null>(null);
 
   useEffect(() => {
-    if (!shopDomain) {
+    if (!optInData?.ok) {
       return;
     }
 
-    let isMounted = true;
-    setLoading(true);
+    const serverPromptType = optInData.promptType === 'browser' ? 'browser' : 'custom';
+    setLivePromptType(serverPromptType);
+    setSelectedPromptType(serverPromptType);
+    setIosWidgetEnabled(optInData.iosWidgetEnabled !== false);
+  }, [optInData]);
 
-    Promise.all([
-      fetch(`/api/settings/opt-in?shop=${encodeURIComponent(shopDomain)}`).then((r) => r.json()),
-      fetch(`/api/settings/overview?shop=${encodeURIComponent(shopDomain)}`).then((r) => r.json()),
-    ])
-      .then(([optIn, overview]) => {
-        if (!isMounted) {
-          return;
-        }
+  const settingsSummary = useMemo(() => {
+    if (!optInData?.ok) {
+      return null;
+    }
 
-        if (optIn?.ok) {
-          const serverPromptType = optIn.promptType === 'browser' ? 'browser' : 'custom';
-          setLivePromptType(serverPromptType);
-          setSelectedPromptType(serverPromptType);
-          setIosWidgetEnabled(optIn.iosWidgetEnabled !== false);
-          setSettingsSummary({
-            title: optIn.title,
-            position: `${optIn.desktopPosition} (desktop), ${optIn.mobilePosition} (mobile)`,
-            desktopDelay: Number(optIn.desktopDelaySeconds ?? 0),
-            mobileDelay: Number(optIn.mobileDelaySeconds ?? 0),
-            hideForDays: Number(optIn.hideForDays ?? 0),
-            maxDisplaysPerSession: Number(optIn.maxDisplaysPerSession ?? 0),
-          });
-        }
-
-        if (overview?.ok) {
-          const subscribed = Number(overview.subscriberCount ?? 0);
-          const viewed = subscribed > 0 ? Math.max(subscribed, Math.round(subscribed * 1.4)) : 0;
-          const conversion = viewed > 0 ? `${((subscribed / viewed) * 100).toFixed(1)}%` : '0.0%';
-          setStats({ viewed, subscribed, conversion });
-        }
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (isMounted) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      isMounted = false;
+    return {
+      title: String(optInData.title ?? 'Subscribe for updates'),
+      position: `${optInData.desktopPosition} (desktop), ${optInData.mobilePosition} (mobile)`,
+      desktopDelay: Number(optInData.desktopDelaySeconds ?? 0),
+      mobileDelay: Number(optInData.mobileDelaySeconds ?? 0),
+      hideForDays: Number(optInData.hideForDays ?? 0),
+      maxDisplaysPerSession: Number(optInData.maxDisplaysPerSession ?? 0),
     };
-  }, [shopDomain]);
+  }, [optInData]);
+
+  const stats = useMemo(() => {
+    const subscribed = Number(
+      subscribersData?.totalSubscribers ??
+        overviewData?.subscriberCount ??
+        0,
+    );
+    const viewed = subscribed > 0 ? Math.max(subscribed, Math.round(subscribed * 1.4)) : 0;
+    const conversion = viewed > 0 ? `${((subscribed / viewed) * 100).toFixed(1)}%` : '0.0%';
+    return { viewed, subscribed, conversion };
+  }, [overviewData, subscribersData]);
 
   const updatePromptTypeSelection = (value: string) => {
     const next = value === 'browser' ? 'browser' : 'custom';
@@ -120,6 +100,7 @@ export default function OptInsPage() {
       return;
     }
 
+    setLivePromptType(selectedPromptType);
     try {
       setSavingPromptType(true);
       const res = await fetch('/api/settings/opt-in', {
@@ -133,11 +114,11 @@ export default function OptInsPage() {
         }),
       });
       const data = await res.json().catch(() => ({ ok: false }));
-      if (data?.ok) {
-        setLivePromptType(selectedPromptType);
+      if (!data?.ok) {
+        setLivePromptType(livePromptType);
       }
     } catch (_error) {
-      // Non-blocking; UI already reflects user selection.
+      setLivePromptType(livePromptType);
     } finally {
       setSavingPromptType(false);
     }
@@ -162,19 +143,16 @@ export default function OptInsPage() {
         }),
       });
     } catch (_error) {
-      // Non-blocking; UI already reflects user selection.
+      // UI already reflects the latest choice.
     }
   };
 
   const statusLabel = useMemo(() => {
-    if (loading) {
-      return 'Syncing settings...';
-    }
     if (!settingsSummary) {
-      return 'No saved settings yet';
+      return 'Using cached settings';
     }
     return `Live title: ${settingsSummary.title}`;
-  }, [loading, settingsSummary]);
+  }, [settingsSummary]);
 
   return (
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">

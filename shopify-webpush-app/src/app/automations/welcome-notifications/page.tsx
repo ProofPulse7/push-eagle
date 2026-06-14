@@ -1,12 +1,13 @@
 'use client';
 
-import React, { Fragment, useEffect, useState } from 'react';
+import React, { Fragment, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, ChevronDown, TabletSmartphone, Zap } from 'lucide-react';
 
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
 import { FlowStats } from '@/components/automations/flow-stats';
 import { Button } from '@/components/ui/button';
+import { OptimisticSaveQueue } from '@/lib/client/optimistic-save-queue';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -220,20 +221,37 @@ export default function WelcomeNotificationsPage() {
     );
   }, [rulesPayload]);
 
-  const saveWelcomeConfig = async (updatedNotifications: FlowNotification[]) => {
-    if (!shopDomain) return;
+  const saveQueueRef = useRef(new OptimisticSaveQueue<FlowNotification[]>());
 
-    const config = { steps: buildStepsConfigFromNotifications(updatedNotifications) };
+  const saveWelcomeConfig = (updatedNotifications: FlowNotification[]) => {
+    if (!shopDomain) {
+      return;
+    }
+
     const enabled = updatedNotifications.some((item) => item.status === 'Active');
-    await fetch('/api/automations/rules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        shopDomain,
-        ruleKey: 'welcome_subscriber',
-        enabled,
-        config,
-      }),
+    setRuleEnabled(enabled);
+
+    saveQueueRef.current.enqueue({
+      key: 'welcome_subscriber',
+      payload: updatedNotifications,
+      save: async (notifications) => {
+        const config = { steps: buildStepsConfigFromNotifications(notifications) };
+        const response = await fetch('/api/automations/rules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shopDomain,
+            ruleKey: 'welcome_subscriber',
+            enabled: notifications.some((item) => item.status === 'Active'),
+            config,
+          }),
+        });
+
+        const payload = await response.json().catch(() => ({ ok: false }));
+        if (!response.ok || !payload?.ok) {
+          throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to save welcome automation.');
+        }
+      },
     });
   };
 
@@ -242,12 +260,7 @@ export default function WelcomeNotificationsPage() {
       item.id === id ? { ...item, status: (checked ? 'Active' : 'Inactive') as 'Active' | 'Inactive' } : item,
     );
     setNotifications(updatedNotifications);
-
-    try {
-      await saveWelcomeConfig(updatedNotifications);
-    } catch {
-      // no-op
-    }
+    saveWelcomeConfig(updatedNotifications);
   };
 
   const handleDelayChange = async (id: string, delayLabel: string) => {
@@ -255,12 +268,7 @@ export default function WelcomeNotificationsPage() {
       item.id === id ? { ...item, delay: delayLabel } : item,
     );
     setNotifications(updatedNotifications);
-
-    try {
-      await saveWelcomeConfig(updatedNotifications);
-    } catch {
-      // no-op
-    }
+    saveWelcomeConfig(updatedNotifications);
   };
 
   return (

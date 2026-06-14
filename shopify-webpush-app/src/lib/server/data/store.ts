@@ -5,6 +5,7 @@ import { getNeonSql } from '@/lib/integrations/database/neon';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
 import { sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
 import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
+import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import { deleteImageFromR2 } from '@/lib/server/media/r2';
 
 type CreateCampaignInput = {
@@ -1543,6 +1544,109 @@ export const pruneOrphanedMediaAssets = async (shopDomain: string, olderThanMinu
   }
 
   return { deletedCount };
+};
+
+const resolveMediaAssetByUrl = async (shopDomain: string, url: string) => {
+  const sql = getNeonSql();
+  const rows = await sql`
+    SELECT id, object_key, public_url
+    FROM media_assets
+    WHERE shop_domain = ${shopDomain}
+      AND (
+        public_url = ${url}
+        OR ${url} LIKE ('%/api/media/' || id || '%')
+      )
+    LIMIT 1
+  `;
+
+  return rows[0] as { id: string; object_key: string | null; public_url: string | null } | undefined;
+};
+
+export const pruneUnusedCampaignDeviceImages = async (olderThanDays = 30) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const safeDays = Math.max(7, Math.min(Math.floor(olderThanDays), 120));
+
+  const rows = await sql`
+    SELECT
+      id,
+      shop_domain,
+      image_url,
+      windows_image_url,
+      macos_image_url,
+      android_image_url
+    FROM campaigns
+    WHERE status = 'sent'
+      AND sent_at IS NOT NULL
+      AND sent_at < NOW() - (${safeDays} * INTERVAL '1 day')
+      AND (
+        windows_image_url IS NOT NULL
+        OR macos_image_url IS NOT NULL
+        OR android_image_url IS NOT NULL
+      )
+    ORDER BY sent_at ASC
+    LIMIT 40
+  `;
+
+  let prunedCount = 0;
+
+  for (const row of rows as Array<Record<string, unknown>>) {
+    const shopDomain = String(row.shop_domain);
+    const campaignId = String(row.id);
+    const keeperUrl =
+      pickCampaignBarImageUrl({
+        imageUrl: row.image_url ? String(row.image_url) : null,
+        windowsImageUrl: row.windows_image_url ? String(row.windows_image_url) : null,
+        macosImageUrl: row.macos_image_url ? String(row.macos_image_url) : null,
+        androidImageUrl: row.android_image_url ? String(row.android_image_url) : null,
+      }) ?? (row.image_url ? String(row.image_url) : null);
+
+    const deviceUrls = [
+      row.windows_image_url ? String(row.windows_image_url) : null,
+      row.macos_image_url ? String(row.macos_image_url) : null,
+      row.android_image_url ? String(row.android_image_url) : null,
+    ].filter((url): url is string => Boolean(url));
+
+    const unusedUrls = deviceUrls.filter((url) => url !== keeperUrl);
+    if (unusedUrls.length === 0) {
+      continue;
+    }
+
+    for (const url of unusedUrls) {
+      const asset = await resolveMediaAssetByUrl(shopDomain, url);
+      if (asset?.object_key) {
+        try {
+          await deleteImageFromR2(String(asset.object_key));
+        } catch {
+          // Best effort remote delete.
+        }
+      }
+
+      if (asset?.id) {
+        await sql`
+          DELETE FROM media_assets
+          WHERE id = ${String(asset.id)}
+            AND shop_domain = ${shopDomain}
+        `;
+      }
+
+      prunedCount += 1;
+    }
+
+    await sql`
+      UPDATE campaigns
+      SET
+        image_url = COALESCE(${keeperUrl}, image_url),
+        windows_image_url = ${unusedUrls.includes(String(row.windows_image_url ?? '')) ? null : row.windows_image_url},
+        macos_image_url = ${unusedUrls.includes(String(row.macos_image_url ?? '')) ? null : row.macos_image_url},
+        android_image_url = ${unusedUrls.includes(String(row.android_image_url ?? '')) ? null : row.android_image_url},
+        updated_at = NOW()
+      WHERE id = ${campaignId}
+        AND shop_domain = ${shopDomain}
+    `;
+  }
+
+  return { prunedCount };
 };
 
 const resolveAutomationDestination = async (shopDomain: string, payload: AutomationJobPayload) => {
@@ -3161,6 +3265,7 @@ export const runRetentionMaintenance = async () => {
 
   const { pruneD1TrackingEvents, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
   const d1Prune = isD1EventsEnabled() ? await pruneD1TrackingEvents(14, 2000) : null;
+  const campaignMediaPrune = await pruneUnusedCampaignDeviceImages(30);
 
   const now = new Date();
   const dailyRollup =
@@ -3171,6 +3276,7 @@ export const runRetentionMaintenance = async () => {
     heartbeatsDeleted: heartbeatsDeleted.length,
     pixelArchive,
     d1Prune,
+    campaignMediaPrune,
     dailyRollup,
   };
 };
@@ -5354,19 +5460,35 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
       }
     }
   } else if (condition.type === 'Customer tag') {
-    const rows = await sql`
-      SELECT s.id
-      FROM subscribers s
-      JOIN shopify_customers c
-        ON c.shop_domain = s.shop_domain
-       AND c.external_id = s.external_id
-      WHERE s.shop_domain = ${shopDomain}
-        AND c.tags IS NOT NULL
-        AND c.tags <> ''
-        AND c.tags ILIKE ${`%${textFilter}%`}
-    `;
+    const selectedTags = Array.isArray(condition.selectedValues)
+      ? condition.selectedValues.map((value) => String(value.value ?? value.label ?? '').trim()).filter(Boolean)
+      : [];
+    const tags = selectedTags.length > 0 ? selectedTags : (textFilter ? [textFilter] : []);
 
-    matched = new Set(rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id)));
+    if (tags.length === 0) {
+      matched = new Set<number>();
+    } else {
+      const rows = await sql`
+        SELECT s.id, c.tags
+        FROM subscribers s
+        JOIN shopify_customers c
+          ON c.shop_domain = s.shop_domain
+         AND c.external_id = s.external_id
+        WHERE s.shop_domain = ${shopDomain}
+          AND c.tags IS NOT NULL
+          AND c.tags <> ''
+      `;
+
+      for (const row of rows) {
+        const subscriberId = Number(row.id);
+        const tagBlob = String(row.tags ?? '').toLowerCase();
+        const tagList = tagBlob.split(',').map((tag) => tag.trim()).filter(Boolean);
+        const hasTag = tags.some((tag) => tagList.includes(tag.toLowerCase()) || tagBlob.includes(tag.toLowerCase()));
+        if (hasTag) {
+          matched.add(subscriberId);
+        }
+      }
+    }
   }
 
   const operator = condition.operator ?? (condition.type === 'Location' || condition.type === 'Customer tag' ? 'is' : 'has');
@@ -6805,6 +6927,18 @@ export const createCampaign = async (input: CreateCampaignInput) => {
   await ensureMerchant(input.shopDomain);
 
   const campaignId = randomUUID();
+  const listImageUrl =
+    pickCampaignBarImageUrl({
+      imageUrl: input.imageUrl ?? null,
+      windowsImageUrl: input.windowsImageUrl ?? null,
+      macosImageUrl: input.macosImageUrl ?? null,
+      androidImageUrl: input.androidImageUrl ?? null,
+    }) ??
+    input.imageUrl ??
+    input.macosImageUrl ??
+    input.windowsImageUrl ??
+    input.androidImageUrl ??
+    null;
 
   const campaignRows = await sql`
     INSERT INTO campaigns (
@@ -6830,7 +6964,7 @@ export const createCampaign = async (input: CreateCampaignInput) => {
       ${input.body},
       ${input.targetUrl ?? null},
       ${input.iconUrl ?? null},
-      ${input.imageUrl ?? null},
+      ${listImageUrl},
       ${input.windowsImageUrl ?? null},
       ${input.macosImageUrl ?? null},
       ${input.androidImageUrl ?? null},

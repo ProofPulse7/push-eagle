@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { isImpressionLimitReached } from '@/lib/server/billing/merchant-billing';
+import { invalidateShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
 import { listAutomationRules, upsertAutomationRule } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -70,6 +71,8 @@ export async function POST(request: Request) {
     if (!updated) {
       return NextResponse.json({ ok: false, error: 'Automation rule not found.' }, { status: 404 });
     }
+
+    void invalidateShopApiKvCache(shopDomain, 'automations-overview');
 
     return NextResponse.json({ ok: true, rule: updated });
   } catch (error) {

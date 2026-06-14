@@ -11,6 +11,7 @@ import {
 
 import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
+import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
 import { clearPendingSettings } from '@/lib/client/pending-settings';
 import {
   hydrateAppCache,
@@ -195,6 +196,7 @@ export function useSubscribersList(sortOrder: 'asc' | 'desc', pageSize = 100) {
 
 export function useDashboardSummary() {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
 
   return useQuery({
     queryKey: queryKeys.dashboardSummary(shop),
@@ -216,7 +218,26 @@ export function useDashboardSummary() {
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
     refetchOnMount: false,
-    placeholderData: (previous) => previous,
+    placeholderData: (previous) =>
+      previous ?? readDashboardSummaryFromCache(queryClient, shop),
+  });
+}
+
+export function useOptInSettings() {
+  const shop = useShopDomain();
+  const queryClient = useQueryClient();
+
+  return useQuery({
+    queryKey: queryKeys.optIn(shop),
+    queryFn: () => fetchJsonWithShop<Record<string, unknown>>('/api/settings/opt-in', shop),
+    enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
+    placeholderData: (previous) =>
+      previous ??
+      (queryClient.getQueryData<Record<string, unknown>>(queryKeys.optIn(shop)) as
+        | Record<string, unknown>
+        | undefined),
   });
 }
 

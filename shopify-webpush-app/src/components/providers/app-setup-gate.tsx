@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { queryKeys } from '@/lib/client/query-keys';
 import { AppSetupScreen } from '@/components/ui/loading-ui';
 import { useAppBootstrap } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
@@ -36,13 +37,20 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
   const skip = shouldSkipSetup(pathname);
 
   const hasCachedBootstrap = Boolean(
-    shop && queryClient.getQueryData(['pe', shop, 'bootstrap']),
+    shop && queryClient.getQueryData(queryKeys.bootstrap(shop)),
   );
-  const hasBootstrapData = Boolean(bootstrap.data) || hasCachedBootstrap;
+  const hasWarmSessionCache = Boolean(
+    shop &&
+      (hasCachedBootstrap ||
+        queryClient.getQueryData(queryKeys.dashboardSummary(shop)) ||
+        queryClient.getQueryData(queryKeys.campaigns(shop)) ||
+        queryClient.getQueryData(queryKeys.automationsOverview(shop))),
+  );
+  const hasBootstrapData = Boolean(bootstrap.data) || hasWarmSessionCache;
 
   const isReady =
-    skip || !shop || bootstrap.isSuccess || (hasBootstrapData && !bootstrap.isPending);
-  const showSetup = !skip && Boolean(shop) && !isReady && !hasCachedBootstrap;
+    skip || !shop || bootstrap.isSuccess || hasWarmSessionCache || (hasBootstrapData && !bootstrap.isPending);
+  const showSetup = !skip && Boolean(shop) && !isReady && !hasWarmSessionCache;
 
   const [progress, setProgress] = useState(70);
 

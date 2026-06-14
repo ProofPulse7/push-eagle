@@ -30,7 +30,7 @@ const readShopFromBrowser = () => {
 
 export function useShopDomain() {
   const { shopDomain: contextShop, setShopDomain } = useSettings();
-  const [queryShop, setQueryShop] = useState('');
+  const [queryShop, setQueryShop] = useState(() => readShopFromBrowser());
 
   useEffect(() => {
     const resolved = readShopFromBrowser();

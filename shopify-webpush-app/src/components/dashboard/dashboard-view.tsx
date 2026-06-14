@@ -19,19 +19,6 @@ export function DashboardView() {
   const { atLimit } = useImpressionLimit();
   const { data, isLoading, isError, error } = useDashboardSummary();
 
-  if (!shopDomain) {
-    return (
-      <div className="p-8">
-        <Alert>
-          <AlertTitle>Connect your store</AlertTitle>
-          <AlertDescription>
-            Open Push Eagle from your Shopify admin so we can load dashboard data for your shop.
-          </AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
-
   const overview = (data?.overview ?? {}) as Record<string, unknown>;
   const campaignStatsRaw = (data?.campaignStats ?? {}) as Record<string, unknown>;
   const campaignStats = (campaignStatsRaw.stats ?? campaignStatsRaw) as Record<string, unknown>;
@@ -81,7 +68,16 @@ export function DashboardView() {
   ];
 
   return (
-    <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
+    <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-6">
+      {!shopDomain ? (
+        <Alert>
+          <AlertTitle>Connect your store</AlertTitle>
+          <AlertDescription>
+            Open Push Eagle from your Shopify admin so we can load dashboard data for your shop.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {isError ? (
         <Alert variant="destructive">
           <AlertTitle>Error loading dashboard</AlertTitle>
@@ -93,8 +89,8 @@ export function DashboardView() {
 
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight md:text-4xl">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">
+          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Dashboard</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
             Your store performance at a glance.
           </p>
         </div>
@@ -113,21 +109,21 @@ export function DashboardView() {
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {statCards.map((card) => (
-          <Card key={card.title} className="min-h-[160px] border-border/80 shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <Card key={card.title} className="min-h-[140px] border-border/80 shadow-sm">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">{card.title}</CardTitle>
               <card.icon className={`h-5 w-5 ${card.accent}`} />
             </CardHeader>
             <CardContent>
               {showValueSkeleton ? (
                 <>
-                  <Skeleton className="h-10 w-36" />
-                  <Skeleton className="mt-3 h-3 w-full" />
+                  <Skeleton className="h-9 w-32" />
+                  <Skeleton className="mt-2 h-3 w-full" />
                 </>
               ) : (
                 <>
-                  <div className="text-3xl font-bold tracking-tight">{card.value}</div>
-                  <p className="mt-2 text-sm text-muted-foreground">{card.hint}</p>
+                  <div className="text-2xl font-bold tracking-tight">{card.value}</div>
+                  <p className="mt-1 text-xs text-muted-foreground">{card.hint}</p>
                 </>
               )}
             </CardContent>

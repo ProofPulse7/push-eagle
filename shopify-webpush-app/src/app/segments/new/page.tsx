@@ -301,7 +301,7 @@ export default function NewSegmentPage() {
       } finally {
         setIsEstimating(false);
       }
-    }, 350);
+    }, 150);
 
     return () => clearTimeout(timer);
   }, [conditionGroups, resolvedShopDomain]);
@@ -588,24 +588,42 @@ export default function NewSegmentPage() {
                 )}
             </div>
         case 'Customer tag':
-             return <div className="flex items-center gap-2 flex-wrap">
+            const handleTagSelect = (value: string, label: string) => {
+              if (!condition.selectedValues.some((entry) => entry.value === value)) {
+                change('selectedValues', [...condition.selectedValues, { type: 'country', value, label }]);
+              }
+            };
+            const handleTagUnselect = (value: string) => {
+              change('selectedValues', condition.selectedValues.filter((entry) => entry.value !== value));
+            };
+
+             return <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                 <span>Customer tag</span>
                 <Select value={condition.operator} onValueChange={(v) => change('operator', v)}>
                     <SelectTrigger className="w-auto bg-card"><SelectValue /></SelectTrigger>
                     <SelectContent><SelectItem value="is">is</SelectItem><SelectItem value="is not">is not</SelectItem></SelectContent>
                 </Select>
-                <Input
-                  className="w-48 bg-card"
+                <MultiSelectPillFilter
                   placeholder="Select customer tag"
-                  value={condition.textValue}
-                  list={`customer-tags-${condition.id}`}
-                  onChange={e => change('textValue', e.target.value)}
+                  options={customerTagOptions}
+                  selectedValues={condition.selectedValues.map((entry) => entry.value)}
+                  onSelect={handleTagSelect}
+                  onUnselect={handleTagUnselect}
                 />
-                <datalist id={`customer-tags-${condition.id}`}>
-                  {customerTagOptions.map((option) => (
-                    <option key={option.value} value={option.value} />
-                  ))}
-                </datalist>
+                </div>
+                {condition.selectedValues.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {condition.selectedValues.map((entry) => (
+                      <Badge key={entry.value} variant="outline" className="gap-1.5 pr-1 bg-background">
+                        {entry.label}
+                        <button onClick={() => handleTagUnselect(entry.value)} className="rounded-full hover:bg-black/10 dark:hover:bg-white/10">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
             </div>;
         default: return null;
     }

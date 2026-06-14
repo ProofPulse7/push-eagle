@@ -1,7 +1,7 @@
 'use client';
 
+import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import type { QueryClient } from '@tanstack/react-query';
-
 import { queryKeys } from '@/lib/client/query-keys';
 
 export type OptimisticCampaign = {
@@ -23,13 +23,30 @@ export type OptimisticCampaign = {
 export const prependOptimisticCampaign = (
   queryClient: QueryClient,
   shop: string,
-  campaign: OptimisticCampaign,
+  campaign: OptimisticCampaign & {
+    windows_image_url?: string | null;
+    macos_image_url?: string | null;
+    android_image_url?: string | null;
+  },
 ) => {
+  const listImage = pickCampaignBarImageUrl({
+    imageUrl: campaign.image_url,
+    windowsImageUrl: campaign.windows_image_url,
+    macosImageUrl: campaign.macos_image_url,
+    androidImageUrl: campaign.android_image_url,
+  });
+
   queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
     const existing = Array.isArray(current?.campaigns) ? current.campaigns : [];
     return {
       ok: true,
-      campaigns: [campaign, ...existing.filter((item) => String((item as { id?: string }).id) !== campaign.id)],
+      campaigns: [
+        {
+          ...campaign,
+          image_url: listImage ?? campaign.image_url,
+        },
+        ...existing.filter((item) => String((item as { id?: string }).id) !== campaign.id),
+      ],
     };
   });
 };

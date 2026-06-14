@@ -19,6 +19,7 @@ import {
 import { useAutomationsOverview } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { normalizeAutomationRule, normalizeAutomationRules } from '@/lib/client/normalize-automation-rule';
 import { queryKeys } from '@/lib/client/query-keys';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -158,7 +159,7 @@ export default function AutomationsPage() {
     const [error, setError] = useState<string | null>(null);
 
     const { rules, stats } = useMemo(() => {
-        const overviewRules = (data?.rules ?? []) as AutomationRule[];
+        const overviewRules = normalizeAutomationRules(data?.rules);
         const mergedRules = visibleRuleKeys.map((ruleKey) => {
             const found = overviewRules.find((rule) => rule.ruleKey === ruleKey);
             return (
@@ -172,7 +173,7 @@ export default function AutomationsPage() {
                     revenueCents: 0,
                 }
             );
-        });
+        }) as AutomationRule[];
 
         const totals = mergedRules.reduce(
             (acc, rule) => ({
@@ -212,15 +213,35 @@ export default function AutomationsPage() {
             }
 
             const cacheKey = queryKeys.automationsOverview(activeShopDomain);
-            const previous = queryClient.getQueryData<{ rules?: AutomationRule[] }>(cacheKey);
+            const previous = queryClient.getQueryData<{ rules?: AutomationRule[]; totals?: AutomationStats }>(cacheKey);
 
-            queryClient.setQueryData(cacheKey, (current: { rules?: AutomationRule[] } | undefined) => {
-                const currentRules = current?.rules ?? previous?.rules ?? [];
+            queryClient.setQueryData(cacheKey, (current: { rules?: AutomationRule[]; totals?: AutomationStats } | undefined) => {
+                const currentRules = normalizeAutomationRules(current?.rules ?? previous?.rules);
+                const nextRules = visibleRuleKeys.map((ruleKey) => {
+                    const existing = currentRules.find((item) => item.ruleKey === ruleKey);
+                    const base =
+                        existing ??
+                        ({
+                            id: ruleKey,
+                            ruleKey,
+                            enabled: false,
+                            config: {},
+                            impressions: 0,
+                            clicks: 0,
+                            revenueCents: 0,
+                        } as AutomationRule);
+
+                    if (ruleKey !== rule.ruleKey) {
+                        return base;
+                    }
+
+                    return { ...base, enabled: nextEnabled };
+                });
+
                 return {
                     ok: true,
-                    rules: currentRules.map((item) =>
-                        item.ruleKey === rule.ruleKey ? { ...item, enabled: nextEnabled } : item,
-                    ),
+                    ...(current ?? previous ?? {}),
+                    rules: nextRules,
                 };
             });
 
@@ -231,7 +252,6 @@ export default function AutomationsPage() {
                     shopDomain: activeShopDomain,
                     ruleKey: rule.ruleKey,
                     enabled: nextEnabled,
-                    config: rule.config || {},
                 }),
             });
 
@@ -243,7 +263,36 @@ export default function AutomationsPage() {
                 throw new Error(payload.error || 'Failed to update automation rule.');
             }
 
-            void queryClient.invalidateQueries({ queryKey: cacheKey });
+            queryClient.setQueryData(cacheKey, (current: { rules?: AutomationRule[] } | undefined) => {
+                const currentRules = normalizeAutomationRules(current?.rules ?? previous?.rules);
+                const savedRule = normalizeAutomationRule(payload.rule as unknown as Record<string, unknown>);
+                return {
+                    ok: true,
+                    ...(current ?? previous ?? {}),
+                    rules: visibleRuleKeys.map((ruleKey) => {
+                        const existing = currentRules.find((item) => item.ruleKey === ruleKey);
+                        if (ruleKey !== savedRule.ruleKey) {
+                            return existing ?? {
+                                id: ruleKey,
+                                ruleKey,
+                                enabled: false,
+                                config: {},
+                                impressions: 0,
+                                clicks: 0,
+                                revenueCents: 0,
+                            };
+                        }
+
+                        return {
+                            ...(existing ?? savedRule),
+                            ...savedRule,
+                            impressions: existing?.impressions ?? savedRule.impressions ?? 0,
+                            clicks: existing?.clicks ?? savedRule.clicks ?? 0,
+                            revenueCents: existing?.revenueCents ?? savedRule.revenueCents ?? 0,
+                        };
+                    }),
+                };
+            });
         } catch (saveError) {
             setError(saveError instanceof Error ? saveError.message : 'Failed to update automation rule.');
         } finally {

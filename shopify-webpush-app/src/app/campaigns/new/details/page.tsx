@@ -147,49 +147,49 @@ export default function CampaignDetailsPage() {
   const campaignType = flashSaleEnabled ? 'flash' : 'regular';
 
   return (
-    <div className="min-h-screen bg-[#f6f6fb] px-4 py-8 md:px-8 md:py-10">
-      <div className="mx-auto max-w-[980px]">
-        <div className="mb-8 flex items-center gap-4">
-          <Button variant="outline" size="icon" className="h-12 w-12 rounded-xl bg-white" asChild>
+    <div className="min-h-screen bg-[#f6f6fb] px-4 py-4 md:px-6 md:py-6">
+      <div className="mx-auto max-w-[920px]">
+        <div className="mb-4 flex items-center gap-3">
+          <Button variant="outline" size="icon" className="h-10 w-10 rounded-xl bg-white" asChild>
             <Link href={campaignsHref}>
-              <ArrowLeft className="h-5 w-5" />
+              <ArrowLeft className="h-4 w-4" />
               <span className="sr-only">Back</span>
             </Link>
           </Button>
-          <h1 className="text-4xl font-bold tracking-tight text-foreground">Campaign details</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Campaign details</h1>
         </div>
 
-        <Card className="rounded-[22px] border border-slate-200 bg-white shadow-sm">
-          <CardContent className="space-y-10 p-8 md:p-10">
-            <section className="space-y-5">
-              <h2 className="text-[1.6rem] font-semibold text-foreground">Sending options</h2>
+        <Card className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <CardContent className="space-y-5 p-5 md:p-6">
+            <section className="space-y-3">
+              <h2 className="text-lg font-semibold text-foreground">Sending options</h2>
               <RadioGroup
                 value={sendingOption === 'schedule' ? 'schedule' : 'now'}
                 onValueChange={(value) => setSendingOption(value === 'schedule' ? 'schedule' : 'now')}
-                className="flex flex-wrap gap-6"
+                className="flex flex-wrap gap-4"
               >
-                <label htmlFor="send-now" className="flex cursor-pointer items-center gap-3">
+                <label htmlFor="send-now" className="flex cursor-pointer items-center gap-2">
                   <RadioGroupItem id="send-now" value="now" />
-                  <span className="text-lg font-medium">Send Now</span>
+                  <span className="text-sm font-medium">Send Now</span>
                 </label>
-                <label htmlFor="send-schedule" className="flex cursor-pointer items-center gap-3">
+                <label htmlFor="send-schedule" className="flex cursor-pointer items-center gap-2">
                   <RadioGroupItem id="send-schedule" value="schedule" />
-                  <span className="text-lg font-medium">Schedule</span>
+                  <span className="text-sm font-medium">Schedule</span>
                 </label>
               </RadioGroup>
             </section>
 
             <Separator />
 
-            <section className="space-y-5">
+            <section className="space-y-3">
               <div>
-                <h2 className="text-[1.6rem] font-semibold text-foreground">Campaign type</h2>
-                <p className="mt-1 text-base text-muted-foreground">Please select the type of campaign you want to send</p>
+                <h2 className="text-lg font-semibold text-foreground">Campaign type</h2>
+                <p className="mt-0.5 text-sm text-muted-foreground">Select the type of campaign you want to send</p>
               </div>
               <RadioGroup
                 value={campaignType}
                 onValueChange={(value) => setFlashSaleEnabled(value === 'flash')}
-                className="space-y-5"
+                className="grid gap-3 md:grid-cols-2"
               >
                 <OptionCard
                   id="regular"
@@ -210,13 +210,13 @@ export default function CampaignDetailsPage() {
 
             <Separator />
 
-            <section className="space-y-5">
+            <section className="space-y-3">
               <div>
-                <h2 className="text-[1.6rem] font-semibold text-foreground">Segments</h2>
-                <p className="mt-1 text-base text-muted-foreground">Select a segment that you would like to send the campaign to</p>
+                <h2 className="text-lg font-semibold text-foreground">Segments</h2>
+                <p className="mt-0.5 text-sm text-muted-foreground">Select the audience for this campaign</p>
               </div>
               <Select value={selectedSegment?.id ?? 'all'} onValueChange={setSegmentId}>
-                <SelectTrigger className="h-14 rounded-xl border-slate-200 bg-slate-50 text-base font-medium">
+                <SelectTrigger className="h-11 rounded-xl border-slate-200 bg-slate-50 text-sm font-medium">
                   <SelectValue>
                     {selectedSegment ? `${selectedSegment.name} (${selectedSegment.count.toLocaleString()} subscribers)` : 'Select segment'}
                   </SelectValue>
@@ -234,15 +234,15 @@ export default function CampaignDetailsPage() {
 
             <Separator />
 
-            <section className="space-y-5">
+            <section className="space-y-3">
               <div>
-                <h2 className="text-[1.6rem] font-semibold text-foreground">Advanced campaign settings</h2>
+                <h2 className="text-lg font-semibold text-foreground">Advanced campaign settings</h2>
               </div>
               <button
                 type="button"
                 onClick={() => setSmartDeliver(!smartDeliver)}
                 className={cn(
-                  'flex w-full items-start gap-4 rounded-2xl border px-4 py-5 text-left transition-colors',
+                  'flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-colors',
                   smartDeliver ? 'border-primary bg-primary/5' : 'border-border bg-background',
                 )}
               >
@@ -260,9 +260,9 @@ export default function CampaignDetailsPage() {
                   />
                 </span>
                 <div>
-                  <p className="text-lg font-medium">Smart delivery</p>
-                  <p className="mt-1 max-w-2xl text-base leading-6 text-muted-foreground">
-                    Personalize the delivery time of your campaign for each subscriber by sending them the notification when they are most likely to be active
+                  <p className="text-sm font-medium">Smart delivery</p>
+                  <p className="mt-0.5 max-w-2xl text-xs leading-5 text-muted-foreground">
+                    Send each notification when the subscriber is most likely to be active
                   </p>
                 </div>
               </button>
@@ -270,10 +270,10 @@ export default function CampaignDetailsPage() {
           </CardContent>
         </Card>
 
-        <div className="mt-8 flex justify-end">
+        <div className="mt-4 flex justify-end">
           <Button
-            size="lg"
-            className="h-12 min-w-[140px] rounded-xl bg-primary px-8 text-base font-semibold"
+            size="default"
+            className="h-10 min-w-[120px] rounded-xl bg-primary px-6 text-sm font-semibold"
             onClick={() => router.push(editorHref)}
           >
             Continue
