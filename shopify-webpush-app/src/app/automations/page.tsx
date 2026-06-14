@@ -159,11 +159,22 @@ export default function AutomationsPage() {
 
     const { rules, stats } = useMemo(() => {
         const overviewRules = (data?.rules ?? []) as AutomationRule[];
-        const visibleRules = visibleRuleKeys
-            .map((ruleKey) => overviewRules.find((rule) => rule.ruleKey === ruleKey))
-            .filter((rule): rule is AutomationRule => Boolean(rule));
+        const mergedRules = visibleRuleKeys.map((ruleKey) => {
+            const found = overviewRules.find((rule) => rule.ruleKey === ruleKey);
+            return (
+                found ?? {
+                    id: ruleKey,
+                    ruleKey,
+                    enabled: false,
+                    config: {},
+                    impressions: 0,
+                    clicks: 0,
+                    revenueCents: 0,
+                }
+            );
+        });
 
-        const totals = visibleRules.reduce(
+        const totals = mergedRules.reduce(
             (acc, rule) => ({
                 impressions: acc.impressions + Number(rule.impressions ?? 0),
                 clicks: acc.clicks + Number(rule.clicks ?? 0),
@@ -172,10 +183,10 @@ export default function AutomationsPage() {
             { impressions: 0, clicks: 0, revenueCents: 0 },
         );
 
-        return { rules: visibleRules, stats: totals };
+        return { rules: mergedRules, stats: totals };
     }, [data]);
 
-    const loading = isLoading && !data;
+    const statsLoading = isLoading && !data;
     const loadError =
         !activeShopDomain
             ? 'Missing shop context. Open the app from Shopify so automation data can load for the current store.'
@@ -243,8 +254,8 @@ export default function AutomationsPage() {
     return (
         <PageLoadingShell
             title="Automations"
-            isLoading={loading}
-            hasData={Boolean(data)}
+            isLoading={statsLoading}
+            hasData={true}
             isFetching={isFetching}
             error={loadError}
         >
@@ -268,7 +279,7 @@ export default function AutomationsPage() {
 
                     <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
                         <CardContent className="grid grid-cols-1 divide-y divide-slate-200 p-0 md:grid-cols-3 md:divide-x md:divide-y-0">
-                            {loading ? (
+                            {statsLoading ? (
                                 <>
                                     <Skeleton className="m-5 h-16 w-auto rounded-xl" />
                                     <Skeleton className="m-5 h-16 w-auto rounded-xl" />
@@ -307,9 +318,7 @@ export default function AutomationsPage() {
                 <section>
                     <h2 className="mb-4 text-xl font-semibold tracking-tight text-slate-950">All automations</h2>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                        {loading
-                            ? Array.from({ length: 6 }).map((_, index) => <Skeleton key={index} className="h-[210px] w-full rounded-2xl" />)
-                            : rules.map((rule) => {
+                        {rules.map((rule) => {
                                   const definition = automationDefinitions[rule.ruleKey];
                                   const Icon = definition.icon;
                                   const footerStatusText = rule.enabled ? 'Activated.' : definition.footerStatusText;

@@ -7,9 +7,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useCampaignStats } from '@/hooks/queries/use-app-queries';
 
 const StatSkeleton = () => (
-    <div className="p-6">
-        <Skeleton className="h-5 w-24 mb-2" />
-        <Skeleton className="h-8 w-32" />
+    <div className="p-8">
+        <Skeleton className="h-5 w-28 mb-3" />
+        <Skeleton className="h-10 w-36" />
     </div>
 );
 
@@ -50,9 +50,9 @@ export function CampaignStats({ date }: { date: DateRange | undefined }) {
                     {showSkeleton
                         ? Array.from({ length: 4 }).map((_, index) => <StatSkeleton key={index} />)
                         : statsData?.map((stat) => (
-                              <div key={stat.label} className="p-6">
-                                  <p className="text-sm text-muted-foreground">{stat.label}</p>
-                                  <p className="text-2xl font-bold mt-1">{stat.value}</p>
+                              <div key={stat.label} className="p-8">
+                                  <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
+                                  <p className="text-4xl font-bold mt-2 tracking-tight">{stat.value}</p>
                               </div>
                           ))}
                </div>

@@ -282,10 +282,10 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
         <div className="space-y-4">
             <h2 className="text-xl font-semibold tracking-tight">Campaign History</h2>
             <Tabs defaultValue="sent" onValueChange={(value) => startTransition(() => setActiveTab(value))}>
-                <TabsList>
-                    <TabsTrigger value="sent">Sent <Badge variant={activeTab === 'sent' ? 'default' : 'secondary'} className="ml-2">{tabCounts.sent}</Badge></TabsTrigger>
-                    <TabsTrigger value="scheduled">Scheduled <Badge variant={activeTab === 'scheduled' ? 'default' : 'secondary'} className="ml-2">{tabCounts.scheduled}</Badge></TabsTrigger>
-                    <TabsTrigger value="draft">Drafts <Badge variant={activeTab === 'draft' ? 'default' : 'secondary'} className="ml-2">{tabCounts.draft}</Badge></TabsTrigger>
+                <TabsList className="bg-white border shadow-sm">
+                    <TabsTrigger value="sent" className="data-[state=active]:bg-white">Sent <Badge variant={activeTab === 'sent' ? 'default' : 'secondary'} className="ml-2">{tabCounts.sent}</Badge></TabsTrigger>
+                    <TabsTrigger value="scheduled" className="data-[state=active]:bg-white">Scheduled <Badge variant={activeTab === 'scheduled' ? 'default' : 'secondary'} className="ml-2">{tabCounts.scheduled}</Badge></TabsTrigger>
+                    <TabsTrigger value="draft" className="data-[state=active]:bg-white">Drafts <Badge variant={activeTab === 'draft' ? 'default' : 'secondary'} className="ml-2">{tabCounts.draft}</Badge></TabsTrigger>
                 </TabsList>
                 <TabsContent value={activeTab} className="mt-6">
                     {renderContent()}

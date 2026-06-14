@@ -124,15 +124,17 @@ export function PageLoadingShell({
   error,
   children,
 }: PageLoadingShellProps) {
-  if (!hasData && isLoading) {
-    return <PageLoadingView title={title} description={description} />;
-  }
-
   return (
     <div className="flex flex-col gap-4">
+      {!hasData && isLoading ? (
+        <div className="flex items-center gap-2 px-4 pt-4 text-sm text-muted-foreground sm:px-6 md:px-8">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Loading {title.toLowerCase()}…</span>
+        </div>
+      ) : null}
       {hasData && isFetching ? <DataRefreshingBar label={`Refreshing ${title.toLowerCase()}…`} /> : null}
       {error ? (
-        <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <p className="mx-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive sm:mx-6 md:mx-8">
           {error}
         </p>
       ) : null}

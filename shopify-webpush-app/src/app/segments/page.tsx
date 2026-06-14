@@ -1,9 +1,11 @@
-
 'use client';
 
 import { useMemo, useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useSegments } from '@/hooks/queries/use-app-queries';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
+import { queryKeys } from '@/lib/client/query-keys';
+import { useToast } from '@/hooks/use-toast';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -270,8 +272,11 @@ const AddAttributeDialog = ({
 
 export default function SegmentsPage() {
   const { shopDomain } = useSettings();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const { data: segmentsData, isLoading, isFetching } = useSegments();
   const [resolvedShopDomain, setResolvedShopDomain] = useState('');
+  const [deletingSegmentId, setDeletingSegmentId] = useState<string | null>(null);
   const [customAttributes, setCustomAttributes] = useState(initialCustomAttributes);
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -322,12 +327,58 @@ export default function SegmentsPage() {
     setCustomAttributes(prev => prev.filter(attr => attr.name !== name));
   };
 
+  const handleDeleteSegment = async (segmentId: string, segmentName: string) => {
+    if (!resolvedShopDomain || deletingSegmentId) {
+      return;
+    }
+
+    const cacheKey = queryKeys.segments(resolvedShopDomain);
+    const previous = queryClient.getQueryData<{ segments?: SegmentApiRow[] }>(cacheKey);
+
+    queryClient.setQueryData(cacheKey, (current: { segments?: SegmentApiRow[] } | undefined) => {
+      const rows = Array.isArray(current?.segments) ? current.segments : previous?.segments ?? [];
+      return {
+        ok: true,
+        segments: rows.filter((segment) => String(segment.id) !== segmentId),
+      };
+    });
+
+    setDeletingSegmentId(segmentId);
+    toast({
+      title: 'Segment deleted',
+      description: `"${segmentName}" was removed.`,
+    });
+
+    try {
+      const response = await fetch(
+        `/api/segments/${encodeURIComponent(segmentId)}?shop=${encodeURIComponent(resolvedShopDomain)}`,
+        { method: 'DELETE' },
+      );
+      const json = await response.json();
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error ?? 'Failed to delete segment.');
+      }
+      void queryClient.invalidateQueries({ queryKey: cacheKey });
+    } catch (error) {
+      if (previous) {
+        queryClient.setQueryData(cacheKey, previous);
+      }
+      toast({
+        title: 'Unable to delete segment',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setDeletingSegmentId(null);
+    }
+  };
+
 
   return (
     <PageLoadingShell
       title="Segments"
       isLoading={isLoading}
-      hasData={Boolean(segmentsData)}
+      hasData={true}
       isFetching={isFetching}
     >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
@@ -394,12 +445,13 @@ export default function SegmentsPage() {
                 <TableHead>Type</TableHead>
                 <TableHead>Subscribers</TableHead>
                 <TableHead>Criteria</TableHead>
+                <TableHead className="w-[80px]">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {segments.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
                     No saved segments yet. Create a segment to see it here.
                   </TableCell>
                 </TableRow>
@@ -414,6 +466,18 @@ export default function SegmentsPage() {
                     </TableCell>
                     <TableCell>{segment.subscribers}</TableCell>
                     <TableCell className="text-muted-foreground">{segment.criteria}</TableCell>
+                    <TableCell>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        disabled={deletingSegmentId === segment.id}
+                        onClick={() => handleDeleteSegment(segment.id, segment.name)}
+                        title="Delete segment"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))
               )}

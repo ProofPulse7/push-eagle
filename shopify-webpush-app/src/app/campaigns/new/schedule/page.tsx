@@ -1,12 +1,13 @@
-
 'use client';
 import { useState, useMemo, useEffect, type SVGProps } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
+import { buildAudienceSegmentsFromCache, prependOptimisticCampaign } from '@/lib/client/optimistic-campaigns';
 
 import { ArrowLeft, Users, Calendar as CalendarIcon, Clock, Send, Save, Eye, Loader2, Edit, Image as ImageIcon, MessageSquare, Link as LinkIcon, MousePointerClick } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -157,11 +158,22 @@ export default function ScheduleCampaignPage() {
     const [segmentSubscriberCount, setSegmentSubscriberCount] = useState(0);
 
     const router = useRouter();
+    const queryClient = useQueryClient();
     const { toast } = useToast();
     const { shopDomain: settingsShop } = useSettings();
     const [queryShop, setQueryShop] = useState('');
     const shopDomain = queryShop || settingsShop || '';
     const scheduledAt = buildScheduledAt(scheduledDate, scheduledTime);
+
+    const editorHref = queryShop
+        ? `/campaigns/new/editor?shop=${encodeURIComponent(queryShop)}`
+        : '/campaigns/new/editor';
+    const detailsHref = queryShop
+        ? `/campaigns/new/details?shop=${encodeURIComponent(queryShop)}`
+        : '/campaigns/new/details';
+    const campaignsHref = queryShop
+        ? `/campaigns?shop=${encodeURIComponent(queryShop)}`
+        : '/campaigns';
 
     useEffect(() => {
         setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
@@ -172,6 +184,13 @@ export default function ScheduleCampaignPage() {
             return;
         }
 
+        const cachedSegments = buildAudienceSegmentsFromCache(queryClient, shopDomain);
+        const selected = cachedSegments.find((segment) => segment.id === segmentId) ?? cachedSegments[0];
+        if (selected) {
+            setSegmentDisplayName(selected.name);
+            setSegmentSubscriberCount(selected.count);
+        }
+
         let active = true;
         fetch(`/api/campaigns/audience?shop=${encodeURIComponent(shopDomain)}`)
             .then((response) => response.json())
@@ -180,20 +199,20 @@ export default function ScheduleCampaignPage() {
                     return;
                 }
 
-                const selected = data.segments.find((segment: { id: string }) => segment.id === segmentId) ?? data.segments[0];
-                if (!selected) {
+                const refreshed = data.segments.find((segment: { id: string }) => segment.id === segmentId) ?? data.segments[0];
+                if (!refreshed) {
                     return;
                 }
 
-                setSegmentDisplayName(String(selected.name ?? 'All Subscribers'));
-                setSegmentSubscriberCount(Number(selected.count ?? 0));
+                setSegmentDisplayName(String(refreshed.name ?? 'All Subscribers'));
+                setSegmentSubscriberCount(Number(refreshed.count ?? 0));
             })
             .catch(() => undefined);
 
         return () => {
             active = false;
         };
-    }, [shopDomain, segmentId]);
+    }, [queryClient, shopDomain, segmentId]);
     
     const handleLaunchCampaign = async () => {
         setIsLaunching(true);
@@ -218,10 +237,6 @@ export default function ScheduleCampaignPage() {
                 if (scheduledAt.getTime() <= Date.now()) {
                     throw new Error('Scheduled time must be in the future.');
                 }
-            }
-
-            if (segmentSubscriberCount <= 0) {
-                throw new Error('No subscribed users found in this segment.');
             }
 
             const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
@@ -274,109 +289,134 @@ export default function ScheduleCampaignPage() {
                 throw new Error(buildResponseError('Failed to create campaign.', createPayload));
             }
 
-            if (sendingOption === 'schedule' || sendingOption === 'recurring') {
-                if (sendingOption === 'schedule') {
-                    if (!scheduledAt) {
-                        throw new Error('Choose a valid scheduled date and time.');
-                    }
+            const campaignId = String(createResult.campaign.id);
+            const launchStatus =
+                sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
 
-                    if (scheduledAt.getTime() <= Date.now()) {
-                        throw new Error('Scheduled time must be in the future.');
-                    }
-                }
+            prependOptimisticCampaign(queryClient, shopDomain, {
+                id: campaignId,
+                title: title || 'Untitled Campaign',
+                body: message || '',
+                image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl,
+                icon_url: iconUrl,
+                segment_id: segmentId,
+                status: launchStatus,
+                created_at: new Date().toISOString(),
+                sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
+                scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
+                delivery_count: segmentSubscriberCount,
+                click_count: 0,
+                revenue_cents: 0,
+            });
 
-                if (sendingOption === 'recurring' && !recurringPattern) {
-                    throw new Error('Choose a recurring pattern.');
-                }
+            const toastTitle =
+                sendingOption === 'schedule'
+                    ? 'Campaign Scheduled!'
+                    : sendingOption === 'recurring'
+                      ? 'Recurring Campaign Set!'
+                      : 'Campaign Launched!';
+            const toastDescription =
+                sendingOption === 'schedule'
+                    ? 'Your campaign has been scheduled.'
+                    : sendingOption === 'recurring'
+                      ? 'Your recurring campaign has been configured.'
+                      : 'Your campaign is being delivered in the background.';
 
-                const scheduleResponse = await fetch('/api/campaigns/schedule', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        campaignId: createResult.campaign.id,
-                        shopDomain,
-                        scheduleType: sendingOption,
-                        sendAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() : undefined,
-                        recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
-                        smartSendEnabled: smartDeliver,
-                        flashSaleEnabled,
-                        flashSaleConfig: flashSaleEnabled ? {
-                            discountPercent: flashSaleDiscountPercent,
-                            originalPrice: flashSaleOriginalPrice,
-                            salePrice: flashSaleSalePrice,
-                            expiresAt: flashSaleExpiresAt?.toISOString(),
-                            urgencyText: flashSaleUrgencyText,
-                        } : undefined,
-                    }),
-                });
-
-                const schedulePayload = await parseApiResponse(scheduleResponse);
-                const scheduleResult = schedulePayload.json;
-                if (!scheduleResponse.ok || !scheduleResult?.ok) {
-                    throw new Error(buildResponseError('Failed to schedule campaign.', schedulePayload));
-                }
-            } else {
-                // Send immediately
-                const sendResponse = await fetch('/api/campaigns/send', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        campaignId: createResult.campaign.id,
-                        shopDomain,
-                        title: title || 'Untitled Campaign',
-                        body: message || '',
-                        targetUrl: primaryLink || null,
-                        iconUrl,
-                        imageUrl: macosImageUrl,
-                        segmentId,
-                        smartDeliver,
-                        testMode: false,
-                    }),
-                });
-
-                const sendPayload = await parseApiResponse(sendResponse);
-                const sendResult = sendPayload.json;
-                if (!sendResponse.ok || !sendResult?.ok) {
-                    throw new Error(buildResponseError('Failed to send campaign.', sendPayload));
-                }
-
-                if (sendResult.async === true) {
-                    toast({
-                        title: 'Campaign Launched!',
-                        description: 'Your campaign is being delivered in the background.',
-                    });
-                    router.push('/campaigns');
-                    return;
-                }
-
-                if (sendResult.completed === false) {
-                    toast({
-                        title: 'Campaign Queued',
-                        description: `Initial batch sent. Remaining ${Number(sendResult.remainingRecipients ?? 0).toLocaleString()} recipients will continue via background processing.`,
-                    });
-                }
-
-                if (Number(sendResult.successCount ?? 0) <= 0) {
-                    throw new Error(
-                        Number(sendResult.recipientCount ?? 0) <= 0
-                            ? 'No active browser notification tokens found. Grow subscribers first and retry.'
-                            : 'Campaign send was attempted but no notifications were delivered. Please check Firebase setup and token health.',
-                    );
-                }
-            }
-
-            const toastTitle = sendingOption === 'schedule' ? "Campaign Scheduled!" : sendingOption === 'recurring' ? "Recurring Campaign Set!" : "Campaign Launched!";
-            const toastDescription = sendingOption === 'schedule' ? "Your campaign has been scheduled." : sendingOption === 'recurring' ? "Your recurring campaign has been configured." : "Your campaign has been successfully sent.";
-            
             toast({
                 title: toastTitle,
                 description: toastDescription,
             });
-            router.push('/campaigns');
+            router.push(campaignsHref);
+            setIsLaunching(false);
+
+            const runBackgroundLaunch = async () => {
+                try {
+                    if (sendingOption === 'schedule' || sendingOption === 'recurring') {
+                        if (sendingOption === 'schedule') {
+                            if (!scheduledAt) {
+                                throw new Error('Choose a valid scheduled date and time.');
+                            }
+
+                            if (scheduledAt.getTime() <= Date.now()) {
+                                throw new Error('Scheduled time must be in the future.');
+                            }
+                        }
+
+                        if (sendingOption === 'recurring' && !recurringPattern) {
+                            throw new Error('Choose a recurring pattern.');
+                        }
+
+                        const scheduleResponse = await fetch('/api/campaigns/schedule', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                campaignId,
+                                shopDomain,
+                                scheduleType: sendingOption,
+                                sendAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() : undefined,
+                                recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
+                                smartSendEnabled: smartDeliver,
+                                flashSaleEnabled,
+                                flashSaleConfig: flashSaleEnabled
+                                    ? {
+                                          discountPercent: flashSaleDiscountPercent,
+                                          originalPrice: flashSaleOriginalPrice,
+                                          salePrice: flashSaleSalePrice,
+                                          expiresAt: flashSaleExpiresAt?.toISOString(),
+                                          urgencyText: flashSaleUrgencyText,
+                                      }
+                                    : undefined,
+                            }),
+                        });
+
+                        const schedulePayload = await parseApiResponse(scheduleResponse);
+                        const scheduleResult = schedulePayload.json;
+                        if (!scheduleResponse.ok || !scheduleResult?.ok) {
+                            throw new Error(buildResponseError('Failed to schedule campaign.', schedulePayload));
+                        }
+                        return;
+                    }
+
+                    const sendResponse = await fetch('/api/campaigns/send', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            campaignId,
+                            shopDomain,
+                            title: title || 'Untitled Campaign',
+                            body: message || '',
+                            targetUrl: primaryLink || null,
+                            iconUrl,
+                            imageUrl: macosImageUrl,
+                            segmentId,
+                            smartDeliver,
+                            testMode: false,
+                        }),
+                    });
+
+                    const sendPayload = await parseApiResponse(sendResponse);
+                    const sendResult = sendPayload.json;
+                    if (!sendResponse.ok || !sendResult?.ok) {
+                        throw new Error(buildResponseError('Failed to send campaign.', sendPayload));
+                    }
+                } catch (backgroundError) {
+                    toast({
+                        variant: 'destructive',
+                        title: 'Campaign delivery issue',
+                        description:
+                            backgroundError instanceof Error
+                                ? backgroundError.message
+                                : 'Background delivery failed. Check campaigns for status.',
+                    });
+                }
+            };
+
+            void runBackgroundLaunch();
+            return;
         } catch (error) {
             toast({
                 variant: 'destructive',
@@ -435,7 +475,7 @@ export default function ScheduleCampaignPage() {
                 title: "Draft Saved!",
                 description: "Your campaign has been saved as a draft.",
             });
-            router.push('/campaigns');
+            router.push(campaignsHref);
         } catch (error) {
             toast({
                 variant: 'destructive',
@@ -466,7 +506,7 @@ export default function ScheduleCampaignPage() {
         <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8 bg-muted/40 min-h-screen">
             <div className="flex items-center gap-4">
                 <Button variant="outline" size="icon" asChild>
-                    <Link href="/campaigns/new/editor">
+                    <Link href={editorHref}>
                         <ArrowLeft className="h-4 w-4" />
                         <span className="sr-only">Back to Composer</span>
                     </Link>
@@ -483,7 +523,7 @@ export default function ScheduleCampaignPage() {
                         <CardHeader className="flex flex-row justify-between items-center">
                             <CardTitle>Summary</CardTitle>
                             <Button variant="outline" size="sm" asChild>
-                                <Link href="/campaigns/new/details"><Edit className="mr-2 h-3 w-3" /> Edit</Link>
+                                <Link href={detailsHref}><Edit className="mr-2 h-3 w-3" /> Edit</Link>
                             </Button>
                         </CardHeader>
                         <CardContent className="space-y-4">
@@ -513,7 +553,7 @@ export default function ScheduleCampaignPage() {
                          <CardHeader className="flex flex-row justify-between items-center">
                             <CardTitle>Preview</CardTitle>
                             <Button variant="outline" size="sm" asChild>
-                                <Link href="/campaigns/new/editor"><Edit className="mr-2 h-3 w-3" /> Edit</Link>
+                                <Link href={editorHref}><Edit className="mr-2 h-3 w-3" /> Edit</Link>
                             </Button>
                         </CardHeader>
                         <CardContent>
@@ -548,7 +588,7 @@ export default function ScheduleCampaignPage() {
                 <Button 
                     size="lg" 
                     onClick={handleLaunchCampaign} 
-                    disabled={isLaunching || isSaving || !title || !primaryLink || segmentSubscriberCount <= 0}
+                    disabled={isLaunching || isSaving || !title || !primaryLink}
                 >
                     {isLaunching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
                     {isLaunching ? 'Processing...' : (sendingOption === 'schedule' ? 'Schedule Campaign' : 'Launch Campaign')}

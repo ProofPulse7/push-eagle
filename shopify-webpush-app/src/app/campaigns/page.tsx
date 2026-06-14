@@ -22,7 +22,7 @@ export default function CampaignsPage() {
     <PageLoadingShell
       title="Campaigns"
       isLoading={isLoading}
-      hasData={Boolean(data)}
+      hasData={true}
       isFetching={isFetching}
     >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">

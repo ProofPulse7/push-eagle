@@ -1,4 +1,3 @@
-
 'use client';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
@@ -57,9 +56,19 @@ export function Composer() {
 
     const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
     const [saveStatus, setSaveStatus] = useState<'Unsaved' | 'Saving...' | 'Changes saved'>('Unsaved');
+    const [detailsHref, setDetailsHref] = useState('/campaigns/new/details');
     const [isGenerating, setIsGenerating] = useState(false);
     const [errors, setErrors] = useState<{ title?: string, primaryLink?: string }>({});
     const { toast } = useToast();
+
+    useEffect(() => {
+        const queryShop = new URLSearchParams(window.location.search).get('shop');
+        setDetailsHref(
+            queryShop
+                ? `/campaigns/new/details?shop=${encodeURIComponent(queryShop)}`
+                : '/campaigns/new/details',
+        );
+    }, []);
 
     const handleTitleEmojiSelect = (emoji: { emoji: string }) => {
         setTitle(`${title}${emoji.emoji}`);
@@ -219,7 +228,7 @@ export function Composer() {
                 <div className="p-4 border-b flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
                         <Button variant="outline" size="icon" className="h-8 w-8" asChild>
-                            <Link href="/campaigns">
+                            <Link href={detailsHref}>
                                 <ArrowLeft className="h-4 w-4" />
                             </Link>
                         </Button>

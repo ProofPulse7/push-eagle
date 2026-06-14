@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -13,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
+import { buildAudienceSegmentsFromCache } from '@/lib/client/optimistic-campaigns';
 import { cn } from '@/lib/utils';
 
 type AudienceSegment = {
@@ -53,6 +55,7 @@ const OptionCard = ({
 
 export default function CampaignDetailsPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { shopDomain: settingsShopDomain } = useSettings();
   const [queryShop, setQueryShop] = useState('');
   const shopDomain = queryShop || settingsShopDomain || '';
@@ -67,8 +70,9 @@ export default function CampaignDetailsPage() {
     setFlashSaleEnabled,
   } = useCampaignState();
 
-  const [segments, setSegments] = useState<AudienceSegment[]>([{ id: 'all', name: 'All Subscribers', count: 0 }]);
-  const [loadingAudience, setLoadingAudience] = useState(false);
+  const [segments, setSegments] = useState<AudienceSegment[]>(() =>
+    shopDomain ? buildAudienceSegmentsFromCache(queryClient, shopDomain) : [{ id: 'all', name: 'All Subscribers', count: 0 }],
+  );
   const [audienceError, setAudienceError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -80,8 +84,15 @@ export default function CampaignDetailsPage() {
       return;
     }
 
+    const cached = buildAudienceSegmentsFromCache(queryClient, shopDomain);
+    if (cached.length > 0) {
+      setSegments(cached);
+      if (!cached.some((item) => item.id === segmentId)) {
+        setSegmentId(cached[0].id);
+      }
+    }
+
     let active = true;
-    setLoadingAudience(true);
     setAudienceError(null);
 
     fetch(`/api/campaigns/audience?shop=${encodeURIComponent(shopDomain)}`)
@@ -92,7 +103,7 @@ export default function CampaignDetailsPage() {
         }
 
         if (!data?.ok || !Array.isArray(data.segments)) {
-          setAudienceError(typeof data?.error === 'string' ? data.error : 'Failed to load subscribers and segments for this store.');
+          setAudienceError(typeof data?.error === 'string' ? data.error : 'Failed to refresh audience data.');
           return;
         }
 
@@ -110,29 +121,24 @@ export default function CampaignDetailsPage() {
         }
       })
       .catch(() => {
-        if (active) {
+        if (active && cached.length === 0) {
           setAudienceError('Failed to load subscribers and segments for this store.');
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setLoadingAudience(false);
         }
       });
 
     return () => {
       active = false;
     };
-  }, [segmentId, setSegmentId, shopDomain]);
+  }, [queryClient, shopDomain]);
 
   const selectedSegment = useMemo(
     () => segments.find((segment) => segment.id === segmentId) ?? segments[0],
     [segmentId, segments],
   );
 
-  const scheduleHref = queryShop
-    ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
-    : '/campaigns/new/schedule';
+  const campaignsHref = queryShop
+    ? `/campaigns?shop=${encodeURIComponent(queryShop)}`
+    : '/campaigns';
 
   const editorHref = queryShop
     ? `/campaigns/new/editor?shop=${encodeURIComponent(queryShop)}`
@@ -145,7 +151,7 @@ export default function CampaignDetailsPage() {
       <div className="mx-auto max-w-[980px]">
         <div className="mb-8 flex items-center gap-4">
           <Button variant="outline" size="icon" className="h-12 w-12 rounded-xl bg-white" asChild>
-            <Link href={editorHref}>
+            <Link href={campaignsHref}>
               <ArrowLeft className="h-5 w-5" />
               <span className="sr-only">Back</span>
             </Link>
@@ -223,7 +229,6 @@ export default function CampaignDetailsPage() {
                   ))}
                 </SelectContent>
               </Select>
-              {loadingAudience ? <p className="text-sm text-muted-foreground">Loading subscribers and segments...</p> : null}
               {audienceError ? <p className="text-sm text-destructive">{audienceError}</p> : null}
             </section>
 
@@ -269,7 +274,7 @@ export default function CampaignDetailsPage() {
           <Button
             size="lg"
             className="h-12 min-w-[140px] rounded-xl bg-primary px-8 text-base font-semibold"
-            onClick={() => router.push(scheduleHref)}
+            onClick={() => router.push(editorHref)}
           >
             Continue
           </Button>

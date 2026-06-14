@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
-import { countCampaignAudienceTokens, listSegments } from '@/lib/server/data/store';
+import { API_KV_TTL, withShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
+import { getSubscriberKpis, listSegments } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -8,28 +9,38 @@ export const runtime = 'nodejs';
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const dynamicSegments = await listSegments(shopDomain);
 
-    const [allCount, segmentCounts] = await Promise.all([
-      countCampaignAudienceTokens(shopDomain, 'all'),
-      Promise.all(dynamicSegments.map((segment) => countCampaignAudienceTokens(shopDomain, segment.id))),
-    ]);
-
-    return NextResponse.json({
-      ok: true,
+    const payload = await withShopApiKvCache(
       shopDomain,
-      segments: [
-        {
-          id: 'all',
-          name: 'All Subscribers',
-          count: allCount,
-        },
-        ...dynamicSegments.map((segment, index) => ({
-          id: segment.id,
-          name: segment.name,
-          count: Number(segmentCounts[index] ?? 0),
-        })),
-      ],
+      'campaign-audience',
+      API_KV_TTL.segments,
+      async () => {
+        const [subscriberKpis, dynamicSegments] = await Promise.all([
+          getSubscriberKpis(shopDomain),
+          listSegments(shopDomain, { preferCache: true }),
+        ]);
+
+        return {
+          ok: true as const,
+          shopDomain,
+          segments: [
+            {
+              id: 'all',
+              name: 'All Subscribers',
+              count: Number(subscriberKpis.totalSubscribers ?? 0),
+            },
+            ...dynamicSegments.map((segment) => ({
+              id: segment.id,
+              name: segment.name,
+              count: Number(segment.subscriberCount ?? 0),
+            })),
+          ],
+        };
+      },
+    );
+
+    return NextResponse.json(payload, {
+      headers: { 'Cache-Control': 'private, max-age=120, stale-while-revalidate=600' },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch campaign audience.';

@@ -6052,7 +6052,7 @@ export const resolveCampaignAudience = async (
   if (!segmentId || segmentId === 'all') {
     const rows = excludeDeliveredCampaignId
       ? await sql`
-        SELECT
+        SELECT DISTINCT ON (s.id)
           t.id AS token_id,
           t.fcm_token,
           t.token_type,
@@ -6073,10 +6073,10 @@ export const resolveCampaignAudience = async (
             WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
               AND cd.token_id = t.id
           )
-        ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+        ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
       `
       : await sql`
-        SELECT
+        SELECT DISTINCT ON (s.id)
           t.id AS token_id,
           t.fcm_token,
           t.token_type,
@@ -6091,7 +6091,7 @@ export const resolveCampaignAudience = async (
         WHERE s.shop_domain = ${shopDomain}
           AND t.shop_domain = ${shopDomain}
           AND t.status = 'active'
-        ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+        ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
       `;
     return rows as Array<{
       token_id: string | number;
@@ -6124,7 +6124,7 @@ export const resolveCampaignAudience = async (
 
   const rows = excludeDeliveredCampaignId
     ? await sql`
-      SELECT
+      SELECT DISTINCT ON (s.id)
         t.id AS token_id,
         t.fcm_token,
         t.token_type,
@@ -6146,10 +6146,10 @@ export const resolveCampaignAudience = async (
           WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
             AND cd.token_id = t.id
         )
-      ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+      ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
     `
     : await sql`
-      SELECT
+      SELECT DISTINCT ON (s.id)
         t.id AS token_id,
         t.fcm_token,
         t.token_type,
@@ -6165,7 +6165,7 @@ export const resolveCampaignAudience = async (
         AND t.shop_domain = ${shopDomain}
         AND t.status = 'active'
         AND s.id = ANY(${subscriberIds})
-      ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+      ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
     `;
 
   return rows as Array<{
@@ -6184,6 +6184,17 @@ export const resolveCampaignAudience = async (
 export const countCampaignAudienceTokens = async (shopDomain: string, segmentId?: string | null) => {
   const rows = await resolveCampaignAudience(shopDomain, segmentId);
   return rows.length;
+};
+
+export const deleteSegment = async (shopDomain: string, segmentId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  await sql`
+    DELETE FROM segments
+    WHERE id = ${segmentId}
+      AND shop_domain = ${shopDomain}
+  `;
 };
 
 export const listQueuedCampaigns = async (limit = 25, shardCount = 1, shardIndex = 0) => {

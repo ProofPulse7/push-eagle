@@ -1,6 +1,6 @@
 'use client';
 
-import { BarChart3, DollarSign, MousePointerClick, Send, TrendingUp, Users, Zap } from 'lucide-react';
+import { DollarSign, Send, TrendingUp, Users } from 'lucide-react';
 import Link from 'next/link';
 
 import { SubscriberGrowthChart } from '@/components/dashboard/subscriber-growth-chart';
@@ -47,10 +47,7 @@ export function DashboardView() {
   );
   const campaignsSent = Number(campaignStats.sentCount ?? campaignStats.sent ?? overview.campaignCount ?? 0);
   const growthPercent = Number(subscriberKpis.growthPercent ?? 0);
-  const clickRate = Number(campaignStats.clickRate ?? campaignStats.ctr ?? 0);
-  const automationCount = Number(overview.automationCount ?? overview.activeAutomations ?? 0);
-
-  const showSkeleton = isLoading && !data;
+  const showValueSkeleton = isLoading && !data;
 
   const statCards = [
     {
@@ -80,24 +77,6 @@ export function DashboardView() {
       hint: `${impressionsRemaining.toLocaleString()} remaining this period`,
       icon: TrendingUp,
       accent: 'text-amber-600',
-    },
-  ];
-
-  const insightCards = [
-    {
-      title: 'Average click rate',
-      value: `${clickRate.toFixed(1)}%`,
-      icon: MousePointerClick,
-    },
-    {
-      title: 'Active automations',
-      value: automationCount.toLocaleString(),
-      icon: Zap,
-    },
-    {
-      title: 'Segments ready',
-      value: Number(overview.segmentCount ?? 0).toLocaleString(),
-      icon: BarChart3,
     },
   ];
 
@@ -133,52 +112,27 @@ export function DashboardView() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {showSkeleton
-          ? Array.from({ length: 4 }).map((_, index) => (
-              <Card key={index} className="min-h-[148px]">
-                <CardHeader>
-                  <Skeleton className="h-4 w-28" />
-                </CardHeader>
-                <CardContent>
+        {statCards.map((card) => (
+          <Card key={card.title} className="min-h-[160px] border-border/80 shadow-sm">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">{card.title}</CardTitle>
+              <card.icon className={`h-5 w-5 ${card.accent}`} />
+            </CardHeader>
+            <CardContent>
+              {showValueSkeleton ? (
+                <>
                   <Skeleton className="h-10 w-36" />
                   <Skeleton className="mt-3 h-3 w-full" />
-                </CardContent>
-              </Card>
-            ))
-          : statCards.map((card) => (
-              <Card key={card.title} className="min-h-[148px] border-border/80 shadow-sm">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">{card.title}</CardTitle>
-                  <card.icon className={`h-5 w-5 ${card.accent}`} />
-                </CardHeader>
-                <CardContent>
+                </>
+              ) : (
+                <>
                   <div className="text-3xl font-bold tracking-tight">{card.value}</div>
                   <p className="mt-2 text-sm text-muted-foreground">{card.hint}</p>
-                </CardContent>
-              </Card>
-            ))}
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-3">
-        {showSkeleton
-          ? Array.from({ length: 3 }).map((_, index) => (
-              <Card key={index}>
-                <CardContent className="pt-6">
-                  <Skeleton className="h-16 w-full" />
-                </CardContent>
-              </Card>
-            ))
-          : insightCards.map((card) => (
-              <Card key={card.title} className="bg-muted/30">
-                <CardContent className="flex items-center justify-between pt-6">
-                  <div>
-                    <p className="text-sm text-muted-foreground">{card.title}</p>
-                    <p className="text-2xl font-semibold">{card.value}</p>
-                  </div>
-                  <card.icon className="h-8 w-8 text-muted-foreground/70" />
-                </CardContent>
-              </Card>
-            ))}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       <SubscriberGrowthChart fullWidth defaultDays={30} />

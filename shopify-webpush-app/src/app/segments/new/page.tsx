@@ -4,6 +4,7 @@
 import { useState, Fragment, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Plus, Trash2, Calendar as CalendarIcon, X, ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import { useSettings } from '@/context/settings-context';
+import { queryKeys } from '@/lib/client/query-keys';
 
 const segmentCriteria = {
   actions: [
@@ -205,6 +207,7 @@ const MultiSelectPillFilter = ({
 
 export default function NewSegmentPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { toast } = useToast();
   const { shopDomain } = useSettings();
   const [resolvedShopDomain, setResolvedShopDomain] = useState('');
@@ -356,12 +359,44 @@ export default function NewSegmentPage() {
   };
 
   const handleCreateSegment = async () => {
-    if (!resolvedShopDomain || !segmentName.trim() || estimatedCount <= 0 || isCreating) {
+    if (!resolvedShopDomain || !segmentName.trim() || isCreating) {
       return;
     }
 
+    const optimisticId = crypto.randomUUID();
+    const cacheKey = queryKeys.segments(resolvedShopDomain);
+    const previous = queryClient.getQueryData<{ segments?: Array<Record<string, unknown>> }>(cacheKey);
+    const criteriaSummary =
+      conditionGroups
+        .flatMap((group) => group.conditions.map((condition) => condition.type))
+        .slice(0, 3)
+        .join(', ') || 'Custom audience criteria';
+
+    queryClient.setQueryData(cacheKey, (current: { segments?: Array<Record<string, unknown>> } | undefined) => {
+      const rows = Array.isArray(current?.segments) ? current.segments : previous?.segments ?? [];
+      return {
+        ok: true,
+        segments: [
+          {
+            id: optimisticId,
+            name: segmentName.trim(),
+            type: 'Dynamic',
+            subscriberCount: estimatedCount,
+            criteria: criteriaSummary,
+          },
+          ...rows,
+        ],
+      };
+    });
+
+    toast({
+      title: 'Segment saved',
+      description: 'Your segment is ready for campaign targeting.',
+    });
+    router.push('/segments');
+    setIsCreating(true);
+
     try {
-      setIsCreating(true);
       const response = await fetch(`/api/segments?shop=${encodeURIComponent(resolvedShopDomain)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -386,14 +421,28 @@ export default function NewSegmentPage() {
         throw new Error(json?.error ?? 'Failed to create segment.');
       }
 
-      toast({
-        title: 'Segment created',
-        description: 'Your segment is now available for campaign targeting.',
+      queryClient.setQueryData(cacheKey, (current: { segments?: Array<Record<string, unknown>> } | undefined) => {
+        const rows = Array.isArray(current?.segments) ? current.segments : [];
+        return {
+          ok: true,
+          segments: rows.map((segment) =>
+            String(segment.id) === optimisticId
+              ? {
+                  ...segment,
+                  id: String(json.segment?.id ?? optimisticId),
+                  subscriberCount: Number(json.segment?.subscriberCount ?? estimatedCount),
+                }
+              : segment,
+          ),
+        };
       });
-      router.push('/segments');
+      void queryClient.invalidateQueries({ queryKey: cacheKey });
     } catch (error) {
+      if (previous) {
+        queryClient.setQueryData(cacheKey, previous);
+      }
       toast({
-        title: 'Unable to create segment',
+        title: 'Unable to save segment',
         description: error instanceof Error ? error.message : 'Please try again.',
         variant: 'destructive',
       });
@@ -675,7 +724,7 @@ export default function NewSegmentPage() {
 
 
             <div className="pt-8 flex justify-end">
-                <Button size="lg" disabled={!segmentName || estimatedCount <= 0 || isCreating || !resolvedShopDomain} onClick={handleCreateSegment}>
+                <Button size="lg" disabled={!segmentName || isCreating || !resolvedShopDomain} onClick={handleCreateSegment}>
                   {isCreating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Create Segment
                 </Button>

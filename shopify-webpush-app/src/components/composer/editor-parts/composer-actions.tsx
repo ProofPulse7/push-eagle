@@ -100,10 +100,10 @@ export const ComposerActions = ({
         const isFormValid = onContinueClick();
         if (isFormValid) {
             const queryShop = new URLSearchParams(window.location.search).get('shop');
-            const detailsHref = queryShop
-                ? `/campaigns/new/details?shop=${encodeURIComponent(queryShop)}`
-                : '/campaigns/new/details';
-            router.push(detailsHref);
+            const scheduleHref = queryShop
+                ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
+                : '/campaigns/new/schedule';
+            router.push(scheduleHref);
         }
     }
 
