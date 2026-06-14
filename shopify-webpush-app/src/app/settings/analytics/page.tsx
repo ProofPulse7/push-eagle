@@ -144,7 +144,7 @@ export default function SettingsAnalyticsPage() {
             <PerformanceOverview from={from} to={to} />
             <div className="grid gap-8 lg:grid-cols-2">
               <RevenueAttribution from={from} to={to} />
-              <DevicePerformance />
+              <DevicePerformance shopDomain={shopDomain ?? undefined} />
             </div>
             <div className="grid gap-8 lg:grid-cols-2">
               <TopCampaigns from={from} to={to} />

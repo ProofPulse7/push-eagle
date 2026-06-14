@@ -1,5 +1,4 @@
 import {
-  completeCronHeartbeat,
   listDueAutomationJobs,
   listDueScheduledCampaigns,
   listQueuedCampaigns,
@@ -7,7 +6,6 @@ import {
   processIngestionQueue,
   runRetentionMaintenance,
   sendCampaign,
-  startCronHeartbeat,
 } from '@/lib/server/data/store';
 import {
   isAutomationQueueEnabled,
@@ -58,9 +56,11 @@ const resolveIdleSleepUntil = (probe: Awaited<ReturnType<typeof probeCronPending
 
 export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick') => {
   const utcMinute = new Date().getUTCMinutes();
-  const runHeavyMaintenance = utcMinute % 15 === 0;
-  const runAutomationSafetyNet = !isAutomationQueueEnabled() || utcMinute % 5 === 0;
+  const runHeavyMaintenance = utcMinute % 30 === 0;
   const runQueuePromotion = isAutomationQueueEnabled() && utcMinute % 5 === 0;
+  const runAutomationSafetyNet = isAutomationQueueEnabled()
+    ? utcMinute % 30 === 0
+    : utcMinute % 5 === 0;
 
   const probe = await probeCronPendingWork();
   const hasImmediateWork = cronProbeHasImmediateWork(probe);
@@ -79,11 +79,6 @@ export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick'
   }
 
   await clearCronSleep();
-
-  const heartbeatId = await startCronHeartbeat('cron_tick', {
-    workerId,
-    ...config,
-  });
 
   try {
     const retention = runHeavyMaintenance ? await runRetentionMaintenance() : null;
@@ -178,7 +173,7 @@ export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick'
       }
     }
 
-    const payload = {
+    return {
       ok: true,
       workerId,
       probe,
@@ -203,28 +198,8 @@ export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick'
         processedCount: ingestionResults.reduce((sum, item) => sum + Number(item.processedCount ?? 0), 0),
       },
     };
-
-    await completeCronHeartbeat({
-      heartbeatId,
-      ok: true,
-      metadata: {
-        campaignProcessed: payload.campaigns.processedCount,
-        automationDueJobs: payload.automations.dueJobs,
-        automationSent: payload.automations.sentCount,
-        ingestionDueJobs: payload.ingestion.dueJobs,
-        ingestionProcessed: payload.ingestion.processedCount,
-        retention,
-      },
-    });
-
-    return payload;
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Cron tick failed.';
-    await completeCronHeartbeat({
-      heartbeatId,
-      ok: false,
-      errorMessage: message,
-    });
+    await clearCronSleep();
     throw error;
   }
 };

@@ -1,5 +1,4 @@
 import { getNeonSql } from '@/lib/integrations/database/neon';
-import { ensureSchema } from '@/lib/server/data/store';
 
 export type CronWorkProbe = {
   dueScheduledCampaigns: number;
@@ -12,7 +11,6 @@ export type CronWorkProbe = {
 };
 
 export const probeCronPendingWork = async (): Promise<CronWorkProbe> => {
-  await ensureSchema();
   const sql = getNeonSql();
 
   const rows = await sql`

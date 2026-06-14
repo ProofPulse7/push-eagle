@@ -45,6 +45,7 @@ export function useMerchantOverview() {
     queryFn: () => fetchJsonWithShop<Record<string, unknown>>('/api/settings/overview', shop),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -57,6 +58,7 @@ export function useCampaigns() {
       fetchJsonWithShop<{ campaigns: unknown[] }>('/api/campaigns', shop),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -72,6 +74,7 @@ export function useAutomationsOverview() {
       ),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -84,6 +87,7 @@ export function useSegments() {
       fetchJsonWithShop<{ segments: unknown[] }>('/api/segments', shop),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -96,6 +100,7 @@ export function useSubscribersOverview() {
       fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -108,6 +113,7 @@ export function useAttributionSettings() {
       fetchJsonWithShop<Record<string, unknown>>('/api/settings/attribution', shop),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -120,6 +126,7 @@ export function usePrivacySettings() {
       fetchJsonWithShop<Record<string, unknown>>('/api/settings/privacy', shop),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -132,6 +139,7 @@ export function useBrandingSettings() {
       fetchJsonWithShop<Record<string, unknown>>('/api/settings/branding', shop),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -155,6 +163,7 @@ export function useCampaignStats(from?: Date, to?: Date) {
     },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -226,6 +235,7 @@ export function useAnalyticsStats(from: Date, to: Date, enabled = true) {
       ),
     enabled: Boolean(shop) && enabled,
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -245,6 +255,7 @@ export function useSubscriberGrowth(from: Date, to: Date) {
       ),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
