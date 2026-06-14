@@ -101,12 +101,20 @@ function buildChartData(
     };
 }
 
-export function SubscriberGrowthChart({ showDatePicker = false }: { showDatePicker?: boolean }) {
+export function SubscriberGrowthChart({
+  showDatePicker = false,
+  fullWidth = false,
+  defaultDays = 7,
+}: {
+  showDatePicker?: boolean;
+  fullWidth?: boolean;
+  defaultDays?: number;
+}) {
     const [date, setDate] = useState<DateRange | undefined>(undefined);
     const [chartType, setChartType] = useState<'area' | 'bar'>('area');
 
     const to = date?.to ?? new Date();
-    const from = date?.from ?? new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const from = date?.from ?? new Date(to.getTime() - defaultDays * 24 * 60 * 60 * 1000);
     const { data: payload, isFetching, isLoading } = useSubscriberGrowth(from, to);
 
     const chartData = useMemo(() => buildChartData(payload, from, to), [payload, from, to]);
@@ -115,12 +123,14 @@ export function SubscriberGrowthChart({ showDatePicker = false }: { showDatePick
     const showSkeleton = isLoading && !payload;
 
     return (
-        <Card>
+        <Card className={fullWidth ? 'shadow-sm' : undefined}>
             <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <CardTitle>Subscriber Growth</CardTitle>
                     <CardDescription>
-                         {showDatePicker ? "New subscribers over the selected period." : "New subscribers over the last 7 days."}
+                         {showDatePicker
+                           ? 'New subscribers over the selected period.'
+                           : `New subscribers over the last ${defaultDays} days.`}
                     </CardDescription>
                 </div>
                  {showDatePicker && <DateRangePicker date={date} setDate={setDate} size="sm" />}
@@ -141,12 +151,13 @@ export function SubscriberGrowthChart({ showDatePicker = false }: { showDatePick
                     </div>
                 </div>
                 {showSkeleton ? (
-                  <Skeleton className="h-72 w-full" />
+                  <Skeleton className={fullWidth ? 'h-[28rem] w-full' : 'h-72 w-full'} />
                 ) : (
                   <DashboardSubscriberGrowthChart
                     chartType={chartType}
                     data={chartData.data}
                     xAxisProps={xAxisProps}
+                    height={fullWidth ? 420 : 288}
                   />
                 )}
                 {showRefreshing && <p className="text-xs text-muted-foreground mt-2">Refreshing growth data...</p>}

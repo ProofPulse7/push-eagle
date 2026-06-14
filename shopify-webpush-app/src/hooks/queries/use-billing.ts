@@ -6,14 +6,18 @@ import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { queryKeys } from '@/lib/client/query-keys';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
-export function useBillingStatus(options?: { refetchOnMount?: boolean }) {
+export function useBillingStatus(options?: { refetchOnMount?: boolean; reconcile?: boolean }) {
   const shop = useShopDomain();
   return useQuery({
     queryKey: queryKeys.billingStatus(shop),
-    queryFn: () => fetchJsonWithShop<{ billing: Record<string, unknown> }>('/api/billing/status', shop),
+    queryFn: () =>
+      fetchJsonWithShop<{ billing: Record<string, unknown> }>(
+        `/api/billing/status${options?.reconcile ? '?reconcile=1' : ''}`,
+        shop,
+      ),
     enabled: Boolean(shop),
-    staleTime: 5 * 60 * 1000,
-    refetchOnMount: options?.refetchOnMount ? 'always' : true,
+    staleTime: 30 * 60 * 1000,
+    refetchOnMount: options?.refetchOnMount ? 'always' : false,
     placeholderData: (previous) => previous,
   });
 }

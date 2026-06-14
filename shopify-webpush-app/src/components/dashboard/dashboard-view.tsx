@@ -1,36 +1,23 @@
 'use client';
 
-import { DollarSign, Users, TrendingUp, Send, Check } from 'lucide-react';
+import { BarChart3, DollarSign, MousePointerClick, Send, TrendingUp, Users, Zap } from 'lucide-react';
 import Link from 'next/link';
 
-import { PerformanceChart } from '@/components/dashboard/performance-chart';
-import { RecentActivity } from '@/components/dashboard/recent-activity';
 import { SubscriberGrowthChart } from '@/components/dashboard/subscriber-growth-chart';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
-import { Separator } from '@/components/ui/separator';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDashboardSummary } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { BASIC_PLAN } from '@/lib/client/billing-plans';
 import { formatCurrency } from '@/lib/utils';
-
-const proPlanFeatures = [
-  'All Basic Features',
-  'Abandoned Cart Automation',
-  'Hero Image Support',
-  'Email Reports',
-  'Segmentation',
-  'Flash Sale',
-  'Smart Delivery',
-];
 
 export function DashboardView() {
   const shopDomain = useShopDomain();
   const { atLimit } = useImpressionLimit();
-  const { data, isLoading, isFetching, error, isError } = useDashboardSummary();
+  const { data, isLoading, isError, error } = useDashboardSummary();
 
   if (!shopDomain) {
     return (
@@ -49,34 +36,73 @@ export function DashboardView() {
   const campaignStatsRaw = (data?.campaignStats ?? {}) as Record<string, unknown>;
   const campaignStats = (campaignStatsRaw.stats ?? campaignStatsRaw) as Record<string, unknown>;
   const subscriberKpis = (data?.subscriberKpis ?? {}) as Record<string, unknown>;
+  const billing = (data?.billing ?? {}) as Record<string, unknown>;
 
   const revenueCents = Number(campaignStats.revenueCents ?? 0);
-  const impressions = Number(campaignStats.impressions ?? 0);
+  const impressionsUsed = Number(billing.impressionsUsed ?? campaignStats.impressions ?? 0);
+  const impressionLimit = Number(billing.impressionLimit ?? BASIC_PLAN.impressions);
+  const impressionsRemaining = Math.max(0, impressionLimit - impressionsUsed);
   const totalSubscribers = Number(
     subscriberKpis.totalSubscribers ?? overview.subscriberCount ?? 0,
   );
-  const campaignCount = Number(overview.campaignCount ?? 0);
+  const campaignsSent = Number(campaignStats.sentCount ?? campaignStats.sent ?? overview.campaignCount ?? 0);
   const growthPercent = Number(subscriberKpis.growthPercent ?? 0);
-  const newSubscribers7d = Number(subscriberKpis.newSubscribersLast7Days ?? 0);
-
-  const revenueChange =
-    revenueCents > 0
-      ? `+${formatCurrency(revenueCents / 100)} this period`
-      : 'No revenue yet';
-
-  const subscriberChange =
-    growthPercent !== 0
-      ? `${growthPercent > 0 ? '+' : ''}${growthPercent.toFixed(1)}% vs last 7 days`
-      : '+0% vs last 7 days';
+  const clickRate = Number(campaignStats.clickRate ?? campaignStats.ctr ?? 0);
+  const automationCount = Number(overview.automationCount ?? overview.activeAutomations ?? 0);
 
   const showSkeleton = isLoading && !data;
 
+  const statCards = [
+    {
+      title: 'Revenue Generated',
+      value: formatCurrency(revenueCents / 100),
+      hint: revenueCents > 0 ? 'Attributed push revenue' : 'Start sending to track revenue',
+      icon: DollarSign,
+      accent: 'text-emerald-600',
+    },
+    {
+      title: 'Total Campaigns Sent',
+      value: campaignsSent.toLocaleString(),
+      hint: `${Number(campaignStats.scheduledCount ?? 0).toLocaleString()} scheduled`,
+      icon: Send,
+      accent: 'text-blue-600',
+    },
+    {
+      title: 'Subscribers',
+      value: totalSubscribers.toLocaleString(),
+      hint: `${growthPercent > 0 ? '+' : ''}${growthPercent.toFixed(1)}% vs last 7 days`,
+      icon: Users,
+      accent: 'text-violet-600',
+    },
+    {
+      title: 'Impressions Consumed',
+      value: `${impressionsUsed.toLocaleString()} / ${impressionLimit.toLocaleString()}`,
+      hint: `${impressionsRemaining.toLocaleString()} remaining this period`,
+      icon: TrendingUp,
+      accent: 'text-amber-600',
+    },
+  ];
+
+  const insightCards = [
+    {
+      title: 'Average click rate',
+      value: `${clickRate.toFixed(1)}%`,
+      icon: MousePointerClick,
+    },
+    {
+      title: 'Active automations',
+      value: automationCount.toLocaleString(),
+      icon: Zap,
+    },
+    {
+      title: 'Segments ready',
+      value: Number(overview.segmentCount ?? 0).toLocaleString(),
+      icon: BarChart3,
+    },
+  ];
+
   return (
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
-      {isFetching && data ? (
-        <p className="text-xs text-muted-foreground">Refreshing dashboard data…</p>
-      ) : null}
-
       {isError ? (
         <Alert variant="destructive">
           <AlertTitle>Error loading dashboard</AlertTitle>
@@ -88,9 +114,9 @@ export function DashboardView() {
 
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground">
-            Welcome back! Here&apos;s a snapshot of your performance.
+          <h1 className="text-3xl font-bold tracking-tight md:text-4xl">Dashboard</h1>
+          <p className="text-muted-foreground mt-1">
+            Your store performance at a glance.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -106,113 +132,56 @@ export function DashboardView() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {showSkeleton ? (
-          Array.from({ length: 4 }).map((_, index) => (
-            <Card key={index}>
-              <CardHeader>
-                <Skeleton className="h-4 w-24" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-8 w-32" />
-              </CardContent>
-            </Card>
-          ))
-        ) : (
-          <>
-            <Card className="bg-card">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Revenue Generated</CardTitle>
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{formatCurrency(revenueCents / 100)}</div>
-                <p className="text-xs text-muted-foreground">{revenueChange}</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-card">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Campaigns Sent</CardTitle>
-                <Send className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{campaignCount}</div>
-                <p className="text-xs text-muted-foreground">
-                  {newSubscribers7d} new subscribers (7d)
-                </p>
-              </CardContent>
-            </Card>
-            <Card className="bg-card">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Subscribers</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{totalSubscribers.toLocaleString()}</div>
-                <p className="text-xs text-muted-foreground">{subscriberChange}</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-card">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Impressions Consumed</CardTitle>
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-xl font-bold">
-                  {impressions.toLocaleString()}
-                  <span className="text-muted-foreground"> / </span>
-                  <span className="text-muted-foreground">5,000,000</span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {(5_000_000 - impressions).toLocaleString()} impressions remaining
-                </p>
-              </CardContent>
-            </Card>
-          </>
-        )}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {showSkeleton
+          ? Array.from({ length: 4 }).map((_, index) => (
+              <Card key={index} className="min-h-[148px]">
+                <CardHeader>
+                  <Skeleton className="h-4 w-28" />
+                </CardHeader>
+                <CardContent>
+                  <Skeleton className="h-10 w-36" />
+                  <Skeleton className="mt-3 h-3 w-full" />
+                </CardContent>
+              </Card>
+            ))
+          : statCards.map((card) => (
+              <Card key={card.title} className="min-h-[148px] border-border/80 shadow-sm">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">{card.title}</CardTitle>
+                  <card.icon className={`h-5 w-5 ${card.accent}`} />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-bold tracking-tight">{card.value}</div>
+                  <p className="mt-2 text-sm text-muted-foreground">{card.hint}</p>
+                </CardContent>
+              </Card>
+            ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-        <PerformanceChart />
-        <SubscriberGrowthChart />
+      <div className="grid gap-4 md:grid-cols-3">
+        {showSkeleton
+          ? Array.from({ length: 3 }).map((_, index) => (
+              <Card key={index}>
+                <CardContent className="pt-6">
+                  <Skeleton className="h-16 w-full" />
+                </CardContent>
+              </Card>
+            ))
+          : insightCards.map((card) => (
+              <Card key={card.title} className="bg-muted/30">
+                <CardContent className="flex items-center justify-between pt-6">
+                  <div>
+                    <p className="text-sm text-muted-foreground">{card.title}</p>
+                    <p className="text-2xl font-semibold">{card.value}</p>
+                  </div>
+                  <card.icon className="h-8 w-8 text-muted-foreground/70" />
+                </CardContent>
+              </Card>
+            ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <RecentActivity />
-        </div>
-        <Card className="bg-card">
-          <CardHeader>
-            <CardTitle>Your Current Plan</CardTitle>
-            <CardDescription>
-              You are on the <span className="font-semibold text-primary">Pro Plan</span>.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Progress value={(totalSubscribers / 4_000_000) * 100} aria-label="Plan usage" />
-              <div className="text-sm text-muted-foreground">
-                <span className="font-semibold text-foreground">
-                  {totalSubscribers.toLocaleString()} / 4,000,000
-                </span>{' '}
-                Subscribers
-              </div>
-            </div>
-            <Separator />
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              {proPlanFeatures.map((feature) => (
-                <li key={feature} className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-green-500" />
-                  <span>{feature}</span>
-                </li>
-              ))}
-            </ul>
-            <Button size="sm" variant="outline" className="w-full" asChild>
-              <Link href="/plans">Manage Plan</Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+      <SubscriberGrowthChart fullWidth defaultDays={30} />
     </div>
   );
 }

@@ -19,15 +19,19 @@ dead_letter_queue = "push-eagle-automation-jobs-dlq"
 [vars]
 APP_URL = "https://push-eagle-dashboard.vercel.app"
 CRON_TICK_URL = "https://push-eagle-dashboard.vercel.app/api/cron/tick"
-CAMPAIGN_SHARDS = "4"
-AUTOMATION_SHARDS = "6"
-INGESTION_SHARDS = "4"
+CAMPAIGN_SHARDS = "1"
+AUTOMATION_SHARDS = "1"
+INGESTION_SHARDS = "1"
 MAX_CAMPAIGNS = "25"
 MAX_BATCHES = "20"
 MAX_AUTOMATION_JOBS = "200"
 MAX_AUTOMATION_CONCURRENT = "80"
 MAX_INGESTION_JOBS = "1000"
 MAX_INGESTION_CONCURRENT = "100"
+
+[[kv_namespaces]]
+binding = "DASHBOARD_CACHE"
+id = "29ce646c32eb44d884376f1201749452"
 
 # Create resources before deploy:
 #   npx wrangler queues create push-eagle-automation-jobs

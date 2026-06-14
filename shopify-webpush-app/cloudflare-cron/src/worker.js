@@ -22,9 +22,9 @@ const buildTickUrl = (env) => {
   const baseUrl = env.CRON_TICK_URL || `${env.APP_URL}/api/cron/tick`;
   const url = new URL(baseUrl);
 
-  url.searchParams.set('campaignShards', String(toInt(env.CAMPAIGN_SHARDS, 4, 1, 64)));
-  url.searchParams.set('automationShards', String(toInt(env.AUTOMATION_SHARDS, 6, 1, 64)));
-  url.searchParams.set('ingestionShards', String(toInt(env.INGESTION_SHARDS, 4, 1, 64)));
+  url.searchParams.set('campaignShards', String(toInt(env.CAMPAIGN_SHARDS, 1, 1, 64)));
+  url.searchParams.set('automationShards', String(toInt(env.AUTOMATION_SHARDS, 1, 1, 64)));
+  url.searchParams.set('ingestionShards', String(toInt(env.INGESTION_SHARDS, 1, 1, 64)));
   url.searchParams.set('maxCampaigns', String(toInt(env.MAX_CAMPAIGNS, 25, 1, 250)));
   url.searchParams.set('maxBatches', String(toInt(env.MAX_BATCHES, 20, 1, 2000)));
   url.searchParams.set('maxAutomationJobs', String(toInt(env.MAX_AUTOMATION_JOBS, 200, 1, 2000)));
@@ -33,6 +33,34 @@ const buildTickUrl = (env) => {
   url.searchParams.set('maxIngestionConcurrent', String(toInt(env.MAX_INGESTION_CONCURRENT, 100, 1, 200)));
 
   return url.toString();
+};
+
+const CRON_SLEEP_KEY = 'pe:cron:sleep_until_iso';
+
+const shouldSkipCronTick = async (env) => {
+  if (!env.DASHBOARD_CACHE) {
+    return false;
+  }
+
+  const raw = await env.DASHBOARD_CACHE.get(CRON_SLEEP_KEY);
+  if (!raw) {
+    return false;
+  }
+
+  let iso = raw;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === 'string') {
+      iso = parsed;
+    } else if (parsed && typeof parsed.until === 'string') {
+      iso = parsed.until;
+    }
+  } catch {
+    // Plain ISO string value.
+  }
+
+  const sleepUntil = Date.parse(iso);
+  return Number.isFinite(sleepUntil) && Date.now() < sleepUntil;
 };
 
 const runCronTick = async (env) => {
@@ -127,6 +155,9 @@ const processAutomationQueueMessage = async (message, env) => {
 
 export default {
   async scheduled(_event, env, ctx) {
+    if (await shouldSkipCronTick(env)) {
+      return;
+    }
     ctx.waitUntil(runCronTick(env));
   },
 

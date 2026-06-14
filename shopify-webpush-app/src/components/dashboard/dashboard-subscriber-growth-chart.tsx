@@ -19,15 +19,17 @@ export default function DashboardSubscriberGrowthChart({
   chartType,
   data,
   xAxisProps,
+  height = 280,
 }: {
   chartType: 'area' | 'bar';
   data: GrowthPoint[];
   xAxisProps: Record<string, unknown>;
+  height?: number;
 }) {
   return (
-    <ChartContainer config={chartConfig} className="h-72 w-full">
+    <ChartContainer config={chartConfig} className="w-full" style={{ height }}>
       {chartType === 'bar' ? (
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveContainer width="100%" height={height}>
           <BarChart data={data}>
             <CartesianGrid vertical={false} />
             <XAxis dataKey="date" tickLine={false} axisLine={false} {...xAxisProps} />
@@ -37,7 +39,7 @@ export default function DashboardSubscriberGrowthChart({
           </BarChart>
         </ResponsiveContainer>
       ) : (
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveContainer width="100%" height={height}>
           <AreaChart data={data}>
             <defs>
               <linearGradient id="fillSubscribers" x1="0" y1="0" x2="0" y2="1">

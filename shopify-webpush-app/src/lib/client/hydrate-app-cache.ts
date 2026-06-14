@@ -91,10 +91,10 @@ export const hydrateAppCache = (
   const defaultRange = resolveAnalyticsDateRange();
 
   queryClient.setQueryData(queryKeys.dashboardSummary(shopDomain), {
-    ok: true,
-    merchantOverview: payload.merchantOverview,
+    overview: payload.merchantOverview,
     campaignStats: payload.campaignStats,
     subscriberKpis: payload.subscriberKpis,
+    billing: payload.billing ?? {},
   });
 
   queryClient.setQueryData(

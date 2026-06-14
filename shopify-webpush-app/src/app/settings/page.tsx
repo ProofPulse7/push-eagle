@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'next/navigation';
 import {
   useMerchantOverview,
   usePrivacySettings,
@@ -13,7 +14,7 @@ import {
 import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
 import { queryKeys } from '@/lib/client/query-keys';
 import { mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
-import { PageLoadingShell } from '@/components/ui/loading-ui';
+import { SettingsAnalyticsPanel } from '@/components/settings/settings-analytics-panel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -75,6 +76,7 @@ const WarningAlert = ({ children }: { children: React.ReactNode }) => (
 )
 
 export default function SettingsPage() {
+  const searchParams = useSearchParams();
   const { theme, setTheme } = useTheme();
     const {
         storeUrl,
@@ -472,7 +474,7 @@ export default function SettingsPage() {
         </div>
 
       <div className="px-4 sm:px-6 md:px-8">
-        <Tabs defaultValue="overview" className="w-full">
+        <Tabs defaultValue={searchParams.get('tab') ?? 'overview'} className="w-full">
             <TabsList className="grid w-full grid-cols-4 max-w-lg">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
                 <TabsTrigger value="appearance">Appearance</TabsTrigger>
@@ -815,6 +817,7 @@ export default function SettingsPage() {
                         </div>
                     </CardContent>
                 </Card>
+                <SettingsAnalyticsPanel />
             </TabsContent>
         </Tabs>
         <ImageEditorSheet 

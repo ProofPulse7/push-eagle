@@ -15,9 +15,7 @@ import {
   Plus,
   Bell,
   Megaphone,
-  BarChart,
   LogIn,
-    Stethoscope,
 } from 'lucide-react';
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
@@ -75,20 +73,11 @@ export function Sidebar() {
             <NavLink href="/automations" icon={ShoppingCart}>
                 Automation
             </NavLink>
-             <NavLink href="/analytics" icon={BarChart}>
-                Analytics
-            </NavLink>
             <NavLink href="/segments" icon={PieChart}>
                 Segments
             </NavLink>
             <NavLink href="/opt-ins" icon={MonitorCheck}>
                 Opt-ins
-            </NavLink>
-            <NavLink href="/automations/diagnostic" icon={Stethoscope}>
-                Diagnostics
-            </NavLink>
-            <NavLink href="/diagnostics/shopify-billing" icon={Stethoscope}>
-                Billing diagnostics
             </NavLink>
         </nav>
 

@@ -15,7 +15,7 @@ export const useCachedJson = <T>(input: {
   enabled?: boolean;
   refreshMs?: number;
 }) => {
-  const { cacheKey, url, enabled = true, refreshMs = 30_000 } = input;
+  const { cacheKey, url, enabled = true, refreshMs = 0 } = input;
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(Boolean(enabled));
 
@@ -65,6 +65,12 @@ export const useCachedJson = <T>(input: {
     };
 
     void fetchFresh();
+    if (refreshMs <= 0) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const intervalId = window.setInterval(() => {
       void fetchFresh();
     }, refreshMs);

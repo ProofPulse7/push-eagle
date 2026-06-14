@@ -3219,6 +3219,8 @@ export const enqueueAutomationJob = async (input: {
   if (insertedId) {
     const { queueAutomationJobAfterInsert } = await import('@/lib/server/automation/queue-scheduler');
     queueAutomationJobAfterInsert(insertedId, dueAt);
+    const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+    void bumpCronWakeNow();
   }
 
   return insertedId;
@@ -6828,6 +6830,11 @@ export const createCampaign = async (input: CreateCampaignInput) => {
     )
     RETURNING *
   `;
+
+  const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+  if (input.status === 'scheduled' || input.status === 'queued' || input.scheduledAt) {
+    void bumpCronWakeNow();
+  }
 
   return campaignRows[0];
 };

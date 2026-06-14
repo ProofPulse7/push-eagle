@@ -7,6 +7,8 @@ import {
   readKvJson,
   writeKvJson,
 } from '@/lib/server/cache/cloudflare-kv';
+import { canAccessAnalytics } from '@/lib/server/billing/plan-access';
+import { getMerchantBillingFast } from '@/lib/server/billing/merchant-billing';
 import { getAnalyticsStats } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -24,6 +26,14 @@ const getRequestErrorMessage = (error: unknown, fallback: string) => {
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
+    const billing = await getMerchantBillingFast(shopDomain);
+    if (!canAccessAnalytics(billing.planKey)) {
+      return NextResponse.json(
+        { ok: false, error: 'Analytics is available on paid plans only.', locked: true },
+        { status: 403 },
+      );
+    }
+
     const url = new URL(request.url);
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');

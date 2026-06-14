@@ -186,30 +186,32 @@ export function useSubscribersList(sortOrder: 'asc' | 'desc', pageSize = 100) {
 
 export function useDashboardSummary() {
   const shop = useShopDomain();
-  const range = useMemo(() => resolveAnalyticsDateRange(), []);
-  const overview = useMerchantOverview();
-  const campaignStats = useCampaignStats(range.from, range.to);
-  const subscriberKpis = useSubscribersOverview();
 
-  const data =
-    overview.data && campaignStats.data && subscriberKpis.data
-      ? {
-          overview: overview.data,
-          campaignStats: campaignStats.data,
-          subscriberKpis: subscriberKpis.data,
-        }
-      : undefined;
+  return useQuery({
+    queryKey: queryKeys.dashboardSummary(shop),
+    queryFn: async () => {
+      const [overview, campaignStats, subscriberKpis, billingPayload] = await Promise.all([
+        fetchJsonWithShop<Record<string, unknown>>('/api/settings/overview', shop),
+        fetchJsonWithShop<Record<string, unknown>>('/api/campaigns/stats', shop),
+        fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
+        fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status', shop),
+      ]);
 
-  return {
-    data,
-    isLoading: overview.isLoading || campaignStats.isLoading || subscriberKpis.isLoading,
-    isFetching: overview.isFetching || campaignStats.isFetching || subscriberKpis.isFetching,
-    isError: overview.isError || campaignStats.isError || subscriberKpis.isError,
-    error: overview.error ?? campaignStats.error ?? subscriberKpis.error,
-  };
+      return {
+        overview,
+        campaignStats,
+        subscriberKpis,
+        billing: billingPayload.billing ?? {},
+      };
+    },
+    enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
+    placeholderData: (previous) => previous,
+  });
 }
 
-export function useAnalyticsStats(from: Date, to: Date) {
+export function useAnalyticsStats(from: Date, to: Date, enabled = true) {
   const shop = useShopDomain();
   const { fromIso, toIso } = useMemo(() => {
     const range = resolveAnalyticsDateRange({ from, to });
@@ -222,7 +224,7 @@ export function useAnalyticsStats(from: Date, to: Date) {
       fetchJson<Record<string, unknown>>(
         `/api/analytics/stats?shop=${encodeURIComponent(shop)}&from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`,
       ),
-    enabled: Boolean(shop),
+    enabled: Boolean(shop) && enabled,
     staleTime: SETTINGS_STALE_MS,
     placeholderData: (previous) => previous,
   });

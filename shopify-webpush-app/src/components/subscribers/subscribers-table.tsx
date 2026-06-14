@@ -25,11 +25,10 @@ type Subscriber = {
     cityCountry: string;
 };
 
-export function SubscribersTable() {
+export function SubscribersTable({ maxRows = 50 }: { maxRows?: number }) {
     const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-    const pageSize = 100;
-    const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } =
-        useSubscribersList(sortOrder, pageSize);
+    const pageSize = maxRows;
+    const { data, isLoading } = useSubscribersList(sortOrder, pageSize);
 
     const subscribers = useMemo(() => {
         if (!data?.pages) {
@@ -102,14 +101,7 @@ export function SubscribersTable() {
                 </TableBody>
             </Table>
             </div>
-            <div className="text-center mt-4">
-                {hasNextPage && (
-                    <Button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
-                        {isFetchingNextPage ? 'Loading...' : 'Load More'}
-                    </Button>
-                )}
-                {loading && <p className="text-sm text-muted-foreground">Loading subscribers...</p>}
-            </div>
+            {loading && <p className="text-sm text-muted-foreground mt-4 text-center">Loading subscribers...</p>}
         </div>
     );
 }

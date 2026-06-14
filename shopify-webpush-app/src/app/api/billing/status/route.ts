@@ -8,7 +8,9 @@ export const runtime = 'nodejs';
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const billing = await getMerchantBilling(shopDomain, { reconcileUsage: true });
+    const url = new URL(request.url);
+    const reconcileUsage = url.searchParams.get('reconcile') === '1';
+    const billing = await getMerchantBilling(shopDomain, { reconcileUsage });
     return NextResponse.json({
       ok: true,
       billing,

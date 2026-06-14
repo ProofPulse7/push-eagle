@@ -44,9 +44,9 @@ export type CronTickConfig = {
 };
 
 export const parseCronTickConfig = (searchParams: URLSearchParams): CronTickConfig => ({
-  campaignShards: parsePositiveInt(searchParams.get('campaignShards'), 4, 1, 64),
-  automationShards: parsePositiveInt(searchParams.get('automationShards'), 6, 1, 64),
-  ingestionShards: parsePositiveInt(searchParams.get('ingestionShards'), 4, 1, 64),
+  campaignShards: parsePositiveInt(searchParams.get('campaignShards'), 1, 1, 64),
+  automationShards: parsePositiveInt(searchParams.get('automationShards'), 1, 1, 64),
+  ingestionShards: parsePositiveInt(searchParams.get('ingestionShards'), 1, 1, 64),
   maxCampaigns: parsePositiveInt(searchParams.get('maxCampaigns'), 25, 1, 250),
   maxBatches: parsePositiveInt(searchParams.get('maxBatches'), 20, 1, 2000),
   maxAutomationJobs: parsePositiveInt(searchParams.get('maxAutomationJobs'), 200, 1, 2000),

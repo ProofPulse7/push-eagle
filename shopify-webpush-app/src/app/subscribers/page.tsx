@@ -1,16 +1,12 @@
 
 'use client';
 
-import { Button } from '@/components/ui/button';
-import { PageLoadingShell } from '@/components/ui/loading-ui';
-import { useSubscribersOverview } from '@/hooks/queries/use-app-queries';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { SubscriberKpis } from '@/components/subscribers/subscriber-kpis';
 import { SubscribersTable } from '@/components/subscribers/subscribers-table';
-import { GeolocationChart } from '@/components/subscribers/geolocation-chart';
 import { SubscriberGrowthChart } from '@/components/dashboard/subscriber-growth-chart';
-import { SubscriberBreakdown } from '@/components/subscribers/subscriber-breakdown';
+import { useSubscribersOverview } from '@/hooks/queries/use-app-queries';
 
 export default function SubscribersPage() {
   const { data, isLoading, isFetching } = useSubscribersOverview();
@@ -23,40 +19,23 @@ export default function SubscribersPage() {
       isFetching={isFetching}
     >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Subscribers</h1>
-          <p className="text-muted-foreground">Manage and analyze your subscriber base.</p>
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Subscribers</h1>
+        <p className="text-muted-foreground">Growth and your latest subscribers.</p>
       </div>
 
       <SubscriberKpis />
 
-      <Tabs defaultValue="overview">
-        <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="list">Subscriber List</TabsTrigger>
-        </TabsList>
-        <TabsContent value="overview">
-           <div className="mt-4">
-                <SubscriberGrowthChart showDatePicker={true} />
-            </div>
-          <div className="mt-8 grid gap-8 grid-cols-1 lg:grid-cols-2 items-start">
-            <SubscriberBreakdown />
-            <GeolocationChart />
-          </div>
-        </TabsContent>
-        <TabsContent value="list">
-            <Card className="mt-4">
-              <CardHeader>
-                  <CardTitle>List of subscribers</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <SubscribersTable />
-              </CardContent>
-            </Card>
-        </TabsContent>
-      </Tabs>
+      <SubscriberGrowthChart showDatePicker defaultDays={30} fullWidth />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Latest subscribers</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SubscribersTable maxRows={50} />
+        </CardContent>
+      </Card>
     </div>
     </PageLoadingShell>
   );

@@ -94,7 +94,7 @@ export function PlansPageContent() {
   const shop = useShopDomain();
   const { toast } = useToast();
   const searchParams = useSearchParams();
-  const { data, isFetching } = useBillingStatus({ refetchOnMount: true });
+  const { data, isFetching } = useBillingStatus({ refetchOnMount: true, reconcile: true });
   const confirmBilling = useConfirmBilling();
   const [tierIndex, setTierIndex] = useState(0);
 
