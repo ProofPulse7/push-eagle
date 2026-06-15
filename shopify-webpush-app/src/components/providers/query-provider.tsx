@@ -40,7 +40,7 @@ export function QueryProvider({ children }: { children: ReactNode }) {
       key: 'pe_query_cache_v1',
     }),
   );
-  const [isRestored, setIsRestored] = useState(false);
+  const [isRestored, setIsRestored] = useState(() => typeof window === 'undefined');
 
   return (
     <PersistRestoreContext.Provider value={isRestored}>

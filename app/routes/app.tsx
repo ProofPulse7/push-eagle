@@ -26,7 +26,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function App() {
   return (
-    <AppProvider embedded={true}>
+    <AppProvider embedded={false}>
       <s-app-nav>
         <s-link href="/app">Home</s-link>
       </s-app-nav>

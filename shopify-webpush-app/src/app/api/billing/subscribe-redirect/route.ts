@@ -34,7 +34,9 @@ export async function GET(request: Request) {
     });
 
     if (result.autoActivated) {
-      await activateSubscribedPlan(shopDomain, result);
+      void activateSubscribedPlan(shopDomain, result).catch((error) => {
+        console.error('[billing] activateSubscribedPlan failed', shopDomain, error);
+      });
       return NextResponse.redirect(
         buildBillingReturnUrl(shopDomain, {
           host,

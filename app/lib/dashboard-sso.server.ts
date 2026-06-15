@@ -29,7 +29,6 @@ export const buildDashboardSsoUrl = (
   shopDomain: string,
   returnTo?: string | null,
   baseDashboardUrl = resolveDashboardUrl(),
-  options?: { host?: string | null; embedded?: string | null },
 ) => {
   let redirectPath = "/dashboard";
 
@@ -48,13 +47,6 @@ export const buildDashboardSsoUrl = (
   const ssoUrl = new URL("/api/integrations/shopify/sso", baseDashboardUrl);
   ssoUrl.searchParams.set("shop", shopDomain);
   ssoUrl.searchParams.set("redirect", redirectPath.startsWith("/") ? redirectPath : "/dashboard");
-
-  if (options?.host) {
-    ssoUrl.searchParams.set("host", options.host);
-  }
-  if (options?.embedded || options?.host) {
-    ssoUrl.searchParams.set("embedded", options?.embedded || "1");
-  }
 
   const secret =
     process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() || process.env.SHOPIFY_API_SECRET?.trim() || "";

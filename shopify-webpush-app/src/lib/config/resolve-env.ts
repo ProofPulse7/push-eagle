@@ -9,8 +9,6 @@ const EnvSchema = z.object({
   NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
   CRON_SECRET: z.string().default(''),
   SHOPIFY_API_KEY: z.string().default(''),
-  NEXT_PUBLIC_SHOPIFY_API_KEY: z.string().default(''),
-  NEXT_PUBLIC_SHOPIFY_ROOT_APP_URL: z.string().default('https://push-eagle.vercel.app'),
   SHOPIFY_API_SECRET: z.string().default(''),
   SHOPIFY_SCOPES: z
     .string()
@@ -104,10 +102,6 @@ export const resolveAppEnv = (): AppEnv => {
   return {
     ...parsed,
     NEXT_PUBLIC_APP_URL: dashboardUrl,
-    NEXT_PUBLIC_SHOPIFY_API_KEY:
-      parsed.NEXT_PUBLIC_SHOPIFY_API_KEY.trim() || parsed.SHOPIFY_API_KEY.trim(),
-    NEXT_PUBLIC_SHOPIFY_ROOT_APP_URL:
-      parsed.NEXT_PUBLIC_SHOPIFY_ROOT_APP_URL.trim() || parsed.SHOPIFY_ROOT_APP_URL.trim(),
     NEON_DATABASE_URL: neonDatabaseUrl,
     DATABASE_URL: databaseUrl,
     SHOPIFY_SESSION_DATABASE_URL: sessionDatabaseUrl,

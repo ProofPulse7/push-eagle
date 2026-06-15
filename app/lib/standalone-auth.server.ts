@@ -75,13 +75,6 @@ export const beginStandaloneOAuth = async (
   });
 };
 
-const readEmbeddedParams = (request: Request) => {
-  const requestUrl = new URL(request.url);
-  const host = requestUrl.searchParams.get("host");
-  const embedded = requestUrl.searchParams.get("embedded");
-  return { host, embedded };
-};
-
 export const handleStandaloneOAuthCallback = async (request: Request) => {
   const api = getShopifyApi();
   const { session, headers: authHeaders } = await api.auth.callback({
@@ -94,11 +87,7 @@ export const handleStandaloneOAuthCallback = async (request: Request) => {
   await runAfterAuthForSession(session, admin);
 
   const returnTo = readReturnTo(request);
-  const { host, embedded } = readEmbeddedParams(request);
-  const ssoUrl = buildDashboardSsoUrl(session.shop, returnTo, resolveDashboardUrl(), {
-    host,
-    embedded: embedded || (host ? "1" : null),
-  });
+  const ssoUrl = buildDashboardSsoUrl(session.shop, returnTo, resolveDashboardUrl());
   const headers = new Headers(authHeaders ?? undefined);
 
   throw redirect(ssoUrl, { headers });
@@ -112,7 +101,6 @@ export const redirectToOAuthOrDashboard = async (request: Request, shop: string)
 
   const session = await loadOfflineSession(sanitizedShop);
   const returnTo = readReturnTo(request);
-  const { host, embedded } = readEmbeddedParams(request);
 
   if (!session) {
     const authUrl = new URL("/auth", new URL(request.url).origin);
@@ -120,18 +108,9 @@ export const redirectToOAuthOrDashboard = async (request: Request, shop: string)
     if (returnTo) {
       authUrl.searchParams.set("return_to", returnTo);
     }
-    if (host) {
-      authUrl.searchParams.set("host", host);
-    }
-    if (host || embedded === "1") {
-      authUrl.searchParams.set("embedded", "1");
-    }
     throw redirect(authUrl.toString());
   }
 
-  const ssoUrl = buildDashboardSsoUrl(sanitizedShop, returnTo, resolveDashboardUrl(), {
-    host,
-    embedded: embedded || (host ? "1" : null),
-  });
+  const ssoUrl = buildDashboardSsoUrl(sanitizedShop, returnTo, resolveDashboardUrl());
   throw redirect(ssoUrl);
 };

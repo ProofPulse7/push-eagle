@@ -72,7 +72,7 @@ export default function Auth() {
   const { errors } = actionData || loaderData;
 
   return (
-    <AppProvider embedded={true}>
+    <AppProvider embedded={false}>
       <s-page>
         <Form method="post">
         <s-section heading="Log in">

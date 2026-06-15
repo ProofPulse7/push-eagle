@@ -224,7 +224,7 @@ export const markBillingCheckoutPending = async (input: {
   shopDomain: string;
   shopifySubscriptionId?: string | null;
 }) => {
-  await getMerchantBillingFast(input.shopDomain);
+  await getMerchantBilling(input.shopDomain);
   const sql = getNeonSql();
   await sql`
     UPDATE merchant_billing

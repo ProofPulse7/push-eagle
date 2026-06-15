@@ -34,7 +34,7 @@ const shouldSkipSetup = (pathname: string) => {
 };
 
 /**
- * Shows a full loading screen on cold start, then reveals the app shell with cached data.
+ * Shows a full loading screen on cold start, then reveals the app with cached data.
  * Returning users with a warm sessionStorage cache skip the overlay entirely.
  */
 export function AppSetupGate({ children }: { children: React.ReactNode }) {
@@ -71,9 +71,9 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
       const elapsed = performance.now() - start;
       const target = bootstrap.isSuccess ? 100 : Math.min(94, 24 + elapsed / 18);
       setProgress((current) => Math.max(current, target));
-      if (bootstrap.isSuccess && elapsed > 180) {
+      if (bootstrap.isSuccess && elapsed > 120) {
         setProgress(100);
-        window.setTimeout(() => setOverlayVisible(false), 120);
+        window.setTimeout(() => setOverlayVisible(false), 80);
       }
     }, 40);
 
@@ -86,9 +86,7 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
   );
 
   if (!canRenderApp) {
-    return (
-      <AppSetupScreen progress={18} stepLabel="Restoring your workspace…" />
-    );
+    return <AppSetupScreen progress={18} stepLabel="Restoring your workspace…" />;
   }
 
   return (

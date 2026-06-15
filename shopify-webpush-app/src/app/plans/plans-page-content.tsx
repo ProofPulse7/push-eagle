@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
@@ -13,8 +12,6 @@ import { useBillingStatus, useConfirmBilling } from '@/hooks/queries/use-billing
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
 import { ImpressionUsageBar } from '@/components/billing/impression-usage-bar';
-import { AppSetupScreen } from '@/components/ui/loading-ui';
-import { queryKeys } from '@/lib/client/query-keys';
 
 const BUSINESS_FEATURES = [
   'All Basic features',
@@ -98,7 +95,6 @@ function PlanCard({
 
 export function PlansPageContent() {
   const shop = useShopDomain();
-  const queryClient = useQueryClient();
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const { data, isFetching } = useBillingStatus({ refetchOnMount: false, reconcile: false });
@@ -198,33 +194,7 @@ export function PlansPageContent() {
     }
 
     const checkoutUrl = `/api/billing/subscribe-redirect?${params.toString()}`;
-
-    // Navigate immediately so Shopify billing opens without waiting on React updates.
     (window.top ?? window).location.assign(checkoutUrl);
-
-    const nextBilling =
-      planKey === 'basic'
-        ? {
-            ...(billing ?? {}),
-            planKey: 'basic',
-            tierId: null,
-            status: 'active',
-            impressionLimit: BASIC_PLAN.impressions,
-            priceUsd: BASIC_PLAN.priceUsd,
-          }
-        : {
-            ...(billing ?? {}),
-            planKey: 'business',
-            tierId: tierId ?? null,
-            status: 'pending',
-            impressionLimit: BUSINESS_TIERS.find((tier) => tier.id === tierId)?.impressions ?? null,
-            priceUsd: BUSINESS_TIERS.find((tier) => tier.id === tierId)?.priceUsd ?? null,
-          };
-
-    queryClient.setQueryData(queryKeys.billingStatus(shop), {
-      ok: true,
-      billing: nextBilling,
-    });
   };
 
   const handleSubscribeBasic = () => startShopifyCheckout('basic');
@@ -264,16 +234,6 @@ export function PlansPageContent() {
 
   return (
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8 pe-page-enter">
-      {pendingPlan ? (
-        <AppSetupScreen
-          progress={pendingPlan.startsWith('business') ? 55 : 40}
-          stepLabel={
-            pendingPlan.startsWith('business')
-              ? 'Opening Shopify billing approval…'
-              : 'Updating your plan…'
-          }
-        />
-      ) : null}
       <div>
         <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Plans</h1>
         <p className="text-muted-foreground mt-1">
