@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
+import { buildFcmDataOnlyWebPushMessage } from '@/lib/server/push/fcm-web-push-message';
 
 export type SendNotificationInput = {
   shopDomain: string;
@@ -32,40 +33,50 @@ export type NotificationDeliveryStats = {
 const getTargetTokens = async (
   shopDomain: string,
   segmentId?: string | null,
-): Promise<Array<{ tokenId: number; externalId: string }>> => {
+): Promise<Array<{ tokenId: number; externalId: string; fcmToken: string }>> => {
   const sql = getNeonSql();
 
   if (!segmentId) {
-    // No segment = send to all active subscribers
     const rows = await sql`
-      SELECT t.id AS token_id, s.external_id
+      SELECT DISTINCT ON (s.id)
+        t.id AS token_id,
+        s.external_id,
+        t.fcm_token
       FROM subscriber_tokens t
       JOIN subscribers s ON s.id = t.subscriber_id
       WHERE t.shop_domain = ${shopDomain}
         AND t.status = 'active'
-      ORDER BY t.id ASC
+        AND t.fcm_token IS NOT NULL
+        AND TRIM(t.fcm_token) <> ''
+      ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
     `;
     return rows.map((row) => ({
       tokenId: Number(row.token_id),
       externalId: String(row.external_id),
+      fcmToken: String(row.fcm_token),
     }));
   }
 
-  // With segment = filter to segment subscribers only
   const rows = await sql`
-    SELECT t.id AS token_id, s.external_id
+    SELECT DISTINCT ON (s.id)
+      t.id AS token_id,
+      s.external_id,
+      t.fcm_token
     FROM subscriber_tokens t
     JOIN subscribers s ON s.id = t.subscriber_id
     JOIN segments seg ON seg.shop_domain = s.shop_domain
     WHERE t.shop_domain = ${shopDomain}
       AND seg.id = ${segmentId}
       AND t.status = 'active'
-    ORDER BY t.id ASC
+      AND t.fcm_token IS NOT NULL
+      AND TRIM(t.fcm_token) <> ''
+    ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
   `;
 
   return rows.map((row) => ({
     tokenId: Number(row.token_id),
     externalId: String(row.external_id),
+    fcmToken: String(row.fcm_token),
   }));
 };
 
@@ -158,35 +169,22 @@ const queueFcmBatchSend = async (input: {
 
     // Send multicast to chunk of tokens
     try {
-      const messages = chunk.map((token) => ({
-        token: String(token.tokenId), // Note: FCM expects actual token string, not ID
-        notification: {
+      const messages = chunk.map((token) =>
+        buildFcmDataOnlyWebPushMessage({
+          token: token.fcmToken,
           title: input.notification.title,
           body: input.notification.body,
-          ...(input.notification.imageUrl && { imageUrl: input.notification.imageUrl }),
-        },
-        webpush: {
-          fcmOptions: {
-            link: input.targetUrl ?? undefined,
-          },
-          notification: {
-            icon: input.notification.iconUrl ?? undefined,
-            image: input.notification.imageUrl ?? undefined,
-            ...(input.actionButtons &&
-              input.actionButtons.length > 0 && {
-                actions: input.actionButtons.map((btn) => ({
-                  action: randomUUID(),
-                  title: btn.title,
-                  icon: input.notification.iconUrl,
-                })),
-              }),
-          },
-        },
-        data: {
-          source: 'campaign',
+          iconUrl: input.notification.iconUrl,
+          imageUrl: input.notification.imageUrl,
+          linkUrl: input.targetUrl,
           campaignId: input.campaignId,
-        },
-      }));
+          shopDomain: input.shopDomain,
+          tag: input.campaignId,
+          extraData: {
+            source: 'campaign',
+          },
+        }),
+      );
 
       await Promise.all(messages.map((message) => messaging.send(message)));
     } catch (error) {

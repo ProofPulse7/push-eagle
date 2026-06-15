@@ -96,6 +96,7 @@ self.addEventListener('push', function(event) {
     body: payload.data?.body || payload.body || payload.notification?.body,
     icon: payload.data?.icon || payload.icon || payload.notification?.icon,
     image: payload.data?.image || payload.image || payload.notification?.image,
+    tag: payload.data?.tag || payload.data?.campaignId || payload.tag || undefined,
     actions: buildPushEagleActions(payload),
     data: {
       url,

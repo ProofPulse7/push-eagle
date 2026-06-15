@@ -6,6 +6,7 @@
 
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
+import { buildFcmDataOnlyWebPushMessage } from '@/lib/server/push/fcm-web-push-message';
 
 type ProcessJobsOptions = {
   batchSize?: number;
@@ -117,43 +118,23 @@ async function sendJobNotification(
     };
     const destinationUrl = normalizeTrackedLink(payload.targetUrl);
 
-    const fcmPayload: any = {
-      notification: {
-        title: payload.title,
-        body: payload.body,
-      },
-      data: {
+    const fcmPayload = buildFcmDataOnlyWebPushMessage({
+      token: job.fcm_token,
+      title: payload.title,
+      body: payload.body,
+      iconUrl: payload.iconUrl,
+      imageUrl: payload.imageUrl,
+      linkUrl: destinationUrl,
+      tag: String(job.rule_key),
+      extraData: {
         ruleKey: String(job.rule_key),
         campaignLabel: payload.campaignLabel || 'automation',
         timestamp: new Date().toISOString(),
+        url: destinationUrl,
       },
-      webpush: {
-        fcmOptions: { link: destinationUrl },
-        notification: {
-          title: payload.title,
-          body: payload.body,
-          icon: payload.iconUrl || undefined,
-          image: payload.imageUrl || undefined,
-          badge: payload.iconUrl || undefined,
-          tag: String(job.rule_key),
-          requireInteraction: false,
-        },
-        data: {
-          ruleKey: String(job.rule_key),
-          campaignLabel: payload.campaignLabel || 'automation',
-          url: destinationUrl,
-        },
-      },
-    };
-
-    // Remove undefined values
-    if (!fcmPayload.webpush.notification.icon) delete fcmPayload.webpush.notification.icon;
-    if (!fcmPayload.webpush.notification.image) delete fcmPayload.webpush.notification.image;
-
-    const response = await messaging.send({
-      ...fcmPayload,
-      token: job.fcm_token,
     });
+
+    const response = await messaging.send(fcmPayload);
 
     // Mark as sent
     await sql`

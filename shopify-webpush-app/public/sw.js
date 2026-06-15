@@ -41,10 +41,11 @@ self.addEventListener('push', function (event) {
 
     var actions = self.buildPushEagleActions(payload);
 
-    var options = {
+    const options = {
         body: body,
         icon: icon,
         image: image,
+        tag: (payload.data && (payload.data.tag || payload.data.campaignId)) || payload.tag || undefined,
         actions: actions.length > 0 ? actions : undefined,
         data: {
             url: url,

@@ -4,6 +4,7 @@ import { env } from '@/lib/config/env';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
 import { sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
+import { buildFcmDataOnlyWebPushMessage } from '@/lib/server/push/fcm-web-push-message';
 import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
 import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import { deleteImageFromR2 } from '@/lib/server/media/r2';
@@ -6194,7 +6195,7 @@ export const resolveCampaignAudience = async (
             SELECT 1
             FROM campaign_deliveries cd
             WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
-              AND cd.token_id = t.id
+              AND cd.subscriber_id = s.id
           )
         ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
       `
@@ -6267,7 +6268,7 @@ export const resolveCampaignAudience = async (
           SELECT 1
           FROM campaign_deliveries cd
           WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
-            AND cd.token_id = t.id
+            AND cd.subscriber_id = s.id
         )
       ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
     `
@@ -7281,12 +7282,12 @@ type CampaignDeliveryInsertRow = {
   messageId: string | null;
 };
 
-const insertCampaignDeliveriesBatch = async (
+const claimCampaignDeliverySlots = async (
   sql: ReturnType<typeof getNeonSql>,
   rows: CampaignDeliveryInsertRow[],
 ) => {
   if (rows.length === 0) {
-    return;
+    return [] as Array<{ subscriberId: number; tokenId: number }>;
   }
 
   const seenSubscribers = new Set<number>();
@@ -7299,26 +7300,71 @@ const insertCampaignDeliveriesBatch = async (
   });
 
   if (filteredRows.length === 0) {
-    return;
+    return [];
   }
 
   const filteredCampaignIds = filteredRows.map((row) => row.campaignId);
   const filteredShopDomains = filteredRows.map((row) => row.shopDomain);
   const filteredSubscriberIds = filteredRows.map((row) => row.subscriberId);
   const filteredTokenIds = filteredRows.map((row) => row.tokenId);
-  const filteredMessageIds = filteredRows.map((row) => row.messageId);
 
-  await sql`
+  const claimedRows = await sql`
     INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
-    SELECT u.campaign_id, u.shop_domain, u.subscriber_id, u.token_id, u.fcm_message_id
+    SELECT u.campaign_id, u.shop_domain, u.subscriber_id, u.token_id, NULL
     FROM UNNEST(
       ${filteredCampaignIds}::text[],
       ${filteredShopDomains}::text[],
       ${filteredSubscriberIds}::bigint[],
-      ${filteredTokenIds}::bigint[],
-      ${filteredMessageIds}::text[]
-    ) AS u(campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
+      ${filteredTokenIds}::bigint[]
+    ) AS u(campaign_id, shop_domain, subscriber_id, token_id)
     ON CONFLICT (campaign_id, subscriber_id) DO NOTHING
+    RETURNING subscriber_id, token_id
+  `;
+
+  return claimedRows.map((row) => ({
+    subscriberId: Number((row as { subscriber_id: unknown }).subscriber_id),
+    tokenId: Number((row as { token_id: unknown }).token_id),
+  }));
+};
+
+const updateCampaignDeliveryMessageIds = async (
+  sql: ReturnType<typeof getNeonSql>,
+  campaignId: string,
+  updates: Array<{ subscriberId: number; messageId: string | null }>,
+) => {
+  if (updates.length === 0) {
+    return;
+  }
+
+  const subscriberIds = updates.map((row) => row.subscriberId);
+  const messageIds = updates.map((row) => row.messageId);
+
+  await sql`
+    UPDATE campaign_deliveries AS cd
+    SET fcm_message_id = u.fcm_message_id
+    FROM UNNEST(
+      ${subscriberIds}::bigint[],
+      ${messageIds}::text[]
+    ) AS u(subscriber_id, fcm_message_id)
+    WHERE cd.campaign_id = ${campaignId}
+      AND cd.subscriber_id = u.subscriber_id
+  `;
+};
+
+const releaseCampaignDeliveryClaims = async (
+  sql: ReturnType<typeof getNeonSql>,
+  campaignId: string,
+  subscriberIds: number[],
+) => {
+  if (subscriberIds.length === 0) {
+    return;
+  }
+
+  await sql`
+    DELETE FROM campaign_deliveries
+    WHERE campaign_id = ${campaignId}
+      AND subscriber_id = ANY(${subscriberIds}::bigint[])
+      AND fcm_message_id IS NULL
   `;
 };
 
@@ -7386,8 +7432,6 @@ export const sendCampaign = async (
   }
 
   const previousStatus = campaign.status;
-
-  await sql`SELECT pg_advisory_xact_lock(hashtext(${`${shopDomain}:${campaignId}`}))`;
 
   let recipients = dedupeRecipientsBySubscriber(
     await resolveCampaignAudience(shopDomain, campaign.segment_id, campaignId),
@@ -7507,63 +7551,73 @@ export const sendCampaign = async (
       const fcmRecipients = chunkWithPayload.filter(({ item }) => String((item as { token_type?: string | null }).token_type ?? 'fcm') !== 'vapid');
       const vapidRecipients = chunkWithPayload.filter(({ item }) => String((item as { token_type?: string | null }).token_type ?? 'fcm') === 'vapid');
 
-      if (fcmRecipients.length > 0) {
-        const messages = fcmRecipients.map(({ item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, primaryTrackUrl, button1TrackUrl, button2TrackUrl, actions }) => ({
-          token: item.fcm_token,
-          notification: {
-            title: campaign.title,
-            body: campaign.body,
-            imageUrl: platformImage ?? undefined,
-          },
-          webpush: {
-            fcmOptions: {
-              link: trackedUrl ?? undefined,
-            },
-            notification: {
-              icon: campaign.icon_url ?? undefined,
-              image: platformImage ?? undefined,
-              actions: actions.length > 0 ? actions : undefined,
-            },
-          },
-          data: {
-            campaignId,
-            shopDomain,
-            primaryUrl: trackedUrl ?? '',
-            button1Url: firstButtonUrl ?? '',
-            button2Url: secondButtonUrl ?? '',
-            trackPrimaryUrl: primaryTrackUrl,
-            trackButton1Url: button1TrackUrl,
-            trackButton2Url: button2TrackUrl,
-            action1Title: actions[0]?.title ?? '',
-            action2Title: actions[1]?.title ?? '',
-          },
-        }));
+      const claimRows: CampaignDeliveryInsertRow[] = chunkWithPayload.map(({ item }) => ({
+        campaignId,
+        shopDomain,
+        subscriberId: Number(item.subscriber_id),
+        tokenId: Number(item.token_id),
+        messageId: null,
+      }));
+      const claimedSlots = await claimCampaignDeliverySlots(sql, claimRows);
+      const claimedSubscriberIds = new Set(claimedSlots.map((slot) => slot.subscriberId));
+      const claimedFcmRecipients = fcmRecipients.filter(({ item }) =>
+        claimedSubscriberIds.has(Number(item.subscriber_id)),
+      );
+      const claimedVapidRecipients = vapidRecipients.filter(({ item }) =>
+        claimedSubscriberIds.has(Number(item.subscriber_id)),
+      );
+
+      if (claimedFcmRecipients.length > 0) {
+        const messages = claimedFcmRecipients.map(
+          ({ item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, primaryTrackUrl, button1TrackUrl, button2TrackUrl, actions }) =>
+            buildFcmDataOnlyWebPushMessage({
+              token: item.fcm_token,
+              title: campaign.title,
+              body: campaign.body,
+              iconUrl: campaign.icon_url,
+              imageUrl: platformImage,
+              linkUrl: trackedUrl,
+              campaignId,
+              shopDomain,
+              primaryUrl: trackedUrl ?? '',
+              button1Url: firstButtonUrl,
+              button2Url: secondButtonUrl,
+              trackPrimaryUrl: primaryTrackUrl,
+              trackButton1Url: button1TrackUrl,
+              trackButton2Url: button2TrackUrl,
+              action1Title: actions[0]?.title ?? '',
+              action2Title: actions[1]?.title ?? '',
+              tag: campaignId,
+            }),
+        );
 
         const multicast = await messaging.sendEach(messages);
 
         successCount += multicast.successCount;
         failureCount += multicast.failureCount;
 
-        const deliveryRows: CampaignDeliveryInsertRow[] = [];
+        const messageUpdates: Array<{ subscriberId: number; messageId: string | null }> = [];
+        const failedClaimReleases: number[] = [];
         const revokedTokenIds: number[] = [];
 
         for (let index = 0; index < multicast.responses.length; index += 1) {
           const response = multicast.responses[index];
-          const recipient = fcmRecipients[index]?.item;
+          const recipient = claimedFcmRecipients[index]?.item;
           if (!recipient) {
             continue;
           }
 
+          const subscriberId = Number(recipient.subscriber_id);
+
           if (response.success) {
-            deliveryRows.push({
-              campaignId,
-              shopDomain,
-              subscriberId: Number(recipient.subscriber_id),
-              tokenId: Number(recipient.token_id),
+            messageUpdates.push({
+              subscriberId,
               messageId: response.messageId ?? null,
             });
             continue;
           }
+
+          failedClaimReleases.push(subscriberId);
 
           const code = response.error?.code ?? '';
           if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
@@ -7571,7 +7625,8 @@ export const sendCampaign = async (
           }
         }
 
-        await insertCampaignDeliveriesBatch(sql, deliveryRows);
+        await updateCampaignDeliveryMessageIds(sql, campaignId, messageUpdates);
+        await releaseCampaignDeliveryClaims(sql, campaignId, failedClaimReleases);
 
         for (const tokenId of revokedTokenIds) {
           await sql`
@@ -7582,10 +7637,11 @@ export const sendCampaign = async (
         }
       }
 
-      const vapidDeliveryRows: CampaignDeliveryInsertRow[] = [];
       const vapidRevokedTokenIds: number[] = [];
 
-      for (const { item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, actions, primaryTrackUrl, button1TrackUrl, button2TrackUrl } of vapidRecipients) {
+      for (const { item, platformImage, trackedUrl, firstButtonUrl, secondButtonUrl, actions, primaryTrackUrl, button1TrackUrl, button2TrackUrl } of claimedVapidRecipients) {
+        const subscriberId = Number(item.subscriber_id);
+
         try {
           const endpoint = String((item as { vapid_endpoint?: string | null }).vapid_endpoint ?? '');
           const p256dh = String((item as { vapid_p256dh?: string | null }).vapid_p256dh ?? '');
@@ -7593,6 +7649,7 @@ export const sendCampaign = async (
 
           if (!endpoint || !p256dh || !auth) {
             failureCount += 1;
+            await releaseCampaignDeliveryClaims(sql, campaignId, [subscriberId]);
             continue;
           }
 
@@ -7615,15 +7672,15 @@ export const sendCampaign = async (
 
           successCount += 1;
 
-          vapidDeliveryRows.push({
-            campaignId,
-            shopDomain,
-            subscriberId: Number(item.subscriber_id),
-            tokenId: Number(item.token_id),
-            messageId: vapidMessageId,
-          });
+          await updateCampaignDeliveryMessageIds(sql, campaignId, [
+            {
+              subscriberId,
+              messageId: vapidMessageId,
+            },
+          ]);
         } catch (error) {
           failureCount += 1;
+          await releaseCampaignDeliveryClaims(sql, campaignId, [subscriberId]);
 
           const message = error instanceof Error ? error.message : String(error ?? '');
           if (message.includes('410') || message.includes('404') || message.toLowerCase().includes('unsub')) {
@@ -7631,8 +7688,6 @@ export const sendCampaign = async (
           }
         }
       }
-
-      await insertCampaignDeliveriesBatch(sql, vapidDeliveryRows);
 
       for (const tokenId of vapidRevokedTokenIds) {
         await sql`
