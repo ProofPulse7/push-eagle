@@ -11,9 +11,14 @@ const pickParam = (value: string | null) => value?.trim() || null;
 
 export async function GET(request: Request) {
   let shopDomain: string | null = null;
+  let host: string | null = null;
+  let embedded: string | null = null;
+
   try {
     const url = new URL(request.url);
     shopDomain = extractShopDomain(request, url.searchParams.get('shop'));
+    host = pickParam(url.searchParams.get('host'));
+    embedded = pickParam(url.searchParams.get('embedded'));
     const planKey = url.searchParams.get('planKey');
     if (planKey !== 'basic' && planKey !== 'business') {
       return NextResponse.json({ ok: false, error: 'Invalid plan.' }, { status: 400 });
@@ -23,16 +28,16 @@ export async function GET(request: Request) {
       shopDomain,
       planKey,
       tierId: pickParam(url.searchParams.get('tierId')) ?? undefined,
-      host: pickParam(url.searchParams.get('host')),
-      embedded: pickParam(url.searchParams.get('embedded')),
+      host,
+      embedded,
     });
 
     if (result.autoActivated) {
       await activateSubscribedPlan(shopDomain, result);
       return NextResponse.redirect(
         buildBillingReturnUrl(shopDomain, {
-          host: pickParam(url.searchParams.get('host')),
-          embedded: pickParam(url.searchParams.get('embedded')),
+          host,
+          embedded,
         }),
       );
     }
@@ -49,7 +54,10 @@ export async function GET(request: Request) {
     const message = error instanceof Error ? error.message : 'Failed to start subscription.';
     const reauthorizeUrl =
       shopDomain && message.includes('No valid Shopify offline token')
-        ? buildShopifyReauthorizeUrl(shopDomain)
+        ? buildShopifyReauthorizeUrl(shopDomain, {
+            host: host ?? undefined,
+            embedded: embedded ?? undefined,
+          })
         : null;
 
     return NextResponse.json(

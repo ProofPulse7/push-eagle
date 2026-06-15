@@ -37,6 +37,7 @@ export const startPlanSubscriptionCheckout = async (input: {
     priceUsd: input.priceUsd,
     returnUrl: input.returnUrl,
     test,
+    accessToken: token,
   });
 
   await markBillingCheckoutPending({

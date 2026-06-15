@@ -56,13 +56,18 @@ const ACTIVE_SUBSCRIPTIONS = `
 const adminApiVersion = () =>
   process.env.SHOPIFY_ADMIN_API_VERSION?.trim() || '2025-04';
 
-const adminGraphql = async (shopDomain: string, query: string, variables: Record<string, unknown>) => {
-  const accessToken = await requireShopifyOfflineAccessToken(shopDomain);
+const adminGraphql = async (
+  shopDomain: string,
+  query: string,
+  variables: Record<string, unknown>,
+  accessToken?: string,
+) => {
+  const token = accessToken ?? (await requireShopifyOfflineAccessToken(shopDomain));
   const response = await fetch(`https://${shopDomain}/admin/api/${adminApiVersion()}/graphql.json`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': accessToken,
+      'X-Shopify-Access-Token': token,
     },
     body: JSON.stringify({ query, variables }),
   });
@@ -90,32 +95,38 @@ export const createRecurringAppSubscription = async (input: {
   priceUsd: number;
   returnUrl: string;
   test?: boolean;
+  accessToken?: string;
 }) => {
   if (input.priceUsd < 0) {
     throw new Error('Plan price cannot be negative.');
   }
 
-  const accessToken = await requireShopifyOfflineAccessToken(input.shopDomain);
+  const accessToken = input.accessToken ?? (await requireShopifyOfflineAccessToken(input.shopDomain));
   const test =
     input.test === undefined
       ? await resolveBillingTestMode(input.shopDomain, accessToken)
       : Boolean(input.test) || process.env.SHOPIFY_BILLING_TEST === 'true';
 
-  const data = await adminGraphql(input.shopDomain, CREATE_SUBSCRIPTION, {
-    name: input.planName,
-    returnUrl: input.returnUrl,
-    test,
-    lineItems: [
-      {
-        plan: {
-          appRecurringPricingDetails: {
-            price: { amount: input.priceUsd, currencyCode: 'USD' },
-            interval: 'EVERY_30_DAYS',
+  const data = await adminGraphql(
+    input.shopDomain,
+    CREATE_SUBSCRIPTION,
+    {
+      name: input.planName,
+      returnUrl: input.returnUrl,
+      test,
+      lineItems: [
+        {
+          plan: {
+            appRecurringPricingDetails: {
+              price: { amount: input.priceUsd, currencyCode: 'USD' },
+              interval: 'EVERY_30_DAYS',
+            },
           },
         },
-      },
-    ],
-  });
+      ],
+    },
+    accessToken,
+  );
 
   const result = data.appSubscriptionCreate as
     | {

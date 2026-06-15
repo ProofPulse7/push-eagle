@@ -17,16 +17,21 @@ const bodySchema = z.object({
 
 export async function POST(request: Request) {
   let shopDomain: string | null = null;
+  let host: string | undefined;
+  let embedded: string | undefined;
+
   try {
     const body = bodySchema.parse(await request.json());
     shopDomain = extractShopDomain(request, body.shopDomain);
+    host = body.host;
+    embedded = body.embedded;
 
     const result = await runPlanSubscribe({
       shopDomain,
       planKey: body.planKey,
       tierId: body.tierId,
-      host: body.host,
-      embedded: body.embedded,
+      host,
+      embedded,
     });
 
     if (result.autoActivated) {
@@ -51,10 +56,7 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : 'Failed to start subscription.';
     const reauthorizeUrl =
       shopDomain && message.includes('No valid Shopify offline token')
-        ? buildShopifyReauthorizeUrl(shopDomain, {
-            host: body.host ?? undefined,
-            embedded: body.embedded ?? undefined,
-          })
+        ? buildShopifyReauthorizeUrl(shopDomain, { host, embedded })
         : null;
 
     return NextResponse.json(

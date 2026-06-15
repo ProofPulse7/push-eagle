@@ -8,8 +8,7 @@ import { Slider } from '@/components/ui/slider';
 import { Check, Info, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BUSINESS_TIERS, BASIC_PLAN } from '@/lib/client/billing-plans';
-import { ApiError } from '@/lib/client/api-fetch';
-import { useBillingStatus, useConfirmBilling, useSubscribePlan } from '@/hooks/queries/use-billing';
+import { useBillingStatus, useConfirmBilling } from '@/hooks/queries/use-billing';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
 import { ImpressionUsageBar } from '@/components/billing/impression-usage-bar';
@@ -92,28 +91,15 @@ function PlanCard({
   );
 }
 
-const appendShopifyAdminParams = (targetUrl: string, host: string | null, embedded: string | null) => {
-  const url = new URL(targetUrl);
-  if (host) {
-    url.searchParams.set('host', host);
-  }
-  if (embedded) {
-    url.searchParams.set('embedded', embedded);
-  }
-  return url.toString();
-};
 
 export function PlansPageContent() {
   const shop = useShopDomain();
   const { toast } = useToast();
   const searchParams = useSearchParams();
-  const { data, isFetching } = useBillingStatus({ refetchOnMount: true, reconcile: true });
+  const { data, isFetching } = useBillingStatus({ refetchOnMount: false, reconcile: false });
   const confirmBilling = useConfirmBilling();
-  const subscribePlan = useSubscribePlan();
   const [tierIndex, setTierIndex] = useState(0);
   const [pendingPlan, setPendingPlan] = useState<PendingPlanKey | null>(null);
-  const [completedPlan, setCompletedPlan] = useState<PendingPlanKey | null>(null);
-  const completedTimerRef = useRef<number>();
 
   const host = searchParams.get('host');
   const embedded = searchParams.get('embedded');
@@ -129,12 +115,6 @@ export function PlansPageContent() {
     isBillingActive && currentPlanKey === 'business' && currentTierId === tierId;
 
   const selectedTier = BUSINESS_TIERS[tierIndex] ?? BUSINESS_TIERS[0];
-
-  useEffect(() => {
-    return () => {
-      window.clearTimeout(completedTimerRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     if (currentTierId) {
@@ -185,18 +165,7 @@ export function PlansPageContent() {
     });
   }, [searchParams, shop, confirmBilling, toast]);
 
-  const markPlanCompleted = (planKey: PendingPlanKey) => {
-    setCompletedPlan(planKey);
-    window.clearTimeout(completedTimerRef.current);
-    completedTimerRef.current = window.setTimeout(() => setCompletedPlan(null), 2200);
-  };
-
-  const redirectForReauthorize = (reauthorizeUrl: string) => {
-    const target = appendShopifyAdminParams(reauthorizeUrl, host, embedded);
-    (window.top ?? window).location.href = target;
-  };
-
-  const handleSubscribe = (planKey: 'basic' | 'business', tierId?: string) => {
+  const startShopifyCheckout = (planKey: 'basic' | 'business', tierId?: string) => {
     if (!shop) {
       toast({
         variant: 'destructive',
@@ -209,62 +178,28 @@ export function PlansPageContent() {
     const pendingKey: PendingPlanKey =
       planKey === 'business' && tierId ? `business:${tierId}` : planKey;
     setPendingPlan(pendingKey);
-    setCompletedPlan(null);
 
-    subscribePlan.mutate(
-      {
-        planKey,
-        tierId,
-        host: host ?? undefined,
-        embedded: embedded ?? undefined,
-      },
-      {
-        onSuccess: (result) => {
-          if (result.confirmationUrl) {
-            (window.top ?? window).location.href = result.confirmationUrl;
-            return;
-          }
+    const params = new URLSearchParams({
+      shop,
+      planKey,
+    });
+    if (tierId) {
+      params.set('tierId', tierId);
+    }
+    if (host) {
+      params.set('host', host);
+    }
+    if (embedded) {
+      params.set('embedded', embedded);
+    }
 
-          setPendingPlan(null);
-          markPlanCompleted(pendingKey);
-          toast({
-            title: 'Plan updated',
-            description:
-              planKey === 'basic'
-                ? 'Basic plan is now active for your store.'
-                : 'Your Business plan is now active.',
-          });
-        },
-        onError: (error) => {
-          setPendingPlan(null);
-
-          if (error instanceof ApiError && error.reauthorizeUrl) {
-            toast({
-              variant: 'destructive',
-              title: 'Reconnect Push Eagle',
-              description: 'Opening Shopify to refresh your store connection…',
-            });
-            redirectForReauthorize(error.reauthorizeUrl);
-            return;
-          }
-
-          toast({
-            variant: 'destructive',
-            title: 'Could not start checkout',
-            description: error instanceof Error ? error.message : 'Please try again.',
-          });
-        },
-      },
-    );
+    (window.top ?? window).location.href = `/api/billing/subscribe-redirect?${params.toString()}`;
   };
 
-  const handleSubscribeBasic = () => handleSubscribe('basic');
-  const handleSubscribeBusiness = () => handleSubscribe('business', selectedTier.id);
+  const handleSubscribeBasic = () => startShopifyCheckout('basic');
+  const handleSubscribeBusiness = () => startShopifyCheckout('business', selectedTier.id);
 
   const basicButtonLabel = useMemo(() => {
-    if (completedPlan === 'basic') {
-      return 'Plan updated';
-    }
     if (pendingPlan === 'basic') {
       return 'Opening Shopify…';
     }
@@ -275,13 +210,10 @@ export function PlansPageContent() {
       return 'Approve in Shopify…';
     }
     return 'Subscribe with Shopify';
-  }, [billingStatus, completedPlan, isCurrentBasic, pendingPlan]);
+  }, [billingStatus, isCurrentBasic, pendingPlan]);
 
   const businessButtonLabel = useMemo(() => {
     const pendingKey: PendingPlanKey = `business:${selectedTier.id}`;
-    if (completedPlan === pendingKey) {
-      return 'Plan updated';
-    }
     if (pendingPlan === pendingKey) {
       return 'Opening Shopify…';
     }
@@ -292,7 +224,7 @@ export function PlansPageContent() {
       return 'Approve in Shopify…';
     }
     return 'Subscribe with Shopify';
-  }, [billingStatus, completedPlan, isCurrentBusinessTier, pendingPlan, selectedTier.id]);
+  }, [billingStatus, isCurrentBusinessTier, pendingPlan, selectedTier.id]);
 
   const refreshHint = useMemo(
     () => (isFetching ? 'Syncing usage with Shopify…' : null),
@@ -329,11 +261,8 @@ export function PlansPageContent() {
           active={isCurrentBasic}
           footer={
             <Button
-              className={cn(
-                'w-full pe-pressable transition-colors',
-                completedPlan === 'basic' && 'bg-emerald-600 text-white hover:bg-emerald-600/90',
-              )}
-              variant={isCurrentBasic || completedPlan === 'basic' ? 'secondary' : 'default'}
+              className="w-full pe-pressable"
+              variant={isCurrentBasic ? 'secondary' : 'default'}
               disabled={isCurrentBasic || pendingPlan === 'basic'}
               onClick={handleSubscribeBasic}
             >
@@ -356,11 +285,7 @@ export function PlansPageContent() {
           active={isCurrentBusinessTier(selectedTier.id)}
           footer={
             <Button
-              className={cn(
-                'w-full pe-pressable transition-colors',
-                completedPlan === `business:${selectedTier.id}` &&
-                  'bg-emerald-600 text-white hover:bg-emerald-600/90',
-              )}
+              className="w-full pe-pressable"
               disabled={
                 isCurrentBusinessTier(selectedTier.id) ||
                 pendingPlan === `business:${selectedTier.id}`

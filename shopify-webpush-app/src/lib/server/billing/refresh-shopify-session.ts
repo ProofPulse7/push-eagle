@@ -13,6 +13,17 @@ import {
 } from '@/lib/server/billing/shopify-offline-token-refresh';
 import { validateShopifyAccessToken } from '@/lib/server/billing/shopify-token-validation';
 
+const CREDENTIALS_TRUST_MS = 6 * 60 * 60 * 1000;
+
+const isRecentlyVerifiedCredential = (verifiedAt: unknown) => {
+  if (!verifiedAt) {
+    return false;
+  }
+
+  const verifiedMs = new Date(String(verifiedAt)).getTime();
+  return Number.isFinite(verifiedMs) && Date.now() - verifiedMs < CREDENTIALS_TRUST_MS;
+};
+
 export const refreshShopifySessionFromRemixApp = async (shopDomain: string) => {
   try {
     const result = await callPushEagleBilling('/api/shopify/session/sync', shopDomain, {});
@@ -43,6 +54,14 @@ const healFromPrismaSessionTable = async (shopDomain: string) => {
 export const ensureShopifyOfflineAccessToken = async (shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
 
+  const credentials = await getShopifyStoreCredentials(shop);
+  if (
+    credentials?.offlineAccessToken &&
+    isRecentlyVerifiedCredential(credentials.verifiedAt)
+  ) {
+    return credentials.offlineAccessToken;
+  }
+
   let token = await getShopifyOfflineAccessToken(shop);
   if (token && (await validateShopifyAccessToken(shop, token))) {
     return token;
@@ -72,7 +91,6 @@ export const ensureShopifyOfflineAccessToken = async (shopDomain: string) => {
     return token;
   }
 
-  const credentials = await getShopifyStoreCredentials(shop);
   if (
     credentials?.offlineAccessToken &&
     (await validateShopifyAccessToken(shop, credentials.offlineAccessToken))
