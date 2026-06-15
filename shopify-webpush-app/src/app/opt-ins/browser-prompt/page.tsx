@@ -1,9 +1,9 @@
-
 'use client';
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import { PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -11,6 +11,8 @@ import { ArrowLeft, Bell } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
+import { useOptInSettings, useSaveOptInSettings } from '@/hooks/queries/use-app-queries';
+import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 
 const BrowserPromptPreview = () => {
     const { storeUrl } = useSettings();
@@ -58,52 +60,30 @@ export default function BrowserPromptPage() {
     const delayOptions = [3, 5, 10, ...Array.from({ length: 11 }, (_, i) => 15 + i * 5)];
     const [desktopDelaySeconds, setDesktopDelaySeconds] = useState('5');
     const [mobileDelaySeconds, setMobileDelaySeconds] = useState('10');
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
+    const [hydrated, setHydrated] = useState(false);
+    const { data: optInData, isLoading: optInLoading } = useOptInSettings();
+    const saveOptInMutation = useSaveOptInSettings();
 
     useEffect(() => {
         if (!shopDomain) {
-            setLoading(false);
+            setHydrated(false);
             return;
         }
 
-        let isMounted = true;
-        setLoading(true);
+        if (!optInData?.ok && !hasPendingSettings(shopDomain, 'optIn')) {
+            if (!optInLoading) {
+                setHydrated(false);
+            }
+            return;
+        }
 
-        fetch(`/api/settings/opt-in?shop=${encodeURIComponent(shopDomain)}`)
-            .then(async (response) => {
-                const data = await response.json();
-                if (!response.ok || !data?.ok || !isMounted) {
-                    throw new Error(data?.error ?? 'Failed to load browser prompt settings.');
-                }
+        const merged = mergePendingSettings(shopDomain, 'optIn', optInData);
+        setDesktopDelaySeconds(String(merged.desktopDelaySeconds ?? 5));
+        setMobileDelaySeconds(String(merged.mobileDelaySeconds ?? 10));
+        setHydrated(true);
+    }, [shopDomain, optInData, optInLoading]);
 
-                setDesktopDelaySeconds(String(data.desktopDelaySeconds ?? 5));
-                setMobileDelaySeconds(String(data.mobileDelaySeconds ?? 10));
-            })
-            .catch((error) => {
-                if (!isMounted) {
-                    return;
-                }
-
-                const message = error instanceof Error ? error.message : 'Unexpected error while loading browser prompt settings.';
-                toast({
-                    variant: 'destructive',
-                    title: 'Failed to load browser prompt settings',
-                    description: message,
-                });
-            })
-            .finally(() => {
-                if (isMounted) {
-                    setLoading(false);
-                }
-            });
-
-        return () => {
-            isMounted = false;
-        };
-    }, [shopDomain, toast]);
-
-    const saveChanges = async () => {
+    const saveChanges = () => {
         if (!shopDomain) {
             toast({
                 variant: 'destructive',
@@ -113,41 +93,47 @@ export default function BrowserPromptPage() {
             return;
         }
 
-        setSaving(true);
-        try {
-            const response = await fetch('/api/settings/opt-in', {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    shopDomain,
-                    promptType: 'browser',
-                    desktopDelaySeconds: Number(desktopDelaySeconds),
-                    mobileDelaySeconds: Number(mobileDelaySeconds),
-                }),
-            });
+        const body = {
+            promptType: 'browser' as const,
+            desktopDelaySeconds: Number(desktopDelaySeconds),
+            mobileDelaySeconds: Number(mobileDelaySeconds),
+        };
 
-            const data = await response.json();
-            if (!response.ok || !data?.ok) {
-                throw new Error(data?.error ?? 'Failed to save browser prompt settings.');
-            }
-
-            toast({
-                title: 'Browser prompt saved',
-                description: 'Desktop and mobile timings are now live on the storefront.',
-            });
-        } catch (error) {
-            const message = error instanceof Error ? error.message : 'Unexpected error while saving browser prompt settings.';
-            toast({
-                variant: 'destructive',
-                title: 'Save failed',
-                description: message,
-            });
-        } finally {
-            setSaving(false);
-        }
+        writePendingSettings(shopDomain, 'optIn', body);
+        saveOptInMutation.mutate(body, {
+            onSuccess: () => {
+                toast({
+                    title: 'Browser prompt saved',
+                    description: 'Delay settings are now active on your storefront.',
+                });
+            },
+            onError: (error) => {
+                toast({
+                    variant: 'destructive',
+                    title: 'Failed to save browser prompt settings',
+                    description: error instanceof Error ? error.message : 'Unexpected error while saving.',
+                });
+            },
+        });
     };
+
+    if (!shopDomain) {
+        return (
+            <div className="min-h-screen">
+                <PageLoadingView title="Browser prompt" description="Waiting for shop context…" />
+            </div>
+        );
+    }
+
+    if (!hydrated && optInLoading) {
+        return (
+            <div className="min-h-screen">
+                <PageLoadingView title="Browser prompt" />
+            </div>
+        );
+    }
+
+    const saving = saveOptInMutation.isPending;
 
     return (
         <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
@@ -185,7 +171,7 @@ export default function BrowserPromptPage() {
                                     <Label>Desktop</Label>
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm text-muted-foreground whitespace-nowrap">Show prompt after</p>
-                                        <Select value={desktopDelaySeconds} onValueChange={setDesktopDelaySeconds} disabled={loading || saving}>
+                                        <Select value={desktopDelaySeconds} onValueChange={setDesktopDelaySeconds} disabled={saving}>
                                             <SelectTrigger className="w-full">
                                                 <SelectValue />
                                             </SelectTrigger>
@@ -200,7 +186,7 @@ export default function BrowserPromptPage() {
                                     <Label>Mobile</Label>
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm text-muted-foreground whitespace-nowrap">Show prompt after</p>
-                                        <Select value={mobileDelaySeconds} onValueChange={setMobileDelaySeconds} disabled={loading || saving}>
+                                        <Select value={mobileDelaySeconds} onValueChange={setMobileDelaySeconds} disabled={saving}>
                                             <SelectTrigger className="w-full">
                                                 <SelectValue />
                                             </SelectTrigger>
@@ -238,7 +224,7 @@ export default function BrowserPromptPage() {
                 <Button variant="outline" asChild>
                     <Link href="/opt-ins">CANCEL</Link>
                 </Button>
-                <Button onClick={saveChanges} disabled={loading || saving}>{saving ? 'SAVING...' : 'SAVE CHANGES'}</Button>
+                <Button onClick={saveChanges} disabled={saving}>{saving ? 'SAVING...' : 'SAVE CHANGES'}</Button>
             </div>
         </div>
     );

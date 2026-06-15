@@ -1,6 +1,7 @@
 'use client';
 
 import { OptimisticSaveQueue } from '@/lib/client/optimistic-save-queue';
+import { runWithBackgroundRetries } from '@/lib/client/background-save';
 import {
   patchAutomationOverviewRule,
   setPendingAutomationEnabled,
@@ -92,6 +93,9 @@ export const syncPendingFlowStepStates = (
   writePendingStepStates(shop, ruleKey, states);
 };
 
+export const hasPendingFlowSteps = (shop: string, ruleKey: string) =>
+  Object.keys(readPendingStepStates(shop, ruleKey)).length > 0;
+
 export const applyPendingFlowStepStates = <T extends FlowStepNotification>(
   shop: string,
   ruleKey: string,
@@ -143,44 +147,44 @@ export const saveAutomationStepsOptimistically = <T extends FlowStepNotification
     patchAutomationOverviewRule(queryClient, shopDomain, ruleKey, { enabled: ruleEnabled });
   }
 
-  void fetch('/api/automations/rules', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      shopDomain,
-      ruleKey,
-      enabled: ruleEnabled,
-      config: { steps: buildStepsConfig(notifications) },
-    }),
-  })
-    .then(async (response) => {
-      const payload = (await response.json().catch(() => ({ ok: false }))) as {
-        ok?: boolean;
-        error?: string;
-        rule?: { enabled?: boolean; config?: { steps?: Record<string, { enabled?: boolean }> } };
-      };
-
-      if (!response.ok || !payload.ok) {
-        throw new Error(typeof payload.error === 'string' ? payload.error : 'Failed to save automation steps.');
-      }
-
-      const savedSteps = payload.rule?.config?.steps ?? {};
-      for (const notification of notifications) {
-        const savedStep = savedSteps[notification.id];
-        if (savedStep && Boolean(savedStep.enabled) === (notification.status === 'Active')) {
-          clearPendingFlowStepEnabled(shopDomain, ruleKey, notification.id);
-        }
-      }
-
-      if (queryClient && typeof payload.rule?.enabled === 'boolean') {
-        patchAutomationOverviewRule(queryClient, shopDomain, ruleKey, {
-          enabled: payload.rule.enabled,
-        });
-      }
-    })
-    .catch((error) => {
-      onError?.(error instanceof Error ? error : new Error('Failed to save automation steps.'));
+  void runWithBackgroundRetries(async () => {
+    const response = await fetch('/api/automations/rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shopDomain,
+        ruleKey,
+        enabled: ruleEnabled,
+        config: { steps: buildStepsConfig(notifications) },
+      }),
     });
+
+    const payload = (await response.json().catch(() => ({ ok: false }))) as {
+      ok?: boolean;
+      error?: string;
+      rule?: { enabled?: boolean; config?: { steps?: Record<string, { enabled?: boolean }> } };
+    };
+
+    if (!response.ok || !payload.ok) {
+      throw new Error(typeof payload.error === 'string' ? payload.error : 'Failed to save automation steps.');
+    }
+
+    const savedSteps = payload.rule?.config?.steps ?? {};
+    for (const notification of notifications) {
+      const savedStep = savedSteps[notification.id];
+      if (savedStep && Boolean(savedStep.enabled) === (notification.status === 'Active')) {
+        clearPendingFlowStepEnabled(shopDomain, ruleKey, notification.id);
+      }
+    }
+
+    if (queryClient && typeof payload.rule?.enabled === 'boolean') {
+      patchAutomationOverviewRule(queryClient, shopDomain, ruleKey, {
+        enabled: payload.rule.enabled,
+      });
+    }
+  }).catch((error) => {
+    onError?.(error instanceof Error ? error : new Error('Failed to save automation steps.'));
+  });
 };
 
 export const createDebouncedAutomationStepsSaver = <T extends FlowStepNotification>(
@@ -211,34 +215,36 @@ export const createDebouncedAutomationStepsSaver = <T extends FlowStepNotificati
         options?.onError?.(error instanceof Error ? error : new Error('Failed to save automation steps.'));
       },
       save: async (payload) => {
-        const response = await fetch('/api/automations/rules', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            shopDomain,
-            ruleKey,
-            enabled: payload.some((item) => item.status === 'Active'),
-            config: { steps: buildStepsConfig(payload) },
-          }),
-        });
+        await runWithBackgroundRetries(async () => {
+          const response = await fetch('/api/automations/rules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              shopDomain,
+              ruleKey,
+              enabled: payload.some((item) => item.status === 'Active'),
+              config: { steps: buildStepsConfig(payload) },
+            }),
+          });
 
-        const result = (await response.json().catch(() => ({ ok: false }))) as {
-          ok?: boolean;
-          error?: string;
-          rule?: { enabled?: boolean; config?: { steps?: Record<string, { enabled?: boolean }> } };
-        };
+          const result = (await response.json().catch(() => ({ ok: false }))) as {
+            ok?: boolean;
+            error?: string;
+            rule?: { enabled?: boolean; config?: { steps?: Record<string, { enabled?: boolean }> } };
+          };
 
-        if (!response.ok || !result.ok) {
-          throw new Error(typeof result.error === 'string' ? result.error : 'Failed to save automation steps.');
-        }
-
-        const savedSteps = result.rule?.config?.steps ?? {};
-        for (const notification of payload) {
-          const savedStep = savedSteps[notification.id];
-          if (savedStep && Boolean(savedStep.enabled) === (notification.status === 'Active')) {
-            clearPendingFlowStepEnabled(shopDomain, ruleKey, notification.id);
+          if (!response.ok || !result.ok) {
+            throw new Error(typeof result.error === 'string' ? result.error : 'Failed to save automation steps.');
           }
-        }
+
+          const savedSteps = result.rule?.config?.steps ?? {};
+          for (const notification of payload) {
+            const savedStep = savedSteps[notification.id];
+            if (savedStep && Boolean(savedStep.enabled) === (notification.status === 'Active')) {
+              clearPendingFlowStepEnabled(shopDomain, ruleKey, notification.id);
+            }
+          }
+        });
       },
     });
   };

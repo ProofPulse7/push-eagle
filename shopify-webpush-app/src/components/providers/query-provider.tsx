@@ -1,12 +1,18 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
 
 const STALE_TIME_MS = 30 * 60 * 1000;
 const GC_TIME_MS = 2 * 60 * 60 * 1000;
+
+const PersistRestoreContext = createContext(true);
+
+export function usePersistRestored() {
+  return useContext(PersistRestoreContext);
+}
 
 function makeQueryClient() {
   return new QueryClient({
@@ -20,7 +26,7 @@ function makeQueryClient() {
         placeholderData: (previous: unknown) => previous,
       },
       mutations: {
-        retry: 0,
+        retry: 2,
       },
     },
   });
@@ -34,19 +40,25 @@ export function QueryProvider({ children }: { children: ReactNode }) {
       key: 'pe_query_cache_v1',
     }),
   );
+  const [isRestored, setIsRestored] = useState(() => typeof window === 'undefined');
 
   return (
-    <PersistQueryClientProvider
-      client={queryClient}
-      persistOptions={{
-        persister,
-        maxAge: GC_TIME_MS,
-        dehydrateOptions: {
-          shouldDehydrateQuery: (query) => query.state.status === 'success',
-        },
-      }}
-    >
-      {children}
-    </PersistQueryClientProvider>
+    <PersistRestoreContext.Provider value={isRestored}>
+      <PersistQueryClientProvider
+        client={queryClient}
+        persistOptions={{
+          persister,
+          maxAge: GC_TIME_MS,
+          dehydrateOptions: {
+            shouldDehydrateQuery: (query) => query.state.status === 'success',
+          },
+        }}
+        onSuccess={() => {
+          setIsRestored(true);
+        }}
+      >
+        {children}
+      </PersistQueryClientProvider>
+    </PersistRestoreContext.Provider>
   );
 }

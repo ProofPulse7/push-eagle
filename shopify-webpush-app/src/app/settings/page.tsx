@@ -12,7 +12,7 @@ import {
 } from '@/hooks/queries/use-app-queries';
 import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
 import { queryKeys } from '@/lib/client/query-keys';
-import { mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
+import { mergePendingSettings, writePendingSettings, hasPendingSettings } from '@/lib/client/pending-settings';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { SettingsAnalyticsPanel } from '@/components/settings/settings-analytics-panel';
 import { Button } from '@/components/ui/button';
@@ -181,7 +181,7 @@ export default function SettingsPage() {
             ...body,
         });
         savePrivacyMutation.mutate(body);
-    }, 450);
+    }, 120);
 
     const applyPrivacyPatch = useCallback(
         (patch: Partial<PrivacyBody>) => {
@@ -217,6 +217,10 @@ export default function SettingsPage() {
 
     useEffect(() => {
         if (!activeShopDomain) {
+            return;
+        }
+
+        if (!privacyData && !hasPendingSettings(activeShopDomain, 'privacy')) {
             return;
         }
 
@@ -457,8 +461,17 @@ export default function SettingsPage() {
     };
 
 
-  const settingsLoading = !overviewData && !privacyData;
-  const settingsHasData = Boolean(overviewData || privacyData);
+  const settingsLoading =
+    Boolean(activeShopDomain) &&
+    !overviewData &&
+    !privacyData &&
+    !hasPendingSettings(activeShopDomain, 'privacy') &&
+    !hasPendingSettings(activeShopDomain, 'attribution');
+  const settingsHasData =
+    Boolean(overviewData) ||
+    Boolean(privacyData) ||
+    hasPendingSettings(activeShopDomain, 'privacy') ||
+    hasPendingSettings(activeShopDomain, 'attribution');
 
   return (
     <PageLoadingShell

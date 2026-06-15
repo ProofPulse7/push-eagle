@@ -6,6 +6,7 @@ import { ArrowLeft, Zap } from 'lucide-react';
 
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -18,6 +19,7 @@ import { useCachedJson } from '@/hooks/use-cached-json';
 import {
   applyPendingFlowStepStates,
   createDebouncedAutomationStepsSaver,
+  hasPendingFlowSteps,
   stepEnabledFromConfig,
 } from '@/lib/client/automation-flow-steps';
 import { formatCurrency } from '@/lib/utils';
@@ -330,6 +332,17 @@ export default function BrowseAbandonmentPage() {
   };
 
   const isFlowActive = ruleEnabled && notifications.some((item) => item.status === 'Active');
+  const flowConfigReady =
+    Boolean(rulesPayload?.ok) || hasPendingFlowSteps(shopDomain, 'browse_abandonment_15m');
+  const flowConfigLoading = Boolean(shopDomain) && !flowConfigReady;
+
+  if (flowConfigLoading) {
+    return (
+      <div className="min-h-screen bg-muted/40">
+        <PageLoadingView title="Browse abandonment" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">

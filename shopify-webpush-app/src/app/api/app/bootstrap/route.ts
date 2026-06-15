@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import {
   getAttributionSettings,
+  getAutomationOverview,
   getBrandingSettings,
   getCampaignStats,
   getMerchantOverview,
@@ -58,6 +59,7 @@ export async function GET(request: Request) {
       branding,
       optIn,
       billing,
+      automationsOverview,
     ] = await Promise.all([
       getMerchantOverview(shopDomain),
       getCampaignStats(shopDomain),
@@ -69,6 +71,7 @@ export async function GET(request: Request) {
       getBrandingSettings(shopDomain),
       getOptInSettings(shopDomain),
       getMerchantBillingFast(shopDomain),
+      getAutomationOverview(shopDomain),
     ]);
 
     const payload = {
@@ -88,6 +91,7 @@ export async function GET(request: Request) {
       branding,
       optIn,
       billing,
+      automationsOverview,
     };
 
     writeBootstrapCache(shopDomain, payload);

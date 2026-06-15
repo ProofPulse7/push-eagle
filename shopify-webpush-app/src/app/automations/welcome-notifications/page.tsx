@@ -6,10 +6,12 @@ import { ArrowLeft, ChevronDown, TabletSmartphone, Zap } from 'lucide-react';
 
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
 import { FlowStats } from '@/components/automations/flow-stats';
+import { PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
 import {
   applyPendingFlowStepStates,
   createDebouncedAutomationStepsSaver,
+  hasPendingFlowSteps,
   stepEnabledFromConfig,
 } from '@/lib/client/automation-flow-steps';
 import {
@@ -260,6 +262,18 @@ export default function WelcomeNotificationsPage() {
     setNotifications(updatedNotifications);
     saveWelcomeConfig(updatedNotifications);
   };
+
+  const flowConfigReady =
+    Boolean(rulesPayload?.ok) || hasPendingFlowSteps(shopDomain, 'welcome_subscriber');
+  const flowConfigLoading = Boolean(shopDomain) && !flowConfigReady;
+
+  if (flowConfigLoading) {
+    return (
+      <div className="min-h-screen bg-muted/40">
+        <PageLoadingView title="Welcome notifications" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">

@@ -1,5 +1,7 @@
 'use client';
 
+import { BACKGROUND_SAVE_DEBOUNCE_MS, runWithBackgroundRetries } from '@/lib/client/background-save';
+
 type SaveTask<TPayload> = {
   key: string;
   payload: TPayload;
@@ -12,7 +14,7 @@ export class OptimisticSaveQueue<TPayload> {
   private inflight = new Map<string, Promise<void>>();
   private latestPayload = new Map<string, TPayload>();
 
-  enqueue(task: SaveTask<TPayload>, debounceMs = 350) {
+  enqueue(task: SaveTask<TPayload>, debounceMs = BACKGROUND_SAVE_DEBOUNCE_MS) {
     this.latestPayload.set(task.key, task.payload);
 
     const existingTimer = this.timers.get(task.key);
@@ -47,7 +49,7 @@ export class OptimisticSaveQueue<TPayload> {
       }
     }
 
-    const run = save(payload)
+    const run = runWithBackgroundRetries(() => save(payload))
       .catch((error) => {
         onError?.(error);
       })

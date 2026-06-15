@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import dynamic from 'next/dynamic';
 import { ImageEditorSheet } from '@/components/composer/editor-parts/image-editor-sheet';
+import { PageLoadingView } from '@/components/ui/loading-ui';
 import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
 
@@ -413,6 +414,14 @@ export default function CustomPromptPage() {
         }
     };
     
+    if (loading && !loadError) {
+        return (
+            <div className="min-h-screen">
+                <PageLoadingView title="Custom prompt" />
+            </div>
+        );
+    }
+
     return (
         <div className="flex flex-col min-h-screen">
             <div className="bg-card p-4 sm:p-6 md:p-8">

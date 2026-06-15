@@ -5,6 +5,7 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { ArrowLeft, Book, ChevronLeft, ChevronRight, Loader2, RefreshCw, Share, Smile, Square, X } from 'lucide-react';
 
+import { PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -254,6 +255,14 @@ export default function IOSWidgetPage() {
   const handleMessageEmojiSelect = (emoji: { emoji: string }) => {
     setMessage((prev) => prev + emoji.emoji);
   };
+
+  if (loading && !loadError) {
+    return (
+      <div className="min-h-screen">
+        <PageLoadingView title="iOS widget" />
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8 min-h-screen">

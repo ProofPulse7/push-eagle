@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { queryKeys } from '@/lib/client/query-keys';
+import { hasWarmShopCache } from '@/lib/client/app-cache-ready';
 import { AppSetupScreen } from '@/components/ui/loading-ui';
+import { usePersistRestored } from '@/components/providers/query-provider';
 import { useAppBootstrap } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
@@ -26,31 +27,23 @@ const shouldSkipSetup = (pathname: string) => {
 };
 
 /**
- * Blocks only on cold start (no cached bootstrap). Cached sessions skip instantly.
- * Progress jumps to 70% immediately, then eases to 100% with accurate timing.
+ * Blocks on cold start until persisted cache is restored and bootstrap data is ready.
+ * Returning users with sessionStorage cache skip almost instantly.
  */
 export function AppSetupGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const shop = useShopDomain();
   const queryClient = useQueryClient();
+  const isRestored = usePersistRestored();
   const bootstrap = useAppBootstrap();
   const skip = shouldSkipSetup(pathname);
 
-  const hasCachedBootstrap = Boolean(
-    shop && queryClient.getQueryData(queryKeys.bootstrap(shop)),
-  );
-  const hasWarmSessionCache = Boolean(
-    shop &&
-      (hasCachedBootstrap ||
-        queryClient.getQueryData(queryKeys.dashboardSummary(shop)) ||
-        queryClient.getQueryData(queryKeys.campaigns(shop)) ||
-        queryClient.getQueryData(queryKeys.automationsOverview(shop))),
-  );
+  const hasWarmSessionCache = Boolean(shop && hasWarmShopCache(queryClient, shop));
   const hasBootstrapData = Boolean(bootstrap.data) || hasWarmSessionCache;
 
   const isReady =
-    skip || !shop || bootstrap.isSuccess || hasWarmSessionCache || (hasBootstrapData && !bootstrap.isPending);
-  const showSetup = !skip && Boolean(shop) && !isReady && !hasWarmSessionCache;
+    skip || !shop || (isRestored && (bootstrap.isSuccess || hasWarmSessionCache));
+  const showSetup = !skip && Boolean(shop) && !isReady;
 
   const [progress, setProgress] = useState(70);
 
@@ -67,8 +60,8 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
     }
 
     const start = performance.now();
-    const minDuration = hasBootstrapData ? 280 : 1400;
-    const maxDuration = hasBootstrapData ? 520 : 2800;
+    const minDuration = hasBootstrapData ? 180 : 700;
+    const maxDuration = hasBootstrapData ? 360 : 1600;
 
     const tick = window.setInterval(() => {
       const elapsed = performance.now() - start;

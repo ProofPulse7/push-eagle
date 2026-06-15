@@ -10,6 +10,7 @@ import {
 } from '@tanstack/react-query';
 
 import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
+import { fetchJsonWithRetry, fetchJsonWithShopRetry } from '@/lib/client/background-save';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
 import { mergeAutomationsFromCache } from '@/lib/client/optimistic-automations';
@@ -304,7 +305,7 @@ export function useSaveBrandingSettings() {
 
   return useMutation({
     mutationFn: (body: Record<string, unknown>) =>
-      fetchJson<Record<string, unknown>>('/api/settings/branding', {
+      fetchJsonWithShopRetry<Record<string, unknown>>('/api/settings/branding', shop, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopDomain: shop, ...body }),
@@ -329,7 +330,43 @@ export function useSaveBrandingSettings() {
       clearPendingSettings(shop, 'branding');
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.branding(shop) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.branding(shop), refetchType: 'none' });
+    },
+  });
+}
+
+export function useSaveOptInSettings() {
+  const shop = useShopDomain();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      fetchJsonWithRetry<Record<string, unknown>>('/api/settings/opt-in', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopDomain: shop, ...body }),
+      }),
+    onMutate: async (body) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.optIn(shop) });
+      const previous = queryClient.getQueryData<Record<string, unknown>>(queryKeys.optIn(shop));
+      queryClient.setQueryData(queryKeys.optIn(shop), {
+        ok: true,
+        shopDomain: shop,
+        ...previous,
+        ...body,
+      });
+      return { previous };
+    },
+    onError: (_error, _body, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.optIn(shop), context.previous);
+      }
+    },
+    onSuccess: () => {
+      clearPendingSettings(shop, 'optIn');
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.optIn(shop), refetchType: 'none' });
     },
   });
 }
@@ -340,7 +377,7 @@ export function useSaveAttributionSettings() {
 
   return useMutation({
     mutationFn: (body: Record<string, unknown>) =>
-      fetchJson<Record<string, unknown>>('/api/settings/attribution', {
+      fetchJsonWithShopRetry<Record<string, unknown>>('/api/settings/attribution', shop, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopDomain: shop, ...body }),
@@ -367,7 +404,7 @@ export function useSaveAttributionSettings() {
       clearPendingSettings(shop, 'attribution');
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.attribution(shop) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.attribution(shop), refetchType: 'none' });
     },
   });
 }
@@ -378,7 +415,7 @@ export function useSavePrivacySettings() {
 
   return useMutation({
     mutationFn: (body: Record<string, unknown>) =>
-      fetchJson<Record<string, unknown>>('/api/settings/privacy', {
+      fetchJsonWithShopRetry<Record<string, unknown>>('/api/settings/privacy', shop, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopDomain: shop, ...body }),
@@ -403,7 +440,7 @@ export function useSavePrivacySettings() {
       clearPendingSettings(shop, 'privacy');
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.privacy(shop) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.privacy(shop), refetchType: 'none' });
     },
   });
 }
