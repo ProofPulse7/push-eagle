@@ -51,11 +51,26 @@ const healFromPrismaSessionTable = async (shopDomain: string) => {
   return persisted.valid ? token : null;
 };
 
-export const ensureShopifyOfflineAccessToken = async (shopDomain: string) => {
+type EnsureOfflineTokenOptions = {
+  /** Skip the recently-verified shortcut (use after a live 401 from Shopify). */
+  bypassRecentTrust?: boolean;
+};
+
+export const invalidateStoredShopifyAccessToken = async (shopDomain: string) => {
+  const shop = shopDomain.trim().toLowerCase();
+  await markShopifyStoreCredentialsInvalid(shop);
+  await clearMerchantOfflineAccessToken(shop);
+};
+
+export const ensureShopifyOfflineAccessToken = async (
+  shopDomain: string,
+  options?: EnsureOfflineTokenOptions,
+) => {
   const shop = shopDomain.trim().toLowerCase();
 
   const credentials = await getShopifyStoreCredentials(shop);
   if (
+    !options?.bypassRecentTrust &&
     credentials?.offlineAccessToken &&
     isRecentlyVerifiedCredential(credentials.verifiedAt)
   ) {

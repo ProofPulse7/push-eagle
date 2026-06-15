@@ -1,8 +1,8 @@
 import { BASIC_PLAN } from '@/lib/server/billing/plans';
 import {
   isShopifyAuthError,
+  refreshBillingAccessTokenAfterAuthFailure,
   resolveBillingAccessTokenFast,
-  resolveBillingAccessTokenForCheckout,
 } from '@/lib/server/billing/billing-access-token';
 import { markBillingCheckoutPending } from '@/lib/server/billing/merchant-billing';
 import { resolveBillingTestMode } from '@/lib/server/billing/billing-test-mode';
@@ -70,7 +70,7 @@ export const startPlanSubscriptionCheckout = async (input: {
     );
   }
 
-  const test = await resolveBillingTestMode(input.shopDomain, token);
+  let test = await resolveBillingTestMode(input.shopDomain, token);
 
   try {
     return await runSubscriptionCheckout({ ...input, accessToken: token, test });
@@ -79,7 +79,7 @@ export const startPlanSubscriptionCheckout = async (input: {
       throw error;
     }
 
-    token = await resolveBillingAccessTokenForCheckout(input.shopDomain);
+    token = await refreshBillingAccessTokenAfterAuthFailure(input.shopDomain);
     if (!token) {
       const reauthorizeUrl = buildShopifyReauthorizeUrl(input.shopDomain);
       throw new Error(
@@ -87,7 +87,20 @@ export const startPlanSubscriptionCheckout = async (input: {
       );
     }
 
-    return runSubscriptionCheckout({ ...input, accessToken: token, test });
+    test = await resolveBillingTestMode(input.shopDomain, token);
+
+    try {
+      return await runSubscriptionCheckout({ ...input, accessToken: token, test });
+    } catch (retryError) {
+      if (isShopifyAuthError(retryError)) {
+        const reauthorizeUrl = buildShopifyReauthorizeUrl(input.shopDomain);
+        throw new Error(
+          `No valid Shopify offline token. Open Push Eagle from Shopify admin to re-authorize: ${reauthorizeUrl}`,
+        );
+      }
+
+      throw retryError;
+    }
   }
 };
 

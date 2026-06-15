@@ -1,6 +1,9 @@
 import { readOfflineAccessTokenFromPrismaSessions } from '@/lib/server/billing/prisma-session-import';
+import {
+  ensureShopifyOfflineAccessToken,
+  invalidateStoredShopifyAccessToken,
+} from '@/lib/server/billing/refresh-shopify-session';
 import { getShopifyStoreCredentials } from '@/lib/server/billing/shopify-credentials-store';
-import { ensureShopifyOfflineAccessToken } from '@/lib/server/billing/refresh-shopify-session';
 import { getShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
 
 /**
@@ -40,6 +43,20 @@ export const isShopifyAuthError = (error: unknown) => {
     message.includes('invalid api key or access token') ||
     message.includes('access token')
   );
+};
+
+export const isBillingReauthRequired = (error: unknown) => {
+  if (error instanceof Error && error.message.includes('No valid Shopify offline token')) {
+    return true;
+  }
+
+  return isShopifyAuthError(error);
+};
+
+/** After Shopify returns 401/403, invalidate cached tokens and run the full refresh pipeline. */
+export const refreshBillingAccessTokenAfterAuthFailure = async (shopDomain: string) => {
+  await invalidateStoredShopifyAccessToken(shopDomain);
+  return ensureShopifyOfflineAccessToken(shopDomain, { bypassRecentTrust: true });
 };
 
 export const resolveBillingAccessTokenForCheckout = async (shopDomain: string) => {

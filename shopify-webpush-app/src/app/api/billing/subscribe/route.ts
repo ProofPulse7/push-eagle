@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { isBillingReauthRequired } from '@/lib/server/billing/billing-access-token';
 import { activateSubscribedPlan, runPlanSubscribe } from '@/lib/server/billing/run-plan-subscribe';
 import { buildShopifyReauthorizeUrl } from '@/lib/server/billing/shopify-offline-token-refresh';
 import { extractShopDomain } from '@/lib/server/shop-context';
@@ -54,19 +55,21 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to start subscription.';
-    const reauthorizeUrl =
-      shopDomain && message.includes('No valid Shopify offline token')
-        ? buildShopifyReauthorizeUrl(shopDomain, { host, embedded })
-        : null;
+    const needsReauth = Boolean(shopDomain && isBillingReauthRequired(error));
+    const reauthorizeUrl = needsReauth
+      ? buildShopifyReauthorizeUrl(shopDomain!, { host, embedded })
+      : null;
 
     return NextResponse.json(
       {
         ok: false,
-        error: message,
+        error: needsReauth
+          ? 'Your Shopify session expired. Open Push Eagle from Shopify admin to reconnect, then try again.'
+          : message,
         reauthorizeUrl,
         diagnosticsPath: '/diagnostics/shopify-billing',
       },
-      { status: message.includes('No valid Shopify offline token') ? 502 : 400 },
+      { status: needsReauth ? 401 : 400 },
     );
   }
 }

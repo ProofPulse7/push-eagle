@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { isBillingReauthRequired } from '@/lib/server/billing/billing-access-token';
 import { buildBillingReturnUrl } from '@/lib/server/billing/build-billing-return-url';
 import { activateSubscribedPlan, runPlanSubscribe } from '@/lib/server/billing/run-plan-subscribe';
 import { buildShopifyReauthorizeUrl } from '@/lib/server/billing/shopify-offline-token-refresh';
@@ -52,17 +53,21 @@ export async function GET(request: Request) {
     return NextResponse.redirect(result.confirmationUrl);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to start subscription.';
-    const reauthorizeUrl =
-      shopDomain && message.includes('No valid Shopify offline token')
-        ? buildShopifyReauthorizeUrl(shopDomain, {
-            host: host ?? undefined,
-            embedded: embedded ?? undefined,
-          })
-        : null;
+    const needsReauth = Boolean(shopDomain && isBillingReauthRequired(error));
+    const reauthorizeUrl = needsReauth
+      ? buildShopifyReauthorizeUrl(shopDomain!, {
+          host: host ?? undefined,
+          embedded: embedded ?? undefined,
+        })
+      : null;
+
+    if (reauthorizeUrl) {
+      return NextResponse.redirect(reauthorizeUrl);
+    }
 
     return NextResponse.json(
       { ok: false, error: message, reauthorizeUrl },
-      { status: message.includes('No valid Shopify offline token') ? 502 : 400 },
+      { status: 400 },
     );
   }
 }
