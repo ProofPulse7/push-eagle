@@ -6,15 +6,17 @@ import { useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
-import { differenceInDays, eachMonthOfInterval, format } from 'date-fns';
+import { differenceInDays, eachMonthOfInterval, endOfDay, format, startOfDay } from 'date-fns';
 import { AreaChart as AreaChartIcon, BarChart3 } from 'lucide-react';
 import type { DateRange } from 'react-day-picker';
 import { DateRangePicker } from '../analytics/date-range-picker';
 import { useSubscriberGrowth } from '@/hooks/queries/use-app-queries';
+import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
+import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
 
 const DashboardSubscriberGrowthChart = dynamic(() => import('./dashboard-subscriber-growth-chart'), {
   ssr: false,
-  loading: () => <Skeleton className="h-72 w-full" />,
+  loading: () => null,
 });
 
 type GrowthPoint = {
@@ -50,10 +52,13 @@ function buildChartData(
         .map((item: { date?: string }) => (item?.date ? new Date(item.date) : null))
         .filter((value: Date | null): value is Date => value instanceof Date && !Number.isNaN(value.getTime()));
 
+    const chartFrom = typeof payload.from === 'string' ? new Date(payload.from) : from;
+    const chartTo = typeof payload.to === 'string' ? new Date(payload.to) : to;
+
     const rangeDays =
         pointDates.length > 1
             ? differenceInDays(pointDates[pointDates.length - 1], pointDates[0])
-            : 0;
+            : differenceInDays(chartTo, chartFrom);
 
     if (rangeDays > 90) {
         const monthly = new Map<string, number>();
@@ -66,7 +71,7 @@ function buildChartData(
             monthly.set(label, (monthly.get(label) ?? 0) + Number(item?.subscribers ?? 0));
         }
 
-        const interval = eachMonthOfInterval({ start: from, end: to });
+        const interval = eachMonthOfInterval({ start: chartFrom, end: chartTo });
         const monthPoints = interval.map((month) => {
             const label = format(month, 'MMM yy');
             return {
@@ -113,11 +118,65 @@ export function SubscriberGrowthChart({
     const [date, setDate] = useState<DateRange | undefined>(undefined);
     const [chartType, setChartType] = useState<'area' | 'bar'>('area');
 
-    const to = date?.to ?? new Date();
-    const from = date?.from ?? new Date(to.getTime() - defaultDays * 24 * 60 * 60 * 1000);
-    const { data: payload, isFetching, isLoading } = useSubscriberGrowth(from, to);
+    const { queryFrom, queryTo, chartFrom, chartTo, periodLabel } = useMemo(() => {
+        if (showDatePicker) {
+            if (!date?.from) {
+                return {
+                    queryFrom: undefined,
+                    queryTo: undefined,
+                    chartFrom: null as Date | null,
+                    chartTo: null as Date | null,
+                    periodLabel: formatCampaignDateRangeLabel(undefined),
+                };
+            }
 
-    const chartData = useMemo(() => buildChartData(payload, from, to), [payload, from, to]);
+            const range = resolveAnalyticsDateRange(date);
+            return {
+                queryFrom: range.from,
+                queryTo: range.to,
+                chartFrom: range.from,
+                chartTo: range.to,
+                periodLabel: formatCampaignDateRangeLabel(date),
+            };
+        }
+
+        const toDate = endOfDay(new Date());
+        const fromDate = startOfDay(new Date(Date.now() - defaultDays * 24 * 60 * 60 * 1000));
+        return {
+            queryFrom: fromDate,
+            queryTo: toDate,
+            chartFrom: fromDate,
+            chartTo: toDate,
+            periodLabel: `the last ${defaultDays} days`,
+        };
+    }, [showDatePicker, date?.from?.getTime(), date?.to?.getTime(), defaultDays]);
+
+    const { data: payload, isFetching, isLoading } = useSubscriberGrowth(queryFrom, queryTo);
+
+    const resolvedChartFrom = useMemo(() => {
+        if (chartFrom) {
+            return chartFrom;
+        }
+        if (typeof payload?.from === 'string') {
+            return new Date(payload.from);
+        }
+        return startOfDay(new Date(Date.now() - defaultDays * 24 * 60 * 60 * 1000));
+    }, [chartFrom, payload?.from, defaultDays]);
+
+    const resolvedChartTo = useMemo(() => {
+        if (chartTo) {
+            return chartTo;
+        }
+        if (typeof payload?.to === 'string') {
+            return new Date(payload.to);
+        }
+        return endOfDay(new Date());
+    }, [chartTo, payload?.to]);
+
+    const chartData = useMemo(
+        () => buildChartData(payload, resolvedChartFrom, resolvedChartTo),
+        [payload, resolvedChartFrom.getTime(), resolvedChartTo.getTime()],
+    );
     const xAxisProps = getXAxisProps(chartData.data.length);
     const showRefreshing = isFetching && Boolean(payload);
     const showSkeleton = isLoading && !payload;
@@ -129,8 +188,8 @@ export function SubscriberGrowthChart({
                     <CardTitle>Subscriber Growth</CardTitle>
                     <CardDescription>
                          {showDatePicker
-                           ? 'New subscribers over the selected period.'
-                           : `New subscribers over the last ${defaultDays} days.`}
+                           ? `New subscribers for ${periodLabel}.`
+                           : `New subscribers over ${periodLabel}.`}
                     </CardDescription>
                 </div>
                  {showDatePicker && <DateRangePicker date={date} setDate={setDate} size="sm" />}

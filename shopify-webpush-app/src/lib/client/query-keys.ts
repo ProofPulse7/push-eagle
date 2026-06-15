@@ -9,6 +9,8 @@ export const queryKeys = {
   campaignStats: (shop: string, from: string, to: string) =>
     ['pe', shop, 'campaigns', 'stats', from, to] as const,
   automationsOverview: (shop: string) => ['pe', shop, 'automations', 'overview'] as const,
+  automationStats: (shop: string, from: string, to: string) =>
+    ['pe', shop, 'automations', 'stats', from, to] as const,
   segments: (shop: string) => ['pe', shop, 'segments'] as const,
   subscribersOverview: (shop: string) => ['pe', shop, 'subscribers', 'overview'] as const,
   subscribersGrowth: (shop: string, from: string, to: string) =>

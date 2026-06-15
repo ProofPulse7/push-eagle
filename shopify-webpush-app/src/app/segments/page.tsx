@@ -5,6 +5,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useSegments } from '@/hooks/queries/use-app-queries';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { queryKeys } from '@/lib/client/query-keys';
+import {
+  clearSegmentDeleted,
+  deleteSegmentInBackground,
+  markSegmentDeleted,
+} from '@/lib/client/optimistic-segments';
 import { useToast } from '@/hooks/use-toast';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
@@ -276,7 +281,6 @@ export default function SegmentsPage() {
   const { toast } = useToast();
   const { data: segmentsData, isLoading, isFetching } = useSegments();
   const [resolvedShopDomain, setResolvedShopDomain] = useState('');
-  const [deletingSegmentId, setDeletingSegmentId] = useState<string | null>(null);
   const [customAttributes, setCustomAttributes] = useState(initialCustomAttributes);
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -327,14 +331,15 @@ export default function SegmentsPage() {
     setCustomAttributes(prev => prev.filter(attr => attr.name !== name));
   };
 
-  const handleDeleteSegment = async (segmentId: string, segmentName: string) => {
-    if (!resolvedShopDomain || deletingSegmentId) {
+  const handleDeleteSegment = (segmentId: string, segmentName: string) => {
+    if (!resolvedShopDomain) {
       return;
     }
 
     const cacheKey = queryKeys.segments(resolvedShopDomain);
     const previous = queryClient.getQueryData<{ segments?: SegmentApiRow[] }>(cacheKey);
 
+    markSegmentDeleted(resolvedShopDomain, segmentId);
     queryClient.setQueryData(cacheKey, (current: { segments?: SegmentApiRow[] } | undefined) => {
       const rows = Array.isArray(current?.segments) ? current.segments : previous?.segments ?? [];
       return {
@@ -343,34 +348,26 @@ export default function SegmentsPage() {
       };
     });
 
-    setDeletingSegmentId(segmentId);
     toast({
       title: 'Segment deleted',
       description: `"${segmentName}" was removed.`,
     });
 
-    try {
-      const response = await fetch(
-        `/api/segments/${encodeURIComponent(segmentId)}?shop=${encodeURIComponent(resolvedShopDomain)}`,
-        { method: 'DELETE' },
-      );
-      const json = await response.json();
-      if (!response.ok || !json?.ok) {
-        throw new Error(json?.error ?? 'Failed to delete segment.');
-      }
-      void queryClient.invalidateQueries({ queryKey: cacheKey });
-    } catch (error) {
-      if (previous) {
-        queryClient.setQueryData(cacheKey, previous);
-      }
-      toast({
-        title: 'Unable to delete segment',
-        description: error instanceof Error ? error.message : 'Please try again.',
-        variant: 'destructive',
+    void deleteSegmentInBackground(resolvedShopDomain, segmentId)
+      .then(() => {
+        clearSegmentDeleted(resolvedShopDomain, segmentId);
+      })
+      .catch((error) => {
+        clearSegmentDeleted(resolvedShopDomain, segmentId);
+        if (previous) {
+          queryClient.setQueryData(cacheKey, previous);
+        }
+        toast({
+          title: 'Unable to delete segment',
+          description: error instanceof Error ? error.message : 'Please try again.',
+          variant: 'destructive',
+        });
       });
-    } finally {
-      setDeletingSegmentId(null);
-    }
   };
 
 
@@ -471,7 +468,6 @@ export default function SegmentsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        disabled={deletingSegmentId === segment.id}
                         onClick={() => handleDeleteSegment(segment.id, segment.name)}
                         title="Delete segment"
                       >

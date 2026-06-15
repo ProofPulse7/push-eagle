@@ -286,11 +286,11 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                 <div className="flex justify-center pt-2">
                     <Button
                         type="button"
-                        variant="outline"
+                        className="bg-violet-600 text-white hover:bg-violet-600/90"
                         onClick={() => setVisibleCount((current) => current + CAMPAIGNS_PAGE_SIZE)}
                     >
                         <ChevronDown className="mr-2 h-4 w-4" />
-                        Show more ({Math.min(CAMPAIGNS_PAGE_SIZE, filteredCampaigns.length - visibleCount)} of {filteredCampaigns.length - visibleCount} remaining)
+                        Show more
                     </Button>
                 </div>
             ) : null}

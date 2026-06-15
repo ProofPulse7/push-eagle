@@ -14,6 +14,7 @@ import { fetchJsonWithRetry, fetchJsonWithShopRetry } from '@/lib/client/backgro
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
 import { mergeAutomationsFromCache } from '@/lib/client/optimistic-automations';
+import { mergeSegmentsFromCache } from '@/lib/client/optimistic-segments';
 import { mergeCampaignsFromCache } from '@/lib/client/optimistic-campaigns';
 import { clearPendingSettings } from '@/lib/client/pending-settings';
 import {
@@ -91,12 +92,47 @@ export function useAutomationsOverview() {
   });
 }
 
+export function useAutomationStats(from?: Date, to?: Date) {
+  const shop = useShopDomain();
+  const isAllTime = !from && !to;
+  const { fromIso, toIso } = useMemo(() => {
+    if (isAllTime) {
+      return { fromIso: 'all', toIso: 'all' };
+    }
+
+    const range = resolveAnalyticsDateRange(
+      from ? { from, to: to ?? from } : undefined,
+    );
+    return { fromIso: range.fromIso, toIso: range.toIso };
+  }, [from?.getTime(), to?.getTime(), isAllTime]);
+
+  return useQuery({
+    queryKey: queryKeys.automationStats(shop, fromIso, toIso),
+    queryFn: () => {
+      const params = new URLSearchParams({ shop });
+      if (!isAllTime) {
+        params.set('from', fromIso);
+        params.set('to', toIso);
+      }
+      return fetchJson<Record<string, unknown>>(`/api/automations/stats?${params.toString()}`);
+    },
+    enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
+    placeholderData: (previous) => previous,
+  });
+}
+
 export function useSegments() {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
+
   return useQuery({
     queryKey: queryKeys.segments(shop),
-    queryFn: () =>
-      fetchJsonWithShop<{ segments: unknown[] }>('/api/segments', shop),
+    queryFn: async () => {
+      const fresh = await fetchJsonWithShop<{ segments: unknown[] }>('/api/segments', shop);
+      return mergeSegmentsFromCache(queryClient, shop, fresh);
+    },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
     refetchOnMount: false,
@@ -279,19 +315,30 @@ export function useAnalyticsStats(from: Date, to: Date, enabled = true) {
   });
 }
 
-export function useSubscriberGrowth(from: Date, to: Date) {
+export function useSubscriberGrowth(from?: Date, to?: Date) {
   const shop = useShopDomain();
+  const isAllTime = !from && !to;
   const { fromIso, toIso } = useMemo(() => {
-    const range = resolveAnalyticsDateRange({ from, to });
+    if (isAllTime) {
+      return { fromIso: 'all', toIso: 'all' };
+    }
+
+    const range = resolveAnalyticsDateRange(
+      from ? { from, to: to ?? from } : undefined,
+    );
     return { fromIso: range.fromIso, toIso: range.toIso };
-  }, [from.getTime(), to.getTime()]);
+  }, [from?.getTime(), to?.getTime(), isAllTime]);
 
   return useQuery({
     queryKey: queryKeys.subscribersGrowth(shop, fromIso, toIso),
-    queryFn: () =>
-      fetchJson<Record<string, unknown>>(
-        `/api/subscribers/growth?shop=${encodeURIComponent(shop)}&from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`,
-      ),
+    queryFn: () => {
+      const params = new URLSearchParams({ shop });
+      if (!isAllTime) {
+        params.set('from', fromIso);
+        params.set('to', toIso);
+      }
+      return fetchJson<Record<string, unknown>>(`/api/subscribers/growth?${params.toString()}`);
+    },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
     refetchOnMount: false,

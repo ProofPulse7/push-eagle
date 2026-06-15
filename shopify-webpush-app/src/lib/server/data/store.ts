@@ -2433,6 +2433,98 @@ export const getAutomationOverview = async (shopDomain: string) => {
   };
 };
 
+export const getAutomationStats = async (
+  shopDomain: string,
+  from?: Date | null,
+  to?: Date | null,
+) => {
+  await ensureAutomationRules(shopDomain);
+  const sql = getNeonSql();
+  const hasRange = Boolean(from && to);
+
+  const [rules, deliveryStats, clickStats] = await Promise.all([
+    listAutomationRules(shopDomain),
+    hasRange
+      ? sql`
+          SELECT
+            rule_key,
+            COUNT(*)::BIGINT AS impressions,
+            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
+          FROM automation_deliveries
+          WHERE shop_domain = ${shopDomain}
+            AND delivered_at >= ${from}
+            AND delivered_at <= ${to}
+          GROUP BY rule_key
+        `
+      : sql`
+          SELECT
+            rule_key,
+            COUNT(*)::BIGINT AS impressions,
+            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
+          FROM automation_deliveries
+          WHERE shop_domain = ${shopDomain}
+          GROUP BY rule_key
+        `,
+    hasRange
+      ? sql`
+          SELECT
+            rule_key,
+            COUNT(*)::BIGINT AS clicks,
+            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
+          FROM automation_clicks
+          WHERE shop_domain = ${shopDomain}
+            AND clicked_at >= ${from}
+            AND clicked_at <= ${to}
+          GROUP BY rule_key
+        `
+      : sql`
+          SELECT
+            rule_key,
+            COUNT(*)::BIGINT AS clicks,
+            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
+          FROM automation_clicks
+          WHERE shop_domain = ${shopDomain}
+          GROUP BY rule_key
+        `,
+  ]);
+
+  const deliveriesByRule = new Map(
+    deliveryStats.map((row) => [String(row.rule_key), {
+      impressions: Number(row.impressions ?? 0),
+      revenueCents: Number(row.revenue_cents ?? 0),
+    }]),
+  );
+  const clicksByRule = new Map(
+    clickStats.map((row) => [String(row.rule_key), {
+      clicks: Number(row.clicks ?? 0),
+      revenueCents: Number(row.revenue_cents ?? 0),
+    }]),
+  );
+
+  const summaries = rules.map((rule) => {
+    const delivery = deliveriesByRule.get(rule.ruleKey) ?? { impressions: 0, revenueCents: 0 };
+    const click = clicksByRule.get(rule.ruleKey) ?? { clicks: 0, revenueCents: 0 };
+    return {
+      ...rule,
+      impressions: delivery.impressions,
+      clicks: click.clicks,
+      revenueCents: delivery.revenueCents + click.revenueCents,
+    };
+  });
+
+  return {
+    totals: summaries.reduce(
+      (acc, rule) => ({
+        impressions: acc.impressions + rule.impressions,
+        clicks: acc.clicks + rule.clicks,
+        revenueCents: acc.revenueCents + rule.revenueCents,
+      }),
+      { impressions: 0, clicks: 0, revenueCents: 0 },
+    ),
+    rules: summaries,
+  };
+};
+
 const buildProductUrl = (handle?: string | null) => {
   const normalized = String(handle ?? '').trim();
   return normalized ? `/products/${normalized}` : null;
@@ -6935,18 +7027,37 @@ export const getSubscriberLocationBreakdown = async (shopDomain: string, limit =
   };
 };
 
-export const getSubscriberGrowth = async (shopDomain: string, from: Date, to: Date) => {
+export const getSubscriberGrowth = async (
+  shopDomain: string,
+  from?: Date | null,
+  to?: Date | null,
+) => {
   await ensureSchema();
   const sql = getNeonSql();
 
-  const start = from <= to ? from : to;
-  const end = from <= to ? to : from;
+  const end = to ?? new Date();
+  let start = from ?? null;
+
+  if (!start) {
+    const earliestRows = await sql`
+      SELECT MIN(created_at) AS earliest
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+    `;
+    const earliest = earliestRows[0]?.earliest;
+    start = earliest
+      ? new Date(String(earliest))
+      : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+  }
+
+  const rangeStart = start <= end ? start : end;
+  const rangeEnd = start <= end ? end : start;
 
   const rows = await sql`
     SELECT
       gs.day::date AS day,
       COALESCE(COUNT(s.id), 0)::BIGINT AS subscribers
-    FROM generate_series(${start}::timestamptz, ${end}::timestamptz, interval '1 day') AS gs(day)
+    FROM generate_series(${rangeStart}::timestamptz, ${rangeEnd}::timestamptz, interval '1 day') AS gs(day)
     LEFT JOIN subscribers s
       ON s.shop_domain = ${shopDomain}
       AND s.created_at >= gs.day
@@ -6961,6 +7072,8 @@ export const getSubscriberGrowth = async (shopDomain: string, from: Date, to: Da
   }));
 
   return {
+    from: rangeStart,
+    to: rangeEnd,
     points,
     totalNewSubscribers: points.reduce((sum, item) => sum + item.subscribers, 0),
   };

@@ -1,13 +1,12 @@
-
 'use client';
 
 import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
+import type { DateRange } from 'react-day-picker';
 import {
     ArchiveRestore,
     ArrowRight,
-    Calendar,
     Eye,
     Hand,
     ShoppingCart,
@@ -16,7 +15,7 @@ import {
     type LucideIcon,
 } from 'lucide-react';
 
-import { useAutomationsOverview } from '@/hooks/queries/use-app-queries';
+import { useAutomationsOverview, useAutomationStats } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { normalizeAutomationRules } from '@/lib/client/normalize-automation-rule';
@@ -26,11 +25,13 @@ import {
     setPendingAutomationEnabled,
 } from '@/lib/client/optimistic-automations';
 import { queryKeys } from '@/lib/client/query-keys';
+import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
+import { AutomationStats } from '@/components/automations/automation-stats';
+import { DateRangePicker } from '@/components/analytics/date-range-picker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { Skeleton } from '@/components/ui/skeleton';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 
@@ -159,19 +160,27 @@ export default function AutomationsPage() {
     const activeShopDomain = useShopDomain();
     const { atLimit } = useImpressionLimit();
     const queryClient = useQueryClient();
+    const [date, setDate] = useState<DateRange | undefined>(undefined);
     const { data, isLoading, isFetching, isError, error: queryError } = useAutomationsOverview();
+    const { data: statsData } = useAutomationStats(date?.from, date?.to);
     const [error, setError] = useState<string | null>(null);
+    const statsPeriodLabel = formatCampaignDateRangeLabel(date);
 
     const visibleRuleKeysSet = useMemo(() => new Set<RuleKey>(visibleRuleKeys), []);
 
-    const { rules, stats } = useMemo(() => {
+    const { rules } = useMemo(() => {
         const overviewRules = normalizeAutomationRules(data?.rules).filter((rule) =>
             visibleRuleKeysSet.has(rule.ruleKey as RuleKey),
+        );
+        const statsRules = normalizeAutomationRules(statsData?.rules);
+        const statsByRuleKey = new Map(
+            statsRules.map((rule) => [rule.ruleKey, rule]),
         );
 
         const mergedRules = visibleRuleKeys.map((ruleKey) => {
             const found = overviewRules.find((rule) => rule.ruleKey === ruleKey);
-            return (
+            const statsRule = statsByRuleKey.get(ruleKey);
+            const base =
                 found ?? {
                     id: ruleKey,
                     ruleKey,
@@ -180,28 +189,18 @@ export default function AutomationsPage() {
                     impressions: 0,
                     clicks: 0,
                     revenueCents: 0,
-                }
-            );
+                };
+
+            return {
+                ...base,
+                impressions: Number(statsRule?.impressions ?? base.impressions ?? 0),
+                clicks: Number(statsRule?.clicks ?? base.clicks ?? 0),
+                revenueCents: Number(statsRule?.revenueCents ?? base.revenueCents ?? 0),
+            };
         }) as AutomationRule[];
 
-        const totalsFromApi = data?.totals as AutomationStats | undefined;
-        const totals = totalsFromApi
-            ? {
-                  impressions: Number(totalsFromApi.impressions ?? 0),
-                  clicks: Number(totalsFromApi.clicks ?? 0),
-                  revenueCents: Number(totalsFromApi.revenueCents ?? 0),
-              }
-            : mergedRules.reduce(
-                  (acc, rule) => ({
-                      impressions: acc.impressions + Number(rule.impressions ?? 0),
-                      clicks: acc.clicks + Number(rule.clicks ?? 0),
-                      revenueCents: acc.revenueCents + Number(rule.revenueCents ?? 0),
-                  }),
-                  { impressions: 0, clicks: 0, revenueCents: 0 },
-              );
-
-        return { rules: mergedRules, stats: totals };
-    }, [data, visibleRuleKeysSet]);
+        return { rules: mergedRules };
+    }, [data, statsData, visibleRuleKeysSet]);
 
     const statsLoading = isLoading && !data?.rules?.length;
     const loadError =
@@ -283,40 +282,15 @@ export default function AutomationsPage() {
                 </div>
 
                 <section className="space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                        <h2 className="text-xl font-semibold text-slate-950">Stats</h2>
-                        <div className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-600 shadow-sm">
-                            <Calendar className="h-4 w-4" />
-                            <span>All time</span>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <h2 className="text-xl font-semibold text-slate-950">Stats</h2>
+                            <p className="text-sm text-slate-500">Showing metrics for {statsPeriodLabel}.</p>
                         </div>
+                        <DateRangePicker date={date} setDate={setDate} />
                     </div>
 
-                    <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
-                        <CardContent className="grid grid-cols-1 divide-y divide-slate-200 p-0 md:grid-cols-3 md:divide-x md:divide-y-0">
-                            {statsLoading ? (
-                                <>
-                                    <Skeleton className="m-5 h-16 w-auto rounded-xl" />
-                                    <Skeleton className="m-5 h-16 w-auto rounded-xl" />
-                                    <Skeleton className="m-5 h-16 w-auto rounded-xl" />
-                                </>
-                            ) : (
-                                <>
-                                    <div className="px-5 py-4">
-                                        <p className="text-sm text-slate-500">Impressions</p>
-                                        <p className="mt-1 text-4xl font-semibold tracking-tight text-slate-950">{formatNumber(stats?.impressions ?? 0)}</p>
-                                    </div>
-                                    <div className="px-5 py-4">
-                                        <p className="text-sm text-slate-500">Clicks</p>
-                                        <p className="mt-1 text-4xl font-semibold tracking-tight text-slate-950">{formatNumber(stats?.clicks ?? 0)}</p>
-                                    </div>
-                                    <div className="px-5 py-4">
-                                        <p className="text-sm text-slate-500">Revenue generated</p>
-                                        <p className="mt-1 text-4xl font-semibold tracking-tight text-slate-950">{formatCurrency((stats?.revenueCents ?? 0) / 100)}</p>
-                                    </div>
-                                </>
-                            )}
-                        </CardContent>
-                    </Card>
+                    <AutomationStats date={date} />
                 </section>
 
                 {isFetching && data ? (
