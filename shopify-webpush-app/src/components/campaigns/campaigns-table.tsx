@@ -3,7 +3,6 @@
 
 import { useState, useEffect, useMemo, startTransition } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { formatDistanceToNow, isWithinInterval } from 'date-fns';
 import type { DateRange } from "react-day-picker";
 
@@ -86,12 +85,11 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
 
     useEffect(() => {
         if (!data?.campaigns) {
-            if (!shopDomain) setCampaigns([]);
             return;
         }
         setCampaigns((data.campaigns as unknown[]).map(mapApiCampaign));
         setError(null);
-    }, [data, shopDomain]);
+    }, [data]);
 
     useEffect(() => {
         if (isError) {
@@ -218,12 +216,12 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                         <div className="p-4 space-y-4">
                             <div className="flex flex-col md:flex-row gap-4">
                                 <div className="w-full md:w-40 h-24 relative shrink-0 rounded-md overflow-hidden bg-muted">
-                                    <Image 
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
                                         src={campaign.imagePreviewUrl || "https://placehold.co/160x90.png"}
-                                        alt={campaign.name} 
-                                        layout="fill"
-                                        objectFit="cover"
-                                        data-ai-hint="product sale"
+                                        alt={campaign.name}
+                                        className="h-full w-full object-cover"
+                                        loading="lazy"
                                     />
                                 </div>
                                 <div className="flex-grow flex flex-col sm:flex-row justify-between gap-4">

@@ -983,6 +983,7 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_delivered_at ON campaign_deliveries(shop_domain, delivered_at)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_token ON campaign_deliveries(campaign_id, token_id)`;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_subscriber ON campaign_deliveries(campaign_id, subscriber_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_rule_time ON automation_deliveries(shop_domain, rule_key, delivered_at DESC)`;
@@ -6303,9 +6304,28 @@ export const resolveCampaignAudience = async (
   }>;
 };
 
+type CampaignRecipientRow = Awaited<ReturnType<typeof resolveCampaignAudience>>[number];
+
+const dedupeRecipientsBySubscriber = (rows: CampaignRecipientRow[]) => {
+  const bySubscriber = new Map<number, CampaignRecipientRow>();
+
+  for (const row of rows) {
+    const subscriberId = Number(row.subscriber_id);
+    if (!Number.isFinite(subscriberId)) {
+      continue;
+    }
+
+    if (!bySubscriber.has(subscriberId)) {
+      bySubscriber.set(subscriberId, row);
+    }
+  }
+
+  return Array.from(bySubscriber.values());
+};
+
 export const countCampaignAudienceTokens = async (shopDomain: string, segmentId?: string | null) => {
   const rows = await resolveCampaignAudience(shopDomain, segmentId);
-  return rows.length;
+  return dedupeRecipientsBySubscriber(rows).length;
 };
 
 export const deleteSegment = async (shopDomain: string, segmentId: string) => {
@@ -7269,23 +7289,36 @@ const insertCampaignDeliveriesBatch = async (
     return;
   }
 
-  const campaignIds = rows.map((row) => row.campaignId);
-  const shopDomains = rows.map((row) => row.shopDomain);
-  const subscriberIds = rows.map((row) => row.subscriberId);
-  const tokenIds = rows.map((row) => row.tokenId);
-  const messageIds = rows.map((row) => row.messageId);
+  const seenSubscribers = new Set<number>();
+  const filteredRows = rows.filter((row) => {
+    if (seenSubscribers.has(row.subscriberId)) {
+      return false;
+    }
+    seenSubscribers.add(row.subscriberId);
+    return true;
+  });
+
+  if (filteredRows.length === 0) {
+    return;
+  }
+
+  const filteredCampaignIds = filteredRows.map((row) => row.campaignId);
+  const filteredShopDomains = filteredRows.map((row) => row.shopDomain);
+  const filteredSubscriberIds = filteredRows.map((row) => row.subscriberId);
+  const filteredTokenIds = filteredRows.map((row) => row.tokenId);
+  const filteredMessageIds = filteredRows.map((row) => row.messageId);
 
   await sql`
     INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
     SELECT u.campaign_id, u.shop_domain, u.subscriber_id, u.token_id, u.fcm_message_id
     FROM UNNEST(
-      ${campaignIds}::text[],
-      ${shopDomains}::text[],
-      ${subscriberIds}::bigint[],
-      ${tokenIds}::bigint[],
-      ${messageIds}::text[]
+      ${filteredCampaignIds}::text[],
+      ${filteredShopDomains}::text[],
+      ${filteredSubscriberIds}::bigint[],
+      ${filteredTokenIds}::bigint[],
+      ${filteredMessageIds}::text[]
     ) AS u(campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
-    ON CONFLICT (campaign_id, token_id) DO NOTHING
+    ON CONFLICT (campaign_id, subscriber_id) DO NOTHING
   `;
 };
 
@@ -7354,7 +7387,28 @@ export const sendCampaign = async (
 
   const previousStatus = campaign.status;
 
-  const recipients = await resolveCampaignAudience(shopDomain, campaign.segment_id, campaignId);
+  await sql`SELECT pg_advisory_xact_lock(hashtext(${`${shopDomain}:${campaignId}`}))`;
+
+  let recipients = dedupeRecipientsBySubscriber(
+    await resolveCampaignAudience(shopDomain, campaign.segment_id, campaignId),
+  );
+
+  const deliveredSubscriberRows = await sql`
+    SELECT DISTINCT subscriber_id
+    FROM campaign_deliveries
+    WHERE campaign_id = ${campaignId}
+      AND shop_domain = ${shopDomain}
+  `;
+
+  const deliveredSubscriberIds = new Set(
+    deliveredSubscriberRows
+      .map((row) => Number((row as { subscriber_id?: unknown }).subscriber_id))
+      .filter((value) => Number.isFinite(value)),
+  );
+
+  recipients = recipients.filter(
+    (recipient) => !deliveredSubscriberIds.has(Number(recipient.subscriber_id)),
+  );
 
   if (recipients.length === 0) {
     const deliveredRows = await sql`
@@ -7628,6 +7682,9 @@ export const sendCampaign = async (
         delivery_count = ${deliveredCount}
       WHERE id = ${campaignId}
     `;
+
+    const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+    void invalidateShopDashboardCaches(shopDomain);
 
     return {
       successCount,

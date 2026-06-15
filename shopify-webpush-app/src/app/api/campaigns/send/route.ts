@@ -24,7 +24,12 @@ export async function POST(request: Request) {
 
     if (runAsync) {
       deferAfterResponse(async () => {
-        await sendCampaign(shopDomain, body.campaignId, { maxBatches });
+        try {
+          await sendCampaign(shopDomain, body.campaignId, { maxBatches });
+        } finally {
+          const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+          void invalidateShopDashboardCaches(shopDomain);
+        }
       });
 
       return NextResponse.json({

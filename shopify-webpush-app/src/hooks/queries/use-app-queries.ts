@@ -12,6 +12,7 @@ import {
 import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
+import { mergeCampaignsFromCache } from '@/lib/client/optimistic-campaigns';
 import { clearPendingSettings } from '@/lib/client/pending-settings';
 import {
   hydrateAppCache,
@@ -53,10 +54,14 @@ export function useMerchantOverview() {
 
 export function useCampaigns() {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
+
   return useQuery({
     queryKey: queryKeys.campaigns(shop),
-    queryFn: () =>
-      fetchJsonWithShop<{ campaigns: unknown[] }>('/api/campaigns', shop),
+    queryFn: async () => {
+      const fresh = await fetchJsonWithShop<{ campaigns: unknown[] }>('/api/campaigns', shop);
+      return mergeCampaignsFromCache(queryClient, shop, fresh);
+    },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
     refetchOnMount: false,

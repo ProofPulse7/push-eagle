@@ -7,7 +7,7 @@ import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
-import { buildAudienceSegmentsFromCache, prependOptimisticCampaign } from '@/lib/client/optimistic-campaigns';
+import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, prependOptimisticCampaign } from '@/lib/client/optimistic-campaigns';
 
 import { ArrowLeft, Users, Calendar as CalendarIcon, Clock, Send, Save, Eye, Loader2, Edit, Image as ImageIcon, MessageSquare, Link as LinkIcon, MousePointerClick } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -311,6 +311,10 @@ export default function ScheduleCampaignPage() {
                 click_count: 0,
                 revenue_cents: 0,
             });
+
+            if (launchStatus === 'sending') {
+                bumpDashboardCampaignSent(queryClient, shopDomain);
+            }
 
             const toastTitle =
                 sendingOption === 'schedule'
