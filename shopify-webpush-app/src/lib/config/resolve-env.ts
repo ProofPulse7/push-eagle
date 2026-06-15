@@ -10,7 +10,11 @@ const EnvSchema = z.object({
   CRON_SECRET: z.string().default(''),
   SHOPIFY_API_KEY: z.string().default(''),
   SHOPIFY_API_SECRET: z.string().default(''),
-  SHOPIFY_SCOPES: z.string().default('read_products,read_customers,write_products'),
+  SHOPIFY_SCOPES: z
+    .string()
+    .default(
+      'read_customer_events,read_customers,read_fulfillments,read_inventory,read_orders,read_products,read_themes,write_app_proxy,write_pixels',
+    ),
   SHOPIFY_APP_URL: z.string().url().default('http://localhost:3000'),
   SHOPIFY_ROOT_APP_URL: z.string().url().default('https://push-eagle.vercel.app'),
   SHOPIFY_SESSION_DATABASE_URL: z.string().default(''),

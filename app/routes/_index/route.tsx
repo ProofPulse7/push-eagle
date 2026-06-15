@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { redirect, Form, useLoaderData } from "react-router";
+import { redirect, useLoaderData } from "react-router";
 
 import { hasShopifyConfig, missingShopifyConfig } from "../../shopify.server";
 
@@ -36,16 +36,10 @@ export default function App() {
           </p>
         )}
         {showForm && (
-          <Form className={styles.form} method="post" action="/auth/login">
-            <label className={styles.label}>
-              <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>e.g: your-store.myshopify.com</span>
-            </label>
-            <button className={styles.button} type="submit">
-              Continue to Shopify Login
-            </button>
-          </Form>
+          <p className={styles.text}>
+            Install Push Eagle from the Shopify App Store, then open the app from Shopify Admin. OAuth handles store
+            connection automatically — no manual shop URL entry is required.
+          </p>
         )}
         <ul className={styles.list}>
           <li>
@@ -57,8 +51,8 @@ export default function App() {
             click tracking.
           </li>
           <li>
-            <strong>Attribution analytics</strong>. Measure campaign impact with conversion attribution from
-            Shopify orders.
+            <strong>Attribution analytics</strong>. Business plans include advanced revenue attribution from Shopify
+            orders.
           </li>
         </ul>
       </div>

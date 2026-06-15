@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
 import { registerWebhookEvent } from '@/lib/server/data/store';
-import { exportCustomerGdprData } from '@/lib/server/gdpr/compliance-data';
+import { exportCustomerGdprData, storeGdprDataExport } from '@/lib/server/gdpr/compliance-data';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -49,8 +49,15 @@ export async function POST(req: Request) {
       ordersRequested,
     );
 
-    console.info('[gdpr] customers/data_request export ready', {
+    const stored = await storeGdprDataExport({
       shopDomain,
+      customer: payload.customer ?? {},
+      payload: exportPayload,
+    });
+
+    console.info('[gdpr] customers/data_request export stored', {
+      shopDomain,
+      exportId: stored.exportId,
       customerId: payload.customer?.id ?? null,
       recordCounts: {
         shopifyCustomers: exportPayload.shopifyCustomers.length,
@@ -59,7 +66,12 @@ export async function POST(req: Request) {
       },
     });
 
-    return NextResponse.json({ ok: true, shopDomain, exported: true });
+    return NextResponse.json({
+      ok: true,
+      shopDomain,
+      exported: true,
+      exportId: stored.exportId,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Failed to process customers/data_request webhook.';

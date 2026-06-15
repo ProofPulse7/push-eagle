@@ -13,6 +13,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/auth',
   '/api/health',
   '/api/cron',
+  '/api/admin',
   '/api/track',
   '/api/attribution/conversion',
   '/api/webhooks/events',
@@ -20,9 +21,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/billing/confirm',
 ];
 
-const SHOP_ONLY_API_PREFIXES = ['/api/app/bootstrap', '/api/billing/status'];
-
-const PUBLIC_PAGE_PREFIXES = ['/login'];
+const PUBLIC_PAGE_PREFIXES = ['/privacy', '/terms'];
 
 const pickShop = (request: NextRequest) =>
   request.nextUrl.searchParams.get('shop')?.trim().toLowerCase() ||
@@ -55,11 +54,8 @@ export function middleware(request: NextRequest) {
 
   if (pathname.startsWith('/api/')) {
     const shop = pickShop(request);
-    if (SHOP_ONLY_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
-      return shop ? NextResponse.next() : NextResponse.json({ ok: false, error: 'Missing shop.' }, { status: 400 });
-    }
-
     const authenticated = request.cookies.get('pe_authenticated')?.value === '1';
+
     if (!shop || !authenticated) {
       return NextResponse.json(
         { ok: false, error: 'Unauthorized. Open Push Eagle from Shopify admin.' },
@@ -76,6 +72,9 @@ export function middleware(request: NextRequest) {
 
   const shop = pickShop(request);
   if (!shop) {
+    if (pathname === '/' || pathname === '/dashboard') {
+      return NextResponse.redirect(`${ROOT_APP_URL}/`);
+    }
     return NextResponse.next();
   }
 

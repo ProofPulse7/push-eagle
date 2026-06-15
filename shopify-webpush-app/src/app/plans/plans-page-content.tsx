@@ -27,6 +27,7 @@ const BASIC_FEATURES = [
   'Campaigns & scheduling',
   'All automations',
   'Segments & opt-ins',
+  'Upgrade for advanced analytics',
   'Chat support',
 ];
 
@@ -246,8 +247,8 @@ export function PlansPageContent() {
 
       {billingStatus === 'pending' ? (
         <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
-          Shopify billing approval is pending. Click Subscribe again to open the charge approval page,
-          then return here after you approve.
+          Your Push Eagle plan is not active yet. Click <strong>Subscribe with Shopify</strong> on Basic (free) or
+          Business to approve billing in Shopify, then return here to send notifications.
         </p>
       ) : null}
 

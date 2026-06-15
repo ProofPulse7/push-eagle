@@ -10,6 +10,55 @@ type GdprCustomer = {
   phone?: string | null;
 };
 
+let gdprSchemaReady = false;
+
+const ensureGdprSchema = async () => {
+  if (gdprSchemaReady) {
+    return;
+  }
+
+  const sql = getNeonSql();
+  await sql`
+    CREATE TABLE IF NOT EXISTS gdpr_data_exports (
+      id BIGSERIAL PRIMARY KEY,
+      shop_domain TEXT NOT NULL,
+      customer_id TEXT,
+      customer_email TEXT,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_gdpr_data_exports_shop_created
+    ON gdpr_data_exports(shop_domain, created_at DESC)
+  `;
+  gdprSchemaReady = true;
+};
+
+export const storeGdprDataExport = async (input: {
+  shopDomain: string;
+  customer: GdprCustomer;
+  payload: Record<string, unknown>;
+}) => {
+  await ensureGdprSchema();
+  const sql = getNeonSql();
+  const rows = await sql`
+    INSERT INTO gdpr_data_exports (shop_domain, customer_id, customer_email, payload)
+    VALUES (
+      ${input.shopDomain},
+      ${input.customer.id != null ? String(input.customer.id) : null},
+      ${input.customer.email?.trim().toLowerCase() ?? null},
+      ${JSON.stringify(input.payload)}::jsonb
+    )
+    RETURNING id, created_at
+  `;
+
+  return {
+    exportId: Number(rows[0]?.id ?? 0),
+    createdAt: String(rows[0]?.created_at ?? new Date().toISOString()),
+  };
+};
+
 const customerIdString = (customer: GdprCustomer) =>
   customer.id != null ? String(customer.id) : null;
 
@@ -219,6 +268,8 @@ export const purgeShopGdprData = async (shopDomainInput: string) => {
   await purgeStalePrismaSessionForShop(shopDomain);
 
   const sql = getNeonSql();
+  await ensureGdprSchema();
+  await sql`DELETE FROM gdpr_data_exports WHERE shop_domain = ${shopDomain}`;
   await sql`DELETE FROM merchants WHERE shop_domain = ${shopDomain}`;
 
   return {

@@ -1,6 +1,7 @@
 
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -648,14 +649,14 @@ export default function SettingsPage() {
                         </CardHeader>
                         <CardContent className="flex flex-wrap gap-3 text-sm">
                             <Button variant="outline" size="sm" asChild>
-                                <a href={LEGAL_LINKS.privacyPolicy} target="_blank" rel="noopener noreferrer">
+                                <Link href={LEGAL_LINKS.privacyPolicy}>
                                     Privacy policy <ExternalLink className="ml-2 h-4 w-4" />
-                                </a>
+                                </Link>
                             </Button>
                             <Button variant="outline" size="sm" asChild>
-                                <a href={LEGAL_LINKS.termsOfService} target="_blank" rel="noopener noreferrer">
+                                <Link href={LEGAL_LINKS.termsOfService}>
                                     Terms of service <ExternalLink className="ml-2 h-4 w-4" />
-                                </a>
+                                </Link>
                             </Button>
                         </CardContent>
                     </Card>

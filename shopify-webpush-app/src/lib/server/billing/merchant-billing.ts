@@ -90,7 +90,7 @@ export const incrementBillingImpressions = async (shopDomain: string, delta: num
       ${BASIC_PLAN.key},
       ${BASIC_PLAN.impressions},
       ${BASIC_PLAN.priceUsd},
-      'active',
+      'pending',
       ${periodStart},
       ${periodEnd},
       ${delta}
@@ -182,7 +182,7 @@ export const getMerchantBilling = async (
         NULL,
         ${BASIC_PLAN.impressions},
         ${BASIC_PLAN.priceUsd},
-        'active',
+        'pending',
         ${periodStart},
         ${periodEnd},
         0
@@ -310,8 +310,12 @@ export const upsertMerchantBilling = async (input: {
 
 export const assertCanSendNotifications = async (shopDomain: string, requestedCount = 1) => {
   const billing = await getMerchantBilling(shopDomain, { reconcileUsage: true });
-  if (billing.status !== 'active' && billing.status !== 'pending') {
-    throw new Error('Your subscription is not active. Open Plans to subscribe again.');
+  if (billing.status !== 'active') {
+    throw new Error(
+      billing.status === 'pending'
+        ? 'Approve your Push Eagle plan in Shopify to start sending notifications. Open Plans and click Subscribe.'
+        : 'Your subscription is not active. Open Plans to subscribe again.',
+    );
   }
 
   if (billing.impressionsRemaining < requestedCount) {

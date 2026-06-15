@@ -43,5 +43,8 @@ export async function fetchJsonWithShop<T extends Record<string, unknown>>(
   init?: RequestInit,
 ): Promise<T> {
   const separator = path.includes('?') ? '&' : '?';
-  return fetchJson<T>(`${path}${separator}shop=${encodeURIComponent(shopDomain)}`, init);
+  return fetchJson<T>(`${path}${separator}shop=${encodeURIComponent(shopDomain)}`, {
+    credentials: 'include',
+    ...init,
+  });
 }
