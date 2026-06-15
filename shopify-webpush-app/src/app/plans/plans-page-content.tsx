@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
@@ -12,6 +13,7 @@ import { useBillingStatus, useConfirmBilling } from '@/hooks/queries/use-billing
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
 import { ImpressionUsageBar } from '@/components/billing/impression-usage-bar';
+import { queryKeys } from '@/lib/client/query-keys';
 
 const BUSINESS_FEATURES = [
   'All Basic features',
@@ -95,6 +97,7 @@ function PlanCard({
 
 export function PlansPageContent() {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const { data, isFetching } = useBillingStatus({ refetchOnMount: false, reconcile: false });
@@ -114,6 +117,7 @@ export function PlansPageContent() {
   const isCurrentBasic = isBillingActive && currentPlanKey === 'basic';
   const isCurrentBusinessTier = (tierId: string) =>
     isBillingActive && currentPlanKey === 'business' && currentTierId === tierId;
+  const isOnPaidPlan = isBillingActive && currentPlanKey === 'business';
 
   const selectedTier = BUSINESS_TIERS[tierIndex] ?? BUSINESS_TIERS[0];
 
@@ -135,15 +139,13 @@ export function PlansPageContent() {
     billingReturnHandled.current = true;
     confirmBilling.mutate(undefined, {
       onSuccess: (result) => {
-        if (result?.activated) {
-          toast({
-            title: 'Billing updated',
-            description: 'Your plan is synced with your Shopify subscription.',
-          });
-          return;
-        }
+        setPendingPlan(null);
 
-        if (String(result?.billing?.status ?? '') === 'active') {
+        if (result?.activated || String(result?.billing?.status ?? '') === 'active') {
+          toast({
+            title: 'Plan updated',
+            description: 'Your new plan is active in Push Eagle.',
+          });
           return;
         }
 
@@ -180,6 +182,30 @@ export function PlansPageContent() {
       planKey === 'business' && tierId ? `business:${tierId}` : planKey;
     setPendingPlan(pendingKey);
 
+    const nextBilling =
+      planKey === 'basic'
+        ? {
+            ...(billing ?? {}),
+            planKey: 'basic',
+            tierId: null,
+            status: 'active',
+            impressionLimit: BASIC_PLAN.impressions,
+            priceUsd: BASIC_PLAN.priceUsd,
+          }
+        : {
+            ...(billing ?? {}),
+            planKey: 'business',
+            tierId: tierId ?? null,
+            status: 'pending',
+            impressionLimit: BUSINESS_TIERS.find((tier) => tier.id === tierId)?.impressions ?? null,
+            priceUsd: BUSINESS_TIERS.find((tier) => tier.id === tierId)?.priceUsd ?? null,
+          };
+
+    queryClient.setQueryData(queryKeys.billingStatus(shop), {
+      ok: true,
+      billing: nextBilling,
+    });
+
     const params = new URLSearchParams({
       shop,
       planKey,
@@ -202,16 +228,16 @@ export function PlansPageContent() {
 
   const basicButtonLabel = useMemo(() => {
     if (pendingPlan === 'basic') {
-      return 'Activating…';
+      return isOnPaidPlan ? 'Updating plan…' : 'Activating…';
     }
     if (isCurrentBasic) {
       return 'Current plan';
     }
-    if (billingStatus === 'pending') {
-      return 'Activate free plan';
+    if (isOnPaidPlan) {
+      return 'Switch to free plan';
     }
     return 'Activate free plan';
-  }, [billingStatus, isCurrentBasic, pendingPlan]);
+  }, [billingStatus, isCurrentBasic, isOnPaidPlan, pendingPlan]);
 
   const businessButtonLabel = useMemo(() => {
     const pendingKey: PendingPlanKey = `business:${selectedTier.id}`;
@@ -247,8 +273,15 @@ export function PlansPageContent() {
 
       {billingStatus === 'pending' ? (
         <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
-          Your Push Eagle plan is not active yet. Activate the free Basic plan instantly, or choose Business to
-          approve billing in Shopify before sending notifications.
+          Your Push Eagle plan is not active yet. Activate the free Basic plan, or choose Business to approve billing
+          in Shopify before sending notifications.
+        </p>
+      ) : null}
+
+      {isOnPaidPlan ? (
+        <p className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          Switching to Basic cancels your paid Shopify subscription so you are not charged going forward. Push Eagle
+          updates instantly after the change completes.
         </p>
       ) : null}
 

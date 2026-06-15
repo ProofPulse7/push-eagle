@@ -94,6 +94,7 @@ export function useAutomationsOverview() {
 
 export function useAutomationStats(from?: Date, to?: Date) {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
   const isAllTime = !from && !to;
   const { fromIso, toIso } = useMemo(() => {
     if (isAllTime) {
@@ -119,6 +120,8 @@ export function useAutomationStats(from?: Date, to?: Date) {
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
     refetchOnMount: false,
+    initialData: () =>
+      queryClient.getQueryData<Record<string, unknown>>(queryKeys.automationStats(shop, fromIso, toIso)),
     placeholderData: (previous) => previous,
   });
 }
@@ -194,6 +197,7 @@ export function useBrandingSettings() {
 
 export function useCampaignStats(from?: Date, to?: Date) {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
   const isAllTime = !from && !to;
   const { fromIso, toIso } = useMemo(() => {
     if (isAllTime) {
@@ -219,6 +223,8 @@ export function useCampaignStats(from?: Date, to?: Date) {
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
     refetchOnMount: false,
+    initialData: () =>
+      queryClient.getQueryData<Record<string, unknown>>(queryKeys.campaignStats(shop, fromIso, toIso)),
     placeholderData: (previous) => previous,
   });
 }

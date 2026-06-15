@@ -28,6 +28,21 @@ const CREATE_SUBSCRIPTION = `
   }
 `;
 
+const CANCEL_SUBSCRIPTION = `
+  mutation AppSubscriptionCancel($id: ID!) {
+    appSubscriptionCancel(id: $id) {
+      appSubscription {
+        id
+        status
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 const ACTIVE_SUBSCRIPTIONS = `
   query ActiveSubscriptions {
     currentAppInstallation {
@@ -161,8 +176,38 @@ export const createRecurringAppSubscription = async (input: {
   };
 };
 
-export const getActiveAppSubscription = async (shopDomain: string) => {
-  const data = await adminGraphql(shopDomain, ACTIVE_SUBSCRIPTIONS, {});
+export const cancelAppSubscription = async (
+  shopDomain: string,
+  subscriptionId: string,
+  accessToken?: string,
+) => {
+  const data = await adminGraphql(
+    shopDomain,
+    CANCEL_SUBSCRIPTION,
+    { id: subscriptionId },
+    accessToken,
+  );
+
+  const result = data.appSubscriptionCancel as
+    | {
+        appSubscription?: { id?: string; status?: string };
+        userErrors?: Array<{ message?: string }>;
+      }
+    | undefined;
+
+  const userError = result?.userErrors?.[0]?.message;
+  if (userError) {
+    throw new Error(userError);
+  }
+
+  return {
+    id: result?.appSubscription?.id ?? subscriptionId,
+    status: String(result?.appSubscription?.status ?? 'CANCELLED').toUpperCase(),
+  };
+};
+
+export const getActiveAppSubscription = async (shopDomain: string, accessToken?: string) => {
+  const data = await adminGraphql(shopDomain, ACTIVE_SUBSCRIPTIONS, {}, accessToken);
   const installation = data.currentAppInstallation as
     | {
         activeSubscriptions?: Array<{

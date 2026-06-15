@@ -6,6 +6,28 @@ import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { queryKeys } from '@/lib/client/query-keys';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
+const patchBillingCache = (
+  queryClient: ReturnType<typeof useQueryClient>,
+  shop: string,
+  billing: Record<string, unknown>,
+) => {
+  queryClient.setQueryData(queryKeys.billingStatus(shop), {
+    ok: true,
+    billing,
+  });
+
+  queryClient.setQueriesData(
+    { queryKey: queryKeys.dashboardSummary(shop) },
+    (current: { billing?: Record<string, unknown> } | undefined) =>
+      current
+        ? {
+            ...current,
+            billing,
+          }
+        : current,
+  );
+};
+
 export function useBillingStatus(options?: { refetchOnMount?: boolean; reconcile?: boolean }) {
   const shop = useShopDomain();
   return useQuery({
@@ -43,7 +65,12 @@ export function useSubscribePlan() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopDomain: shop, ...body }),
       }),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result?.billing && typeof result.billing === 'object') {
+        patchBillingCache(queryClient, shop, result.billing as Record<string, unknown>);
+        return;
+      }
+
       void queryClient.invalidateQueries({ queryKey: queryKeys.billingStatus(shop) });
     },
   });
@@ -64,7 +91,12 @@ export function useConfirmBilling() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopDomain: shop }),
       }),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result?.billing && typeof result.billing === 'object') {
+        patchBillingCache(queryClient, shop, result.billing as Record<string, unknown>);
+        return;
+      }
+
       void queryClient.invalidateQueries({ queryKey: queryKeys.billingStatus(shop) });
     },
   });

@@ -8,13 +8,15 @@ import { Sidebar } from './sidebar';
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   
-  const isCampaignComposer = pathname.startsWith('/campaigns/new');
+  const isCampaignComposerFullscreen =
+    pathname.startsWith('/campaigns/new/editor') ||
+    pathname.startsWith('/campaigns/new/schedule');
   const isLoginPage = pathname.startsWith('/login');
   const isMarketingPage =
     pathname === '/' || pathname.startsWith('/privacy') || pathname.startsWith('/terms');
   const isAutomationEditor = /^\/automations\/[a-zA-Z0-9-]+\/[^/]+\/edit$/.test(pathname);
 
-  if (isMarketingPage || isCampaignComposer || isAutomationEditor || isLoginPage) {
+  if (isMarketingPage || isCampaignComposerFullscreen || isAutomationEditor || isLoginPage) {
     return <main className="flex-grow bg-background">{children}</main>;
   }
 

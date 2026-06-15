@@ -3,6 +3,7 @@ import {
   getBusinessTier,
 } from '@/lib/server/billing/plans';
 import { upsertMerchantBilling } from '@/lib/server/billing/merchant-billing';
+import { startBasicPlanChange } from '@/lib/server/billing/start-basic-plan-change';
 import { startPlanSubscriptionCheckout } from '@/lib/server/billing/start-plan-checkout';
 import { buildBillingReturnUrl } from '@/lib/server/billing/build-billing-return-url';
 
@@ -19,17 +20,7 @@ export const runPlanSubscribe = async (input: {
   });
 
   if (input.planKey === 'basic') {
-    // Shopify Billing API rejects $0 subscriptions — activate the free tier locally.
-    return {
-      test: false,
-      confirmationUrl: null,
-      subscriptionId: null,
-      autoActivated: true,
-      planKey: 'basic' as const,
-      tierId: null,
-      impressionLimit: BASIC_PLAN.impressions,
-      priceUsd: BASIC_PLAN.priceUsd,
-    };
+    return startBasicPlanChange(input.shopDomain);
   }
 
   const tier = getBusinessTier(input.tierId || '');
@@ -50,7 +41,13 @@ export const runPlanSubscribe = async (input: {
 
 export const activateSubscribedPlan = async (
   shopDomain: string,
-  checkout: Awaited<ReturnType<typeof startPlanSubscriptionCheckout>>,
+  checkout: {
+    planKey: 'basic' | 'business';
+    tierId?: string | null;
+    subscriptionId?: string | null;
+    impressionLimit?: number;
+    priceUsd?: number;
+  },
 ) => {
   if (checkout.planKey === 'basic') {
     return upsertMerchantBilling({

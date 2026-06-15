@@ -84,6 +84,14 @@ export const confirmBillingFromShopify = async (
   await clearBillingCheckoutPending(shopDomain);
   const billing = await getMerchantBillingFast(shopDomain);
 
+  if (billing.status === 'active') {
+    return {
+      ok: true as const,
+      activated: true,
+      billing,
+    };
+  }
+
   return {
     ok: true as const,
     activated: false,

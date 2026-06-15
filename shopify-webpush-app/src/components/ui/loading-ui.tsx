@@ -70,28 +70,22 @@ type PageLoadingViewProps = {
 
 export function PageLoadingView({ title, description, className }: PageLoadingViewProps) {
   return (
-    <div className={cn('p-4 sm:p-6 md:p-8 flex flex-col gap-8', className)}>
-      <div className="flex items-center justify-between">
-        <div>
-          <Skeleton className="h-8 w-48" />
-          {description ? <Skeleton className="h-4 w-72 mt-2" /> : null}
-        </div>
-        <Skeleton className="h-10 w-40" />
+    <div className={cn('px-4 py-6 sm:px-6 md:px-8 md:py-8', className)}>
+      <div className="mb-8 space-y-2">
+        <Skeleton className="h-8 w-48" />
+        {description ? <Skeleton className="h-4 w-72 max-w-full" /> : <Skeleton className="h-4 w-56 max-w-full" />}
       </div>
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        <span>Loading {title}…</span>
+      <div className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Skeleton className="h-28 w-full rounded-xl" />
+        <Skeleton className="h-28 w-full rounded-xl" />
+        <Skeleton className="h-28 w-full rounded-xl" />
+        <Skeleton className="h-28 w-full rounded-xl" />
       </div>
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Skeleton className="h-28" />
-        <Skeleton className="h-28" />
-        <Skeleton className="h-28" />
-        <Skeleton className="h-28" />
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Skeleton className="h-80 w-full rounded-xl" />
+        <Skeleton className="h-80 w-full rounded-xl" />
       </div>
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-        <Skeleton className="h-80" />
-        <Skeleton className="h-80" />
-      </div>
+      <span className="sr-only">Loading {title}</span>
     </div>
   );
 }

@@ -119,6 +119,27 @@ export const hydrateAppCache = (
     },
   );
 
+  queryClient.setQueryData(queryKeys.campaignStats(shopDomain, 'all', 'all'), {
+    ok: true,
+    stats: payload.campaignStats,
+  });
+
+  if (payload.automationsOverview) {
+    queryClient.setQueryData(queryKeys.automationStats(shopDomain, 'all', 'all'), {
+      ok: true,
+      rules: payload.automationsOverview.rules ?? [],
+      totals: payload.automationsOverview.totals ?? {},
+    });
+    queryClient.setQueryData(
+      queryKeys.automationStats(shopDomain, defaultRange.fromIso, defaultRange.toIso),
+      {
+        ok: true,
+        rules: payload.automationsOverview.rules ?? [],
+        totals: payload.automationsOverview.totals ?? {},
+      },
+    );
+  }
+
   const analyticsFrom = payload.analyticsFrom ?? defaultRange.fromIso;
   const analyticsTo = payload.analyticsTo ?? defaultRange.toIso;
   if (payload.analyticsStats) {
