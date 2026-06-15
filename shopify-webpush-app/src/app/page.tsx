@@ -17,7 +17,17 @@ export default async function RootPage({ searchParams }: RootPageProps) {
   const shop = Array.isArray(params.shop) ? params.shop[0] : params.shop;
 
   if (shop) {
-    redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
+    const target = new URL('/dashboard', 'http://local');
+    target.searchParams.set('shop', shop);
+    const host = Array.isArray(params.host) ? params.host[0] : params.host;
+    const embedded = Array.isArray(params.embedded) ? params.embedded[0] : params.embedded;
+    if (host) {
+      target.searchParams.set('host', host);
+    }
+    if (embedded || host) {
+      target.searchParams.set('embedded', embedded || '1');
+    }
+    redirect(`${target.pathname}${target.search}`);
   }
 
   return (

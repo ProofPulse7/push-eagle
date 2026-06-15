@@ -61,17 +61,26 @@ export async function GET(request: Request) {
     redirectUrl.searchParams.set('shop', shopDomain);
     redirectUrl.searchParams.set('from_sso', '1');
 
+    const host = url.searchParams.get('host');
+    const embedded = url.searchParams.get('embedded');
+    if (host) {
+      redirectUrl.searchParams.set('host', host);
+    }
+    if (embedded || host) {
+      redirectUrl.searchParams.set('embedded', embedded || '1');
+    }
+
     const response = NextResponse.redirect(redirectUrl, { status: 302 });
     response.cookies.set('pe_shop', shopDomain, {
       path: '/',
       maxAge: 60 * 60 * 24 * 30,
-      sameSite: 'lax',
+      sameSite: host ? 'none' : 'lax',
       secure: true,
     });
     response.cookies.set('pe_authenticated', '1', {
       path: '/',
       maxAge: 60 * 60 * 24 * 30,
-      sameSite: 'lax',
+      sameSite: host ? 'none' : 'lax',
       secure: true,
       httpOnly: true,
     });

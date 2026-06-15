@@ -3,7 +3,7 @@
 
 import { usePathname } from 'next/navigation';
 import { AppLegalFooter } from './app-legal-footer';
-import { Sidebar } from './sidebar';
+import { TopNav } from './top-nav';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -21,14 +21,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen w-full">
-      <Sidebar />
-      <div className="flex flex-col md:pl-64">
-        <main className="flex-grow pe-page-enter">
-          {children}
-          <AppLegalFooter />
-        </main>
-      </div>
+    <div className="min-h-screen w-full bg-background">
+      <TopNav />
+      <main className="flex-grow pe-page-enter">
+        {children}
+        <AppLegalFooter />
+      </main>
     </div>
   );
 }

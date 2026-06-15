@@ -28,6 +28,12 @@ const pickShop = (request: NextRequest) =>
   request.cookies.get('pe_shop')?.value?.trim().toLowerCase() ||
   null;
 
+const isEmbeddedRequest = (request: NextRequest) => {
+  const host = request.nextUrl.searchParams.get('host');
+  const embedded = request.nextUrl.searchParams.get('embedded');
+  return Boolean(host || embedded === '1');
+};
+
 const buildConnectRedirect = (request: NextRequest, shop: string) => {
   const connectUrl = new URL(`${ROOT_APP_URL}/app`);
   connectUrl.searchParams.set('shop', shop);
@@ -37,8 +43,8 @@ const buildConnectRedirect = (request: NextRequest, shop: string) => {
   if (host) {
     connectUrl.searchParams.set('host', host);
   }
-  if (embedded) {
-    connectUrl.searchParams.set('embedded', embedded);
+  if (host || embedded === '1') {
+    connectUrl.searchParams.set('embedded', '1');
   }
 
   connectUrl.searchParams.set('return_to', request.url);
@@ -83,10 +89,31 @@ export function middleware(request: NextRequest) {
     request.nextUrl.searchParams.get('from_sso') === '1';
 
   if (!authenticated) {
+    if (isEmbeddedRequest(request)) {
+      const response = NextResponse.next();
+      response.cookies.set('pe_shop', shop, {
+        path: '/',
+        maxAge: 60 * 60 * 24 * 30,
+        sameSite: 'none',
+        secure: true,
+      });
+      return response;
+    }
+
     return buildConnectRedirect(request, shop);
   }
 
-  return NextResponse.next();
+  const response = NextResponse.next();
+  if (shop && !request.cookies.get('pe_shop')?.value) {
+    response.cookies.set('pe_shop', shop, {
+      path: '/',
+      maxAge: 60 * 60 * 24 * 30,
+      sameSite: isEmbeddedRequest(request) ? 'none' : 'lax',
+      secure: true,
+    });
+  }
+
+  return response;
 }
 
 export const config = {

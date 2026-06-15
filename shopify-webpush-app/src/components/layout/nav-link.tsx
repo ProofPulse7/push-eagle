@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import type { LucideIcon } from 'lucide-react';
 import { prefetchShopQueries } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { withShopifyAdminContext } from '@/lib/client/shopify-admin-context';
 
 export function NavLink({ href, icon: Icon, children }: { href: string; icon: LucideIcon; children: React.ReactNode; }) {
   const pathname = usePathname();
@@ -22,17 +23,7 @@ export function NavLink({ href, icon: Icon, children }: { href: string; icon: Lu
       isActive = false;
   }
 
-  const currentParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
-  const preservedParams = new URLSearchParams();
-  const shop = currentParams.get('shop');
-  const host = currentParams.get('host');
-  if (shop) {
-    preservedParams.set('shop', shop);
-  }
-  if (host) {
-    preservedParams.set('host', host);
-  }
-  const targetHref = preservedParams.toString() ? `${href}?${preservedParams.toString()}` : href;
+  const targetHref = withShopifyAdminContext(href);
   
   return (
     <Link
