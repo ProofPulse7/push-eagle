@@ -119,15 +119,21 @@ export function SubscriberGrowthChart({
     const [chartType, setChartType] = useState<'area' | 'bar'>('area');
 
     const { queryFrom, queryTo, chartFrom, chartTo, periodLabel } = useMemo(() => {
+        const defaultRange = () => {
+            const toDate = endOfDay(new Date());
+            const fromDate = startOfDay(new Date(Date.now() - defaultDays * 24 * 60 * 60 * 1000));
+            return {
+                queryFrom: fromDate,
+                queryTo: toDate,
+                chartFrom: fromDate,
+                chartTo: toDate,
+                periodLabel: `the last ${defaultDays} days`,
+            };
+        };
+
         if (showDatePicker) {
             if (!date?.from) {
-                return {
-                    queryFrom: undefined,
-                    queryTo: undefined,
-                    chartFrom: null as Date | null,
-                    chartTo: null as Date | null,
-                    periodLabel: formatCampaignDateRangeLabel(undefined),
-                };
+                return defaultRange();
             }
 
             const range = resolveAnalyticsDateRange(date);
@@ -140,15 +146,7 @@ export function SubscriberGrowthChart({
             };
         }
 
-        const toDate = endOfDay(new Date());
-        const fromDate = startOfDay(new Date(Date.now() - defaultDays * 24 * 60 * 60 * 1000));
-        return {
-            queryFrom: fromDate,
-            queryTo: toDate,
-            chartFrom: fromDate,
-            chartTo: toDate,
-            periodLabel: `the last ${defaultDays} days`,
-        };
+        return defaultRange();
     }, [showDatePicker, date?.from?.getTime(), date?.to?.getTime(), defaultDays]);
 
     const { data: payload, isFetching, isLoading } = useSubscriberGrowth(queryFrom, queryTo);

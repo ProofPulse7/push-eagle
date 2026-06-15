@@ -56,6 +56,8 @@ const ACTIVE_SUBSCRIPTIONS = `
 const adminApiVersion = () =>
   process.env.SHOPIFY_ADMIN_API_VERSION?.trim() || '2025-04';
 
+const SHOPIFY_FETCH_TIMEOUT_MS = 8_000;
+
 const adminGraphql = async (
   shopDomain: string,
   query: string,
@@ -70,6 +72,7 @@ const adminGraphql = async (
       'X-Shopify-Access-Token': token,
     },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(SHOPIFY_FETCH_TIMEOUT_MS),
   });
 
   const payload = (await response.json()) as {
@@ -79,7 +82,7 @@ const adminGraphql = async (
 
   if (!response.ok) {
     const message = payload.errors?.[0]?.message || `Shopify Admin API error (${response.status}).`;
-    throw new Error(message);
+    throw new Error(`${response.status} ${message}`);
   }
 
   if (payload.errors?.length) {
