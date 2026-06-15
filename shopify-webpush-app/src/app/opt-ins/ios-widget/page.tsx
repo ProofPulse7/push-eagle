@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import { ArrowLeft, Book, ChevronLeft, ChevronRight, RefreshCw, Share, Smile, Square, X } from 'lucide-react';
+import { ArrowLeft, Book, ChevronLeft, ChevronRight, Check, RefreshCw, Share, Smile, Square, X } from 'lucide-react';
 
 import { PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
@@ -13,10 +13,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
 import { useOptInSettings, useSaveOptInSettings } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { useInstantSaveFeedback } from '@/hooks/use-instant-save-feedback';
 import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
@@ -101,6 +103,7 @@ export default function IOSWidgetPage() {
   const { toast } = useToast();
   const { data: optInData, isLoading: optInLoading } = useOptInSettings();
   const saveOptInMutation = useSaveOptInSettings();
+  const { saved, markSaved, markIdle } = useInstantSaveFeedback();
 
   const [enabled, setEnabled] = useState(true);
   const [title, setTitle] = useState('Get notifications on your iPhone or iPad');
@@ -144,6 +147,7 @@ export default function IOSWidgetPage() {
     };
 
     writePendingSettings(shopDomain, 'optIn', body);
+    markSaved();
     saveOptInMutation.mutate(body, {
       onSuccess: () => {
         toast({
@@ -152,6 +156,7 @@ export default function IOSWidgetPage() {
         });
       },
       onError: (error) => {
+        markIdle();
         toast({
           variant: 'destructive',
           title: 'Save failed',
@@ -261,7 +266,19 @@ export default function IOSWidgetPage() {
         <Button variant="outline" asChild>
           <Link href="/opt-ins">Cancel</Link>
         </Button>
-        <Button onClick={saveChanges}>Save Changes</Button>
+        <Button
+          onClick={saveChanges}
+          className={cn(saved && 'bg-emerald-600 text-white hover:bg-emerald-600/90')}
+        >
+          {saved ? (
+            <>
+              <Check className="mr-2 h-4 w-4" />
+              Saved
+            </>
+          ) : (
+            'Save Changes'
+          )}
+        </Button>
       </div>
     </div>
   );

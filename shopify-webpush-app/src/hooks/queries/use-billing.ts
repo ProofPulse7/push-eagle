@@ -27,8 +27,18 @@ export function useSubscribePlan() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (body: { planKey: 'basic' | 'business'; tierId?: string }) =>
-      fetchJson<{ confirmationUrl?: string; activated?: boolean }>('/api/billing/subscribe', {
+    mutationFn: (body: {
+      planKey: 'basic' | 'business';
+      tierId?: string;
+      host?: string;
+      embedded?: string;
+    }) =>
+      fetchJson<{
+        ok?: boolean;
+        confirmationUrl?: string | null;
+        activated?: boolean;
+        billing?: Record<string, unknown>;
+      }>('/api/billing/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopDomain: shop, ...body }),

@@ -7,12 +7,14 @@ import { PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ArrowLeft, Bell } from 'lucide-react';
+import { ArrowLeft, Bell, Check } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
 import { useOptInSettings, useSaveOptInSettings } from '@/hooks/queries/use-app-queries';
+import { useInstantSaveFeedback } from '@/hooks/use-instant-save-feedback';
 import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
+import { cn } from '@/lib/utils';
 
 const BrowserPromptPreview = () => {
     const { storeUrl } = useSettings();
@@ -63,6 +65,7 @@ export default function BrowserPromptPage() {
     const [hydrated, setHydrated] = useState(false);
     const { data: optInData, isLoading: optInLoading } = useOptInSettings();
     const saveOptInMutation = useSaveOptInSettings();
+    const { saved, markSaved, markIdle } = useInstantSaveFeedback();
 
     useEffect(() => {
         if (!shopDomain) {
@@ -100,6 +103,7 @@ export default function BrowserPromptPage() {
         };
 
         writePendingSettings(shopDomain, 'optIn', body);
+        markSaved();
         saveOptInMutation.mutate(body, {
             onSuccess: () => {
                 toast({
@@ -108,6 +112,7 @@ export default function BrowserPromptPage() {
                 });
             },
             onError: (error) => {
+                markIdle();
                 toast({
                     variant: 'destructive',
                     title: 'Failed to save browser prompt settings',
@@ -222,7 +227,19 @@ export default function BrowserPromptPage() {
                 <Button variant="outline" asChild>
                     <Link href="/opt-ins">CANCEL</Link>
                 </Button>
-                <Button onClick={saveChanges}>SAVE CHANGES</Button>
+                <Button
+                    onClick={saveChanges}
+                    className={cn(saved && 'bg-emerald-600 text-white hover:bg-emerald-600/90')}
+                >
+                    {saved ? (
+                        <>
+                            <Check className="mr-2 h-4 w-4" />
+                            Saved
+                        </>
+                    ) : (
+                        'SAVE CHANGES'
+                    )}
+                </Button>
             </div>
         </div>
     );

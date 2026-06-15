@@ -43,14 +43,14 @@ const healFromPrismaSessionTable = async (shopDomain: string) => {
 export const ensureShopifyOfflineAccessToken = async (shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
 
-  const refreshed = await refreshOfflineAccessToken(shop);
-  if (refreshed && (await validateShopifyAccessToken(shop, refreshed))) {
-    return refreshed;
-  }
-
   let token = await getShopifyOfflineAccessToken(shop);
   if (token && (await validateShopifyAccessToken(shop, token))) {
     return token;
+  }
+
+  const refreshed = await refreshOfflineAccessToken(shop);
+  if (refreshed && (await validateShopifyAccessToken(shop, refreshed))) {
+    return refreshed;
   }
 
   if (token) {
@@ -68,7 +68,7 @@ export const ensureShopifyOfflineAccessToken = async (shopDomain: string) => {
   }
 
   token = await healFromPrismaSessionTable(shop);
-  if (token) {
+  if (token && (await validateShopifyAccessToken(shop, token))) {
     return token;
   }
 

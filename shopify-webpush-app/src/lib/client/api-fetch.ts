@@ -1,10 +1,12 @@
 export class ApiError extends Error {
   status: number;
+  reauthorizeUrl?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, reauthorizeUrl?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.reauthorizeUrl = reauthorizeUrl;
   }
 }
 
@@ -27,7 +29,9 @@ export async function fetchJson<T extends Record<string, unknown>>(
     const message =
       (typeof payload?.error === 'string' && payload.error) ||
       `Request failed (${response.status})`;
-    throw new ApiError(message, response.status);
+    const reauthorizeUrl =
+      typeof payload?.reauthorizeUrl === 'string' ? payload.reauthorizeUrl : undefined;
+    throw new ApiError(message, response.status, reauthorizeUrl);
   }
 
   return payload as T;

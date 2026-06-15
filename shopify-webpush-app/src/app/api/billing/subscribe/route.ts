@@ -51,7 +51,10 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : 'Failed to start subscription.';
     const reauthorizeUrl =
       shopDomain && message.includes('No valid Shopify offline token')
-        ? buildShopifyReauthorizeUrl(shopDomain)
+        ? buildShopifyReauthorizeUrl(shopDomain, {
+            host: body.host ?? undefined,
+            embedded: body.embedded ?? undefined,
+          })
         : null;
 
     return NextResponse.json(

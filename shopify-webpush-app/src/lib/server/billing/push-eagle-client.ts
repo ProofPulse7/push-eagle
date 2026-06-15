@@ -27,6 +27,7 @@ export const callPushEagleBilling = async (
       'X-Push-Eagle-Signature': signature,
     },
     body: JSON.stringify({ shopDomain, ts, ...body }),
+    signal: AbortSignal.timeout(12_000),
   });
 
   const text = await response.text();

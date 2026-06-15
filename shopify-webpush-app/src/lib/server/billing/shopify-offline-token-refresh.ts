@@ -234,5 +234,7 @@ export const purgeStalePrismaSessionForShop = async (shopDomain: string) => {
   }
 };
 
-export const buildShopifyReauthorizeUrl = (shopDomain: string) =>
-  buildShopifyAppConnectUrl(shopDomain);
+export const buildShopifyReauthorizeUrl = (
+  shopDomain: string,
+  shopifyParams?: import('@/lib/server/billing/shopify-admin-params').ShopifyAdminSearchParams,
+) => buildShopifyAppConnectUrl(shopDomain, shopifyParams);

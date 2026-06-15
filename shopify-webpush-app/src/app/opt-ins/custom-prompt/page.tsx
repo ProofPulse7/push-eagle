@@ -21,6 +21,7 @@ import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
 import { useOptInSettings, useSaveOptInSettings } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { useInstantSaveFeedback } from '@/hooks/use-instant-save-feedback';
 import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
@@ -203,6 +204,7 @@ export default function CustomPromptPage() {
     const { toast } = useToast();
     const { data: optInData, isLoading: optInLoading } = useOptInSettings();
     const saveOptInMutation = useSaveOptInSettings();
+    const { saved, markSaved, markIdle } = useInstantSaveFeedback();
     const logoInputRef = useRef<HTMLInputElement | null>(null);
 
     const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
@@ -295,6 +297,7 @@ export default function CustomPromptPage() {
             };
 
             writePendingSettings(shopDomain, 'optIn', body);
+            markSaved();
             saveOptInMutation.mutate(body, {
                 onSuccess: () => {
                     toast({
@@ -303,6 +306,7 @@ export default function CustomPromptPage() {
                     });
                 },
                 onError: (error) => {
+                    markIdle();
                     toast({
                         variant: 'destructive',
                         title: 'Save failed',
@@ -311,6 +315,7 @@ export default function CustomPromptPage() {
                 },
             });
         } catch (error) {
+            markIdle();
             toast({
                 variant: 'destructive',
                 title: 'Save failed',
@@ -616,7 +621,20 @@ export default function CustomPromptPage() {
                     <Button variant="outline" size="lg" asChild>
                       <Link href="/opt-ins">Cancel</Link>
                     </Button>
-                    <Button size="lg" onClick={saveChanges}>Save Changes</Button>
+                    <Button
+                        size="lg"
+                        onClick={saveChanges}
+                        className={cn(saved && 'bg-emerald-600 text-white hover:bg-emerald-600/90')}
+                    >
+                        {saved ? (
+                            <>
+                                <Check className="mr-2 h-4 w-4" />
+                                Saved
+                            </>
+                        ) : (
+                            'Save Changes'
+                        )}
+                    </Button>
                 </div>
             </div>
 
