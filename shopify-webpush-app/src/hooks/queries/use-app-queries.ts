@@ -12,6 +12,7 @@ import {
 import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
+import { mergeAutomationsFromCache } from '@/lib/client/optimistic-automations';
 import { mergeCampaignsFromCache } from '@/lib/client/optimistic-campaigns';
 import { clearPendingSettings } from '@/lib/client/pending-settings';
 import {
@@ -71,13 +72,17 @@ export function useCampaigns() {
 
 export function useAutomationsOverview() {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
+
   return useQuery({
     queryKey: queryKeys.automationsOverview(shop),
-    queryFn: () =>
-      fetchJsonWithShop<{ rules: Array<Record<string, unknown>> }>(
-        '/api/automations/overview',
-        shop,
-      ),
+    queryFn: async () => {
+      const fresh = await fetchJsonWithShop<{
+        rules: Array<Record<string, unknown>>;
+        totals?: Record<string, unknown>;
+      }>('/api/automations/overview', shop);
+      return mergeAutomationsFromCache(queryClient, shop, fresh);
+    },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
     refetchOnMount: false,

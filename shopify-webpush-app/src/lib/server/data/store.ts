@@ -2347,6 +2347,18 @@ export const upsertAutomationRule = async (
     await cleanupUnusedMediaAssets(shopDomain, removedMediaRefs);
   }
 
+  if (!nextEnabled) {
+    await sql`
+      UPDATE automation_jobs
+      SET status = 'skipped',
+          error_message = 'Automation rule is disabled.',
+          updated_at = NOW()
+      WHERE shop_domain = ${shopDomain}
+        AND rule_key = ${ruleKey}
+        AND status = 'pending'
+    `;
+  }
+
   return row
     ? {
         id: String(row.id),

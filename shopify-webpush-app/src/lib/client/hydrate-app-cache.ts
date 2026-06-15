@@ -2,6 +2,7 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { mergeCampaignsFromCache } from '@/lib/client/optimistic-campaigns';
+import { mergeAutomationOverviewPayload } from '@/lib/client/optimistic-automations';
 import { queryKeys } from '@/lib/client/query-keys';
 
 export type AppBootstrapPayload = {
@@ -44,10 +45,19 @@ export const hydrateAppCache = (
     }),
   );
 
-  queryClient.setQueryData(queryKeys.automationsOverview(shopDomain), {
-    ok: true,
-    ...(payload.automationsOverview ?? {}),
-  });
+  if (payload.automationsOverview?.rules) {
+    queryClient.setQueryData(
+      queryKeys.automationsOverview(shopDomain),
+      mergeAutomationOverviewPayload(
+        queryClient.getQueryData(queryKeys.automationsOverview(shopDomain)),
+        {
+          ok: true,
+          ...payload.automationsOverview,
+        },
+        shopDomain,
+      ),
+    );
+  }
 
   queryClient.setQueryData(queryKeys.segments(shopDomain), {
     ok: true,

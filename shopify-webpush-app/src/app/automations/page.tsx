@@ -20,6 +20,11 @@ import { useAutomationsOverview } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { normalizeAutomationRule, normalizeAutomationRules } from '@/lib/client/normalize-automation-rule';
+import {
+    clearPendingAutomationEnabled,
+    patchAutomationOverviewRule,
+    setPendingAutomationEnabled,
+} from '@/lib/client/optimistic-automations';
 import { queryKeys } from '@/lib/client/query-keys';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -155,11 +160,15 @@ export default function AutomationsPage() {
     const { atLimit } = useImpressionLimit();
     const queryClient = useQueryClient();
     const { data, isLoading, isFetching, isError, error: queryError } = useAutomationsOverview();
-    const [savingRuleKey, setSavingRuleKey] = useState<RuleKey | null>(null);
     const [error, setError] = useState<string | null>(null);
 
+    const visibleRuleKeysSet = useMemo(() => new Set<RuleKey>(visibleRuleKeys), []);
+
     const { rules, stats } = useMemo(() => {
-        const overviewRules = normalizeAutomationRules(data?.rules);
+        const overviewRules = normalizeAutomationRules(data?.rules).filter((rule) =>
+            visibleRuleKeysSet.has(rule.ruleKey as RuleKey),
+        );
+
         const mergedRules = visibleRuleKeys.map((ruleKey) => {
             const found = overviewRules.find((rule) => rule.ruleKey === ruleKey);
             return (
@@ -175,19 +184,26 @@ export default function AutomationsPage() {
             );
         }) as AutomationRule[];
 
-        const totals = mergedRules.reduce(
-            (acc, rule) => ({
-                impressions: acc.impressions + Number(rule.impressions ?? 0),
-                clicks: acc.clicks + Number(rule.clicks ?? 0),
-                revenueCents: acc.revenueCents + Number(rule.revenueCents ?? 0),
-            }),
-            { impressions: 0, clicks: 0, revenueCents: 0 },
-        );
+        const totalsFromApi = data?.totals as AutomationStats | undefined;
+        const totals = totalsFromApi
+            ? {
+                  impressions: Number(totalsFromApi.impressions ?? 0),
+                  clicks: Number(totalsFromApi.clicks ?? 0),
+                  revenueCents: Number(totalsFromApi.revenueCents ?? 0),
+              }
+            : mergedRules.reduce(
+                  (acc, rule) => ({
+                      impressions: acc.impressions + Number(rule.impressions ?? 0),
+                      clicks: acc.clicks + Number(rule.clicks ?? 0),
+                      revenueCents: acc.revenueCents + Number(rule.revenueCents ?? 0),
+                  }),
+                  { impressions: 0, clicks: 0, revenueCents: 0 },
+              );
 
         return { rules: mergedRules, stats: totals };
-    }, [data]);
+    }, [data, visibleRuleKeysSet]);
 
-    const statsLoading = isLoading && !data;
+    const statsLoading = isLoading && !data?.rules?.length;
     const loadError =
         !activeShopDomain
             ? 'Missing shop context. Open the app from Shopify so automation data can load for the current store.'
@@ -197,114 +213,60 @@ export default function AutomationsPage() {
                   : 'Failed to load automation rules.'
               : error;
 
-    const handleToggleStatus = async (rule: AutomationRule) => {
-        try {
-            setSavingRuleKey(rule.ruleKey);
-            setError(null);
+    const handleToggleStatus = (rule: AutomationRule) => {
+        if (!activeShopDomain) {
+            setError('Missing shop context. Refresh the app from Shopify and try again.');
+            return;
+        }
 
-            if (!activeShopDomain) {
-                throw new Error('Missing shop context. Refresh the app from Shopify and try again.');
-            }
+        const nextEnabled = !rule.enabled;
+        if (nextEnabled && atLimit) {
+            setError('Monthly impression limit reached. Upgrade your plan on Plans to activate automations.');
+            return;
+        }
 
-            const nextEnabled = !rule.enabled;
-            if (nextEnabled && atLimit) {
-                setError('Monthly impression limit reached. Upgrade your plan on Plans to activate automations.');
-                return;
-            }
+        setError(null);
+        setPendingAutomationEnabled(activeShopDomain, rule.ruleKey, nextEnabled);
+        patchAutomationOverviewRule(queryClient, activeShopDomain, rule.ruleKey, { enabled: nextEnabled });
 
+        void (async () => {
             const cacheKey = queryKeys.automationsOverview(activeShopDomain);
             const previous = queryClient.getQueryData<{ rules?: AutomationRule[]; totals?: AutomationStats }>(cacheKey);
 
-            queryClient.setQueryData(cacheKey, (current: { rules?: AutomationRule[]; totals?: AutomationStats } | undefined) => {
-                const currentRules = normalizeAutomationRules(current?.rules ?? previous?.rules);
-                const nextRules = visibleRuleKeys.map((ruleKey) => {
-                    const existing = currentRules.find((item) => item.ruleKey === ruleKey);
-                    const base =
-                        existing ??
-                        ({
-                            id: ruleKey,
-                            ruleKey,
-                            enabled: false,
-                            config: {},
-                            impressions: 0,
-                            clicks: 0,
-                            revenueCents: 0,
-                        } as AutomationRule);
-
-                    if (ruleKey !== rule.ruleKey) {
-                        return base;
-                    }
-
-                    return { ...base, enabled: nextEnabled };
+            try {
+                const response = await fetch('/api/automations/rules', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        shopDomain: activeShopDomain,
+                        ruleKey: rule.ruleKey,
+                        enabled: nextEnabled,
+                    }),
                 });
 
-                return {
-                    ok: true,
-                    ...(current ?? previous ?? {}),
-                    rules: nextRules,
-                };
-            });
+                const payload = (await response.json()) as { ok?: boolean; error?: string; rule?: AutomationRule };
+                if (!response.ok || !payload.ok || !payload.rule) {
+                    throw new Error(payload.error || 'Failed to update automation rule.');
+                }
 
-            const response = await fetch('/api/automations/rules', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    shopDomain: activeShopDomain,
-                    ruleKey: rule.ruleKey,
-                    enabled: nextEnabled,
-                }),
-            });
-
-            const payload = (await response.json()) as { ok?: boolean; error?: string; rule?: AutomationRule };
-            if (!response.ok || !payload.ok || !payload.rule) {
+                clearPendingAutomationEnabled(activeShopDomain, rule.ruleKey);
+                const savedRule = normalizeAutomationRule(payload.rule as unknown as Record<string, unknown>);
+                patchAutomationOverviewRule(queryClient, activeShopDomain, rule.ruleKey, savedRule);
+            } catch (saveError) {
                 if (previous) {
                     queryClient.setQueryData(cacheKey, previous);
                 }
-                throw new Error(payload.error || 'Failed to update automation rule.');
+                clearPendingAutomationEnabled(activeShopDomain, rule.ruleKey);
+                setError(saveError instanceof Error ? saveError.message : 'Failed to update automation rule.');
             }
-
-            queryClient.setQueryData(cacheKey, (current: { rules?: AutomationRule[] } | undefined) => {
-                const currentRules = normalizeAutomationRules(current?.rules ?? previous?.rules);
-                const savedRule = normalizeAutomationRule(payload.rule as unknown as Record<string, unknown>);
-                return {
-                    ok: true,
-                    ...(current ?? previous ?? {}),
-                    rules: visibleRuleKeys.map((ruleKey) => {
-                        const existing = currentRules.find((item) => item.ruleKey === ruleKey);
-                        if (ruleKey !== savedRule.ruleKey) {
-                            return existing ?? {
-                                id: ruleKey,
-                                ruleKey,
-                                enabled: false,
-                                config: {},
-                                impressions: 0,
-                                clicks: 0,
-                                revenueCents: 0,
-                            };
-                        }
-
-                        return {
-                            ...(existing ?? savedRule),
-                            ...savedRule,
-                            impressions: existing?.impressions ?? savedRule.impressions ?? 0,
-                            clicks: existing?.clicks ?? savedRule.clicks ?? 0,
-                            revenueCents: existing?.revenueCents ?? savedRule.revenueCents ?? 0,
-                        };
-                    }),
-                };
-            });
-        } catch (saveError) {
-            setError(saveError instanceof Error ? saveError.message : 'Failed to update automation rule.');
-        } finally {
-            setSavingRuleKey(null);
-        }
+        })();
     };
 
     return (
         <PageLoadingShell
             title="Automations"
             isLoading={statsLoading}
-            hasData={true}
+            hasData={Boolean(data?.rules?.length)}
             isFetching={isFetching}
             error={loadError}
         >
@@ -409,17 +371,14 @@ export default function AutomationsPage() {
                                                       size="sm"
                                                       className={getActionButtonClassName(rule.enabled)}
                                                       onClick={() => handleToggleStatus(rule)}
-                                                      disabled={
-                                                          savingRuleKey === rule.ruleKey ||
-                                                          (!rule.enabled && atLimit)
-                                                      }
+                                                      disabled={!rule.enabled && atLimit}
                                                       title={
                                                           !rule.enabled && atLimit
                                                               ? 'Monthly impression limit reached.'
                                                               : undefined
                                                       }
                                                   >
-                                                      {savingRuleKey === rule.ruleKey ? 'Saving...' : rule.enabled ? 'Deactivate' : 'Activate'}
+                                                      {rule.enabled ? 'Deactivate' : 'Activate'}
                                                   </Button>
                                                   <Button variant="outline" size="sm" className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100" asChild>
                                                       <Link href={activeShopDomain ? `${definition.href}?shop=${encodeURIComponent(activeShopDomain)}` : definition.href}>
