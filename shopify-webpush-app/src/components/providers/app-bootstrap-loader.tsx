@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 
 import { useAppBootstrap } from '@/hooks/queries/use-app-queries';
+import { BackgroundRoutePrefetcher } from '@/components/providers/background-route-prefetcher';
 
 /**
  * Warms the React Query cache on app load (sessionStorage-backed).
@@ -17,5 +18,10 @@ export function AppBootstrapLoader({ children }: { children: React.ReactNode }) 
     }
   }, [bootstrap.error, bootstrap.isError]);
 
-  return <>{children}</>;
+  return (
+    <>
+      <BackgroundRoutePrefetcher />
+      {children}
+    </>
+  );
 }

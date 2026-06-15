@@ -100,8 +100,10 @@ export const createRecurringAppSubscription = async (input: {
   test?: boolean;
   accessToken?: string;
 }) => {
-  if (input.priceUsd < 0) {
-    throw new Error('Plan price cannot be negative.');
+  if (input.priceUsd <= 0) {
+    throw new Error(
+      'Paid plans must have a price greater than zero. Free plans are activated without Shopify Billing.',
+    );
   }
 
   const accessToken = input.accessToken ?? (await requireShopifyOfflineAccessToken(input.shopDomain));
@@ -121,7 +123,7 @@ export const createRecurringAppSubscription = async (input: {
         {
           plan: {
             appRecurringPricingDetails: {
-              price: { amount: input.priceUsd, currencyCode: 'USD' },
+              price: { amount: input.priceUsd.toFixed(2), currencyCode: 'USD' },
               interval: 'EVERY_30_DAYS',
             },
           },

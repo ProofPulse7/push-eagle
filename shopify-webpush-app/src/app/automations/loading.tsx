@@ -1,3 +1,5 @@
+import { PageLoadingShell } from '@/components/layout/page-loading-shell';
+
 export default function AutomationsLoading() {
-  return null;
+  return <PageLoadingShell titleWidth="w-44" statCards={3} />;
 }

@@ -72,7 +72,7 @@ export function middleware(request: NextRequest) {
 
   const shop = pickShop(request);
   if (!shop) {
-    if (pathname === '/' || pathname === '/dashboard') {
+    if (pathname === '/dashboard') {
       return NextResponse.redirect(`${ROOT_APP_URL}/`);
     }
     return NextResponse.next();

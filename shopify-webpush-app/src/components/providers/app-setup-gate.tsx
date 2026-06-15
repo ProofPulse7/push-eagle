@@ -17,6 +17,9 @@ const SETUP_STEPS = [
 ] as const;
 
 const shouldSkipSetup = (pathname: string) => {
+  if (pathname === '/' || pathname.startsWith('/privacy') || pathname.startsWith('/terms')) {
+    return true;
+  }
   if (pathname.startsWith('/login')) {
     return true;
   }

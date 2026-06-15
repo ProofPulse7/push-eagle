@@ -34,7 +34,7 @@ export default function CampaignsPage() {
           <p className="text-muted-foreground">View and manage your past and current campaigns.</p>
         </div>
         <Button asChild disabled={atLimit} title={atLimit ? 'Monthly impression limit reached.' : undefined}>
-          <Link href={atLimit ? '/plans' : '/campaigns/new'}>
+          <Link href={atLimit ? '/plans' : '/campaigns/new/details'} prefetch>
             <PlusCircle className="mr-2 h-4 w-4" />
             {atLimit ? 'Upgrade to send' : 'New Campaign'}
           </Link>

@@ -3,10 +3,7 @@ import {
   getBusinessTier,
 } from '@/lib/server/billing/plans';
 import { upsertMerchantBilling } from '@/lib/server/billing/merchant-billing';
-import {
-  basicCheckoutPlanName,
-  startPlanSubscriptionCheckout,
-} from '@/lib/server/billing/start-plan-checkout';
+import { startPlanSubscriptionCheckout } from '@/lib/server/billing/start-plan-checkout';
 import { buildBillingReturnUrl } from '@/lib/server/billing/build-billing-return-url';
 
 export const runPlanSubscribe = async (input: {
@@ -22,15 +19,17 @@ export const runPlanSubscribe = async (input: {
   });
 
   if (input.planKey === 'basic') {
-    return startPlanSubscriptionCheckout({
-      shopDomain: input.shopDomain,
-      planKey: 'basic',
-      planName: basicCheckoutPlanName(),
-      priceUsd: BASIC_PLAN.priceUsd,
-      returnUrl,
-      impressionLimit: BASIC_PLAN.impressions,
+    // Shopify Billing API rejects $0 subscriptions — activate the free tier locally.
+    return {
+      test: false,
+      confirmationUrl: null,
+      subscriptionId: null,
+      autoActivated: true,
+      planKey: 'basic' as const,
       tierId: null,
-    });
+      impressionLimit: BASIC_PLAN.impressions,
+      priceUsd: BASIC_PLAN.priceUsd,
+    };
   }
 
   const tier = getBusinessTier(input.tierId || '');

@@ -202,15 +202,15 @@ export function PlansPageContent() {
 
   const basicButtonLabel = useMemo(() => {
     if (pendingPlan === 'basic') {
-      return 'Opening Shopify…';
+      return 'Activating…';
     }
     if (isCurrentBasic) {
       return 'Current plan';
     }
     if (billingStatus === 'pending') {
-      return 'Approve in Shopify…';
+      return 'Activate free plan';
     }
-    return 'Subscribe with Shopify';
+    return 'Activate free plan';
   }, [billingStatus, isCurrentBasic, pendingPlan]);
 
   const businessButtonLabel = useMemo(() => {
@@ -247,8 +247,8 @@ export function PlansPageContent() {
 
       {billingStatus === 'pending' ? (
         <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
-          Your Push Eagle plan is not active yet. Click <strong>Subscribe with Shopify</strong> on Basic (free) or
-          Business to approve billing in Shopify, then return here to send notifications.
+          Your Push Eagle plan is not active yet. Activate the free Basic plan instantly, or choose Business to
+          approve billing in Shopify before sending notifications.
         </p>
       ) : null}
 

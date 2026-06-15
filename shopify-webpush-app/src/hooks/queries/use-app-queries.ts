@@ -507,3 +507,94 @@ export function prefetchShopQueries(queryClient: QueryClient, shop: string) {
     staleTime: 5 * 60 * 1000,
   });
 }
+
+const prefetchIfMissing = async (
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  queryFn: () => Promise<unknown>,
+) => {
+  const existing = queryClient.getQueryState(queryKey);
+  if (existing?.status === 'success' || existing?.fetchStatus === 'fetching') {
+    return;
+  }
+
+  await queryClient.prefetchQuery({
+    queryKey,
+    queryFn,
+    staleTime: SETTINGS_STALE_MS,
+  });
+};
+
+/** Background prefetch for main app pages — skips queries already warm in cache. */
+export async function prefetchAppPages(queryClient: QueryClient, shop: string) {
+  if (!shop) {
+    return;
+  }
+
+  const { fromIso, toIso } = resolveAnalyticsDateRange();
+
+  const steps: Array<() => Promise<unknown>> = [
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.bootstrap(shop), async () => {
+        const payload = await fetchJsonWithShop<AppBootstrapPayload>('/api/app/bootstrap', shop);
+        hydrateAppCache(queryClient, shop, payload);
+        return payload;
+      }),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.dashboardSummary(shop), async () => {
+        const [overview, campaignStats, subscriberKpis, billingPayload] = await Promise.all([
+          fetchJsonWithShop<Record<string, unknown>>('/api/settings/overview', shop),
+          fetchJsonWithShop<Record<string, unknown>>('/api/campaigns/stats', shop),
+          fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
+          fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=0', shop),
+        ]);
+
+        return {
+          overview,
+          campaignStats,
+          subscriberKpis,
+          billing: billingPayload.billing ?? {},
+        };
+      }),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.campaigns(shop), async () => {
+        const fresh = await fetchJsonWithShop<{ campaigns: unknown[] }>('/api/campaigns', shop);
+        return mergeCampaignsFromCache(queryClient, shop, fresh);
+      }),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.subscribersOverview(shop), () =>
+        fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
+      ),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.subscribersGrowth(shop, fromIso, toIso), () => {
+        const params = new URLSearchParams({ shop, from: fromIso, to: toIso });
+        return fetchJson<Record<string, unknown>>(`/api/subscribers/growth?${params.toString()}`);
+      }),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.automationsOverview(shop), async () => {
+        const fresh = await fetchJsonWithShop<{
+          rules: Array<Record<string, unknown>>;
+          totals?: Record<string, unknown>;
+        }>('/api/automations/overview', shop);
+        return mergeAutomationsFromCache(queryClient, shop, fresh);
+      }),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.segments(shop), async () => {
+        const fresh = await fetchJsonWithShop<{ segments: unknown[] }>('/api/segments', shop);
+        return mergeSegmentsFromCache(queryClient, shop, fresh);
+      }),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.billingStatus(shop), () =>
+        fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=0', shop),
+      ),
+  ];
+
+  for (const step of steps) {
+    try {
+      await step();
+    } catch {
+      // Background prefetch should never block the UI.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+  }
+}

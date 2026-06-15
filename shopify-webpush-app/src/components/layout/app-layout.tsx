@@ -10,9 +10,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   
   const isCampaignComposer = pathname.startsWith('/campaigns/new');
   const isLoginPage = pathname.startsWith('/login');
+  const isMarketingPage =
+    pathname === '/' || pathname.startsWith('/privacy') || pathname.startsWith('/terms');
   const isAutomationEditor = /^\/automations\/[a-zA-Z0-9-]+\/[^/]+\/edit$/.test(pathname);
 
-  if (isCampaignComposer || isAutomationEditor || isLoginPage) {
+  if (isMarketingPage || isCampaignComposer || isAutomationEditor || isLoginPage) {
     return <main className="flex-grow bg-background">{children}</main>;
   }
 
