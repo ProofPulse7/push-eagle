@@ -15,7 +15,6 @@ import {
   Plus,
   Bell,
   Megaphone,
-  LogIn,
 } from 'lucide-react';
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
@@ -87,9 +86,6 @@ export function Sidebar() {
             </NavLink>
             <NavLink href="/settings" icon={Settings}>
                 Settings
-            </NavLink>
-            <NavLink href="/login" icon={LogIn}>
-                Login
             </NavLink>
         </div>
       </div>

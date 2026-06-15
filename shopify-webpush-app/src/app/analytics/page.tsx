@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
 export default function LegacyAnalyticsPage() {
-  redirect('/settings?tab=attribution');
+  redirect('/settings/analytics');
 }

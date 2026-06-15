@@ -13,8 +13,6 @@ import {
   MonitorCheck,
   Tag,
   BarChart,
-  LogIn,
-    Stethoscope,
 } from 'lucide-react';
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
@@ -56,7 +54,7 @@ export function MobileSidebar() {
             <NavLink href="/automations" icon={ShoppingCart}>
                 Automation
             </NavLink>
-            <NavLink href="/analytics" icon={BarChart}>
+            <NavLink href="/settings/analytics" icon={BarChart}>
                 Analytics
             </NavLink>
             <NavLink href="/segments" icon={PieChart}>
@@ -65,17 +63,11 @@ export function MobileSidebar() {
              <NavLink href="/opt-ins" icon={MonitorCheck}>
                 Opt-ins
             </NavLink>
-            <NavLink href="/automations/diagnostic" icon={Stethoscope}>
-                Diagnostics
-            </NavLink>
             <NavLink href="/plans" icon={Tag}>
                 Plans
             </NavLink>
             <NavLink href="/settings" icon={Settings}>
                 Settings
-            </NavLink>
-            <NavLink href="/login" icon={LogIn}>
-                Login
             </NavLink>
         </nav>
       </div>

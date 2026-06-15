@@ -26,7 +26,7 @@ const BASIC_FEATURES = [
   'Unlimited subscribers',
   'Campaigns & scheduling',
   'All automations',
-  'Analytics',
+  'Segments & opt-ins',
   'Chat support',
 ];
 

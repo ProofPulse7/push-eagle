@@ -49,8 +49,8 @@ export async function GET(request: Request) {
     const ts = url.searchParams.get('ts');
     const sig = url.searchParams.get('sig');
 
-    if (ts && sig && !verifySsoSignature(shopDomain, ts, sig)) {
-      return NextResponse.json({ ok: false, error: 'Invalid SSO signature.' }, { status: 401 });
+    if (!ts || !sig || !verifySsoSignature(shopDomain, ts, sig)) {
+      return NextResponse.json({ ok: false, error: 'Invalid or missing SSO signature.' }, { status: 401 });
     }
 
     await ensureMerchantAccount(shopDomain);
@@ -67,6 +67,13 @@ export async function GET(request: Request) {
       maxAge: 60 * 60 * 24 * 30,
       sameSite: 'lax',
       secure: true,
+    });
+    response.cookies.set('pe_authenticated', '1', {
+      path: '/',
+      maxAge: 60 * 60 * 24 * 30,
+      sameSite: 'lax',
+      secure: true,
+      httpOnly: true,
     });
     return response;
   } catch (error) {

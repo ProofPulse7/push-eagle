@@ -34,6 +34,7 @@ import { useTheme } from 'next-themes';
 import { useSettings } from '@/context/settings-context';
 import { ImageEditorSheet } from '@/components/composer/editor-parts/image-editor-sheet';
 import { useToast } from '@/hooks/use-toast';
+import { LEGAL_LINKS } from '@/lib/client/legal-links';
 
 type MerchantOverview = {
     storeName: string | null;
@@ -638,6 +639,26 @@ export default function SettingsPage() {
             </TabsContent>
             <TabsContent value="privacy">
                 <div className="space-y-6 mt-4">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Legal & data processing</CardTitle>
+                            <CardDescription>
+                                How Push Eagle collects, stores, and processes store and subscriber data.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="flex flex-wrap gap-3 text-sm">
+                            <Button variant="outline" size="sm" asChild>
+                                <a href={LEGAL_LINKS.privacyPolicy} target="_blank" rel="noopener noreferrer">
+                                    Privacy policy <ExternalLink className="ml-2 h-4 w-4" />
+                                </a>
+                            </Button>
+                            <Button variant="outline" size="sm" asChild>
+                                <a href={LEGAL_LINKS.termsOfService} target="_blank" rel="noopener noreferrer">
+                                    Terms of service <ExternalLink className="ml-2 h-4 w-4" />
+                                </a>
+                            </Button>
+                        </CardContent>
+                    </Card>
                     <Card>
                         <CardHeader><CardTitle>User</CardTitle></CardHeader>
                         <CardContent>

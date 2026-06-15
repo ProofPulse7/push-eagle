@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
 import { registerWebhookEvent } from '@/lib/server/data/store';
-import { exportCustomerGdprData } from '@/lib/server/gdpr/compliance-data';
+import { purgeShopGdprData } from '@/lib/server/gdpr/compliance-data';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -19,21 +19,14 @@ export async function POST(req: Request) {
     const payload = JSON.parse(rawBody) as {
       shop_domain?: string;
       myshopify_domain?: string;
-      customer?: {
-        id?: number | string;
-        email?: string | null;
-        phone?: string | null;
-      };
-      orders_requested?: Array<number | string>;
     };
-
     const shopDomain = parseShopDomain(payload.myshopify_domain ?? payload.shop_domain);
     const eventId = req.headers.get('x-shopify-event-id');
 
     if (eventId) {
       const accepted = await registerWebhookEvent({
         shopDomain,
-        topic: 'customers/data_request',
+        topic: 'shop/redact',
         eventId,
       });
 
@@ -42,27 +35,10 @@ export async function POST(req: Request) {
       }
     }
 
-    const ordersRequested = (payload.orders_requested ?? []).map((value) => String(value));
-    const exportPayload = await exportCustomerGdprData(
-      shopDomain,
-      payload.customer ?? {},
-      ordersRequested,
-    );
-
-    console.info('[gdpr] customers/data_request export ready', {
-      shopDomain,
-      customerId: payload.customer?.id ?? null,
-      recordCounts: {
-        shopifyCustomers: exportPayload.shopifyCustomers.length,
-        subscribers: exportPayload.subscribers.length,
-        orders: exportPayload.orders.length,
-      },
-    });
-
-    return NextResponse.json({ ok: true, shopDomain, exported: true });
+    const result = await purgeShopGdprData(shopDomain);
+    return NextResponse.json({ ok: true, ...result });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Failed to process customers/data_request webhook.';
+    const message = error instanceof Error ? error.message : 'Failed to process shop/redact webhook.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
   }
 }

@@ -2,6 +2,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
+import { AppLegalFooter } from './app-legal-footer';
 import { Sidebar } from './sidebar';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
@@ -21,6 +22,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="flex flex-col md:pl-64">
         <main className="flex-grow pe-page-enter">
           {children}
+          <AppLegalFooter />
         </main>
       </div>
     </div>

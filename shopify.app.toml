@@ -22,15 +22,15 @@ api_version = "2026-07"
 ]
 
   [[webhooks.subscriptions]]
-  uri = "https://push-eagle.vercel.app/webhooks/customers/data_request"
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/customers-data-request"
   compliance_topics = [ "customers/data_request" ]
 
   [[webhooks.subscriptions]]
-  uri = "https://push-eagle.vercel.app/webhooks/customers/redact"
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/customers-redact"
   compliance_topics = [ "customers/redact" ]
 
   [[webhooks.subscriptions]]
-  uri = "https://push-eagle.vercel.app/webhooks/shop/redact"
+  uri = "https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/shop-redact"
   compliance_topics = [ "shop/redact" ]
 
   [[webhooks.subscriptions]]
@@ -128,26 +128,3 @@ url = "https://push-eagle-dashboard.vercel.app/api/storefront"
 subpath = "push-eagle"
 prefix = "apps"
 
-[product.metafields.app.demo_info]
-type = "single_line_text_field"
-name = "Demo Source Info"
-description = "Tracks products created by the Shopify app template for development"
-
-  [product.metafields.app.demo_info.access]
-  admin = "merchant_read_write"
-
-[metaobjects.app.example]
-name = "Example"
-description = "An example metaobject definition created by this template"
-
-  [metaobjects.app.example.access]
-  admin = "merchant_read_write"
-
-[metaobjects.app.example.fields.title]
-name = "Title"
-type = "single_line_text_field"
-required = true
-
-[metaobjects.app.example.fields.description]
-name = "Description"
-type = "multi_line_text_field"
