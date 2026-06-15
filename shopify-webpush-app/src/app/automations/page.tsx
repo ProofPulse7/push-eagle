@@ -19,7 +19,7 @@ import {
 import { useAutomationsOverview } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
-import { normalizeAutomationRule, normalizeAutomationRules } from '@/lib/client/normalize-automation-rule';
+import { normalizeAutomationRules } from '@/lib/client/normalize-automation-rule';
 import {
     clearPendingAutomationEnabled,
     patchAutomationOverviewRule,
@@ -250,8 +250,11 @@ export default function AutomationsPage() {
                 }
 
                 clearPendingAutomationEnabled(activeShopDomain, rule.ruleKey);
-                const savedRule = normalizeAutomationRule(payload.rule as unknown as Record<string, unknown>);
-                patchAutomationOverviewRule(queryClient, activeShopDomain, rule.ruleKey, savedRule);
+                patchAutomationOverviewRule(queryClient, activeShopDomain, rule.ruleKey, {
+                    enabled: Boolean(payload.rule.enabled),
+                    config: (payload.rule.config ?? {}) as Record<string, unknown>,
+                    updatedAt: payload.rule.updatedAt ?? null,
+                });
             } catch (saveError) {
                 if (previous) {
                     queryClient.setQueryData(cacheKey, previous);

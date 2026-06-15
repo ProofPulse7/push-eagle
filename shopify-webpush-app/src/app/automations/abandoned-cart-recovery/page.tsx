@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Fragment, useEffect, useState } from 'react';
+import React, { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Zap } from 'lucide-react';
 
@@ -15,6 +15,11 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
 import { useCachedJson } from '@/hooks/use-cached-json';
+import {
+  applyPendingFlowStepStates,
+  createDebouncedAutomationStepsSaver,
+  stepEnabledFromConfig,
+} from '@/lib/client/automation-flow-steps';
 import { formatCurrency } from '@/lib/utils';
 
 type CartRuleStepConfig = {
@@ -259,6 +264,11 @@ export default function AbandonedCartPage() {
   }, [overviewPayload]);
 
   useEffect(() => {
+    if (!shopDomain) return;
+    setNotifications((current) => applyPendingFlowStepStates(shopDomain, 'cart_abandonment_30m', current));
+  }, [shopDomain]);
+
+  useEffect(() => {
     if (!rulesPayload?.ok) return;
     const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
     if (!rule) return;
@@ -269,66 +279,54 @@ export default function AbandonedCartPage() {
     if (!steps) return;
 
     setNotifications((current) =>
-      current.map((item) => {
-        const step = steps[item.id] ?? {};
-        return {
-          ...item,
-          delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
-          status: step.enabled ? 'Active' : 'Inactive',
-          notification: {
-            ...item.notification,
-            title: step.title ?? item.notification.title,
-            message: step.body ?? item.notification.message,
-            iconUrl: step.iconUrl ?? item.notification.iconUrl,
-            heroUrl: step.imageUrl ?? item.notification.heroUrl,
-            actionButtons: step.actionButtons ?? item.notification.actionButtons,
-          },
-        };
-      }),
-    );
-  }, [rulesPayload]);
-
-  const saveCartConfig = async (updatedNotifications: FlowNotification[]) => {
-    if (!shopDomain) return;
-
-    const enabled = updatedNotifications.some((item) => item.status === 'Active');
-
-    await fetch('/api/automations/rules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      applyPendingFlowStepStates(
         shopDomain,
-        ruleKey: 'cart_abandonment_30m',
-        enabled,
-        config: { steps: buildStepsConfigFromNotifications(updatedNotifications) },
-      }),
-    });
-  };
+        'cart_abandonment_30m',
+        current.map((item) => {
+          const step = steps[item.id] ?? {};
+          return {
+            ...item,
+            delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
+            status: stepEnabledFromConfig(step.enabled),
+            notification: {
+              ...item.notification,
+              title: step.title ?? item.notification.title,
+              message: step.body ?? item.notification.message,
+              iconUrl: step.iconUrl ?? item.notification.iconUrl,
+              heroUrl: step.imageUrl ?? item.notification.heroUrl,
+              actionButtons: step.actionButtons ?? item.notification.actionButtons,
+            },
+          };
+        }),
+      ),
+    );
+  }, [rulesPayload, shopDomain]);
 
-  const handleStatusChange = async (id: string, checked: boolean) => {
+  const saveCartConfig = useMemo(
+    () =>
+      createDebouncedAutomationStepsSaver(
+        shopDomain,
+        'cart_abandonment_30m',
+        buildStepsConfigFromNotifications,
+      ),
+    [shopDomain],
+  );
+
+  const handleStatusChange = (id: string, checked: boolean) => {
     const updatedNotifications = notifications.map((item) =>
       item.id === id ? { ...item, status: (checked ? 'Active' : 'Inactive') as 'Active' | 'Inactive' } : item,
     );
     setNotifications(updatedNotifications);
-
-    try {
-      await saveCartConfig(updatedNotifications);
-    } catch {
-      // no-op
-    }
+    setRuleEnabled(updatedNotifications.some((item) => item.status === 'Active'));
+    saveCartConfig(updatedNotifications);
   };
 
-  const handleDelayChange = async (id: string, delayLabel: string) => {
+  const handleDelayChange = (id: string, delayLabel: string) => {
     const updatedNotifications = notifications.map((item) =>
       item.id === id ? { ...item, delay: delayLabel } : item,
     );
     setNotifications(updatedNotifications);
-
-    try {
-      await saveCartConfig(updatedNotifications);
-    } catch {
-      // no-op
-    }
+    saveCartConfig(updatedNotifications);
   };
 
   const isFlowActive = ruleEnabled && notifications.some((item) => item.status === 'Active');

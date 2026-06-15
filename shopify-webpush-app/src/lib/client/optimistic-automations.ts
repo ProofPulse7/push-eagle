@@ -173,6 +173,33 @@ export const mergeAutomationsFromCache = (
   return mergeAutomationOverviewPayload(previous, fresh, shop);
 };
 
+const preserveRuleMetrics = (
+  rule: NormalizedAutomationRule,
+  patch: Partial<NormalizedAutomationRule>,
+): NormalizedAutomationRule => {
+  const merged: NormalizedAutomationRule = { ...rule, ...patch };
+
+  if (patch.impressions === undefined) {
+    merged.impressions = rule.impressions ?? 0;
+  } else if (patch.impressions === 0 && (rule.impressions ?? 0) > 0) {
+    merged.impressions = rule.impressions ?? 0;
+  }
+
+  if (patch.clicks === undefined) {
+    merged.clicks = rule.clicks ?? 0;
+  } else if (patch.clicks === 0 && (rule.clicks ?? 0) > 0) {
+    merged.clicks = rule.clicks ?? 0;
+  }
+
+  if (patch.revenueCents === undefined) {
+    merged.revenueCents = rule.revenueCents ?? 0;
+  } else if (patch.revenueCents === 0 && (rule.revenueCents ?? 0) > 0) {
+    merged.revenueCents = rule.revenueCents ?? 0;
+  }
+
+  return merged;
+};
+
 export const patchAutomationOverviewRule = (
   queryClient: QueryClient,
   shop: string,
@@ -184,26 +211,30 @@ export const patchAutomationOverviewRule = (
     (current) => {
       const currentRules = normalizeAutomationRules(current?.rules);
       const nextRules = currentRules.some((rule) => rule.ruleKey === ruleKey)
-        ? currentRules.map((rule) => (rule.ruleKey === ruleKey ? { ...rule, ...patch } : rule))
+        ? currentRules.map((rule) =>
+            rule.ruleKey === ruleKey ? preserveRuleMetrics(rule, patch) : rule,
+          )
         : [
             ...currentRules,
-            {
-              id: ruleKey,
-              ruleKey,
-              enabled: false,
-              config: {},
-              impressions: 0,
-              clicks: 0,
-              revenueCents: 0,
-              ...patch,
-            },
+            preserveRuleMetrics(
+              {
+                id: ruleKey,
+                ruleKey,
+                enabled: false,
+                config: {},
+                impressions: 0,
+                clicks: 0,
+                revenueCents: 0,
+              },
+              patch,
+            ),
           ];
 
       return {
         ok: true,
         ...(current ?? {}),
         rules: nextRules,
-        totals: computeTotals(nextRules),
+        totals: current?.totals ?? computeTotals(nextRules),
       };
     },
   );

@@ -1,13 +1,17 @@
 'use client';
 
-import React, { Fragment, useEffect, useRef, useState } from 'react';
+import React, { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, ChevronDown, TabletSmartphone, Zap } from 'lucide-react';
 
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
 import { FlowStats } from '@/components/automations/flow-stats';
 import { Button } from '@/components/ui/button';
-import { OptimisticSaveQueue } from '@/lib/client/optimistic-save-queue';
+import {
+  applyPendingFlowStepStates,
+  createDebouncedAutomationStepsSaver,
+  stepEnabledFromConfig,
+} from '@/lib/client/automation-flow-steps';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -188,6 +192,11 @@ export default function WelcomeNotificationsPage() {
   }, [overviewPayload]);
 
   useEffect(() => {
+    if (!shopDomain) return;
+    setNotifications((current) => applyPendingFlowStepStates(shopDomain, 'welcome_subscriber', current));
+  }, [shopDomain]);
+
+  useEffect(() => {
     if (!rulesPayload?.ok) return;
     const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber');
     if (!rule) return;
@@ -198,72 +207,53 @@ export default function WelcomeNotificationsPage() {
     if (!steps) return;
 
     setNotifications((current) =>
-      current.map((item) => {
-        const step = steps[item.id] ?? {};
-        return {
-          ...item,
-          delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
-          status: step.enabled ? 'Active' : 'Inactive',
-          notification: {
-            ...item.notification,
-            title: step.title ?? item.notification.title,
-            message: step.body ?? item.notification.message,
-            targetUrl: step.targetUrl ?? item.notification.targetUrl,
-            iconUrl: step.iconUrl ?? item.notification.iconUrl,
-            heroUrl: step.imageUrl ?? item.notification.heroUrl,
-            windowsImageUrl: step.windowsImageUrl ?? item.notification.windowsImageUrl ?? item.notification.heroUrl,
-            macosImageUrl: step.macosImageUrl ?? item.notification.macosImageUrl ?? item.notification.heroUrl,
-            androidImageUrl: step.androidImageUrl ?? item.notification.androidImageUrl ?? item.notification.heroUrl,
-            actionButtons: step.actionButtons ?? item.notification.actionButtons,
-          },
-        };
-      }),
+      applyPendingFlowStepStates(
+        shopDomain,
+        'welcome_subscriber',
+        current.map((item) => {
+          const step = steps[item.id] ?? {};
+          return {
+            ...item,
+            delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
+            status: stepEnabledFromConfig(step.enabled),
+            notification: {
+              ...item.notification,
+              title: step.title ?? item.notification.title,
+              message: step.body ?? item.notification.message,
+              targetUrl: step.targetUrl ?? item.notification.targetUrl,
+              iconUrl: step.iconUrl ?? item.notification.iconUrl,
+              heroUrl: step.imageUrl ?? item.notification.heroUrl,
+              windowsImageUrl: step.windowsImageUrl ?? item.notification.windowsImageUrl ?? item.notification.heroUrl,
+              macosImageUrl: step.macosImageUrl ?? item.notification.macosImageUrl ?? item.notification.heroUrl,
+              androidImageUrl: step.androidImageUrl ?? item.notification.androidImageUrl ?? item.notification.heroUrl,
+              actionButtons: step.actionButtons ?? item.notification.actionButtons,
+            },
+          };
+        }),
+      ),
     );
-  }, [rulesPayload]);
+  }, [rulesPayload, shopDomain]);
 
-  const saveQueueRef = useRef(new OptimisticSaveQueue<FlowNotification[]>());
+  const saveWelcomeConfig = useMemo(
+    () =>
+      createDebouncedAutomationStepsSaver(
+        shopDomain,
+        'welcome_subscriber',
+        buildStepsConfigFromNotifications,
+      ),
+    [shopDomain],
+  );
 
-  const saveWelcomeConfig = (updatedNotifications: FlowNotification[]) => {
-    if (!shopDomain) {
-      return;
-    }
-
-    const enabled = updatedNotifications.some((item) => item.status === 'Active');
-    setRuleEnabled(enabled);
-
-    saveQueueRef.current.enqueue({
-      key: 'welcome_subscriber',
-      payload: updatedNotifications,
-      save: async (notifications) => {
-        const config = { steps: buildStepsConfigFromNotifications(notifications) };
-        const response = await fetch('/api/automations/rules', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            shopDomain,
-            ruleKey: 'welcome_subscriber',
-            enabled: notifications.some((item) => item.status === 'Active'),
-            config,
-          }),
-        });
-
-        const payload = await response.json().catch(() => ({ ok: false }));
-        if (!response.ok || !payload?.ok) {
-          throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to save welcome automation.');
-        }
-      },
-    });
-  };
-
-  const handleStatusChange = async (id: string, checked: boolean) => {
+  const handleStatusChange = (id: string, checked: boolean) => {
     const updatedNotifications: FlowNotification[] = notifications.map((item) =>
       item.id === id ? { ...item, status: (checked ? 'Active' : 'Inactive') as 'Active' | 'Inactive' } : item,
     );
     setNotifications(updatedNotifications);
+    setRuleEnabled(updatedNotifications.some((item) => item.status === 'Active'));
     saveWelcomeConfig(updatedNotifications);
   };
 
-  const handleDelayChange = async (id: string, delayLabel: string) => {
+  const handleDelayChange = (id: string, delayLabel: string) => {
     const updatedNotifications = notifications.map((item) =>
       item.id === id ? { ...item, delay: delayLabel } : item,
     );
