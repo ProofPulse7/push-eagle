@@ -56,7 +56,7 @@ export default function RootLayout({
       </head>
       <body className={`${inter.variable} font-body antialiased bg-background`}>
         {shopifyApiKey ? (
-          <Script src="https://cdn.shopify.com/shopifycloud/app-bridge.js" strategy="beforeInteractive" />
+          <Script src="https://cdn.shopify.com/shopifycloud/app-bridge.js" strategy="afterInteractive" />
         ) : null}
         <ThemeProvider
           attribute="class"

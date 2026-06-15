@@ -57,6 +57,22 @@ export const buildDashboardSsoUrl = (
     ssoUrl.searchParams.set("sig", sig);
   }
 
+  if (returnTo) {
+    try {
+      const parsed = new URL(returnTo);
+      const host = parsed.searchParams.get("host");
+      const embedded = parsed.searchParams.get("embedded");
+      if (host) {
+        ssoUrl.searchParams.set("host", host);
+      }
+      if (embedded) {
+        ssoUrl.searchParams.set("embedded", embedded);
+      }
+    } catch {
+      // Ignore malformed return URLs.
+    }
+  }
+
   return ssoUrl.toString();
 };
 

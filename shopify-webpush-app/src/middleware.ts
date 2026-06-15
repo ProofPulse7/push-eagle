@@ -10,6 +10,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/shopify/webhooks',
   '/api/storefront',
   '/api/integrations/shopify/sso',
+  '/api/integrations/shopify/session-check',
   '/api/auth',
   '/api/health',
   '/api/cron',
@@ -106,6 +107,14 @@ export function middleware(request: NextRequest) {
   const response = NextResponse.next();
   if (shop && !request.cookies.get('pe_shop')?.value) {
     response.cookies.set('pe_shop', shop, {
+      path: '/',
+      maxAge: 60 * 60 * 24 * 30,
+      sameSite: isEmbeddedRequest(request) ? 'none' : 'lax',
+      secure: true,
+    });
+  }
+  if (authenticated && !request.cookies.get('pe_client_auth')?.value) {
+    response.cookies.set('pe_client_auth', '1', {
       path: '/',
       maxAge: 60 * 60 * 24 * 30,
       sameSite: isEmbeddedRequest(request) ? 'none' : 'lax',
