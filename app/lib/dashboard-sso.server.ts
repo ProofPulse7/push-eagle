@@ -29,6 +29,7 @@ export const buildDashboardSsoUrl = (
   shopDomain: string,
   returnTo?: string | null,
   baseDashboardUrl = resolveDashboardUrl(),
+  options?: { host?: string | null; embedded?: string | null },
 ) => {
   let redirectPath = "/dashboard";
 
@@ -48,6 +49,13 @@ export const buildDashboardSsoUrl = (
   ssoUrl.searchParams.set("shop", shopDomain);
   ssoUrl.searchParams.set("redirect", redirectPath.startsWith("/") ? redirectPath : "/dashboard");
 
+  if (options?.host) {
+    ssoUrl.searchParams.set("host", options.host);
+  }
+  if (options?.embedded || options?.host) {
+    ssoUrl.searchParams.set("embedded", options?.embedded || "1");
+  }
+
   const secret =
     process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() || process.env.SHOPIFY_API_SECRET?.trim() || "";
   if (secret) {
@@ -55,22 +63,6 @@ export const buildDashboardSsoUrl = (
     const sig = createHmac("sha256", secret).update(`${shopDomain}.${ts}`).digest("hex");
     ssoUrl.searchParams.set("ts", ts);
     ssoUrl.searchParams.set("sig", sig);
-  }
-
-  if (returnTo) {
-    try {
-      const parsed = new URL(returnTo);
-      const host = parsed.searchParams.get("host");
-      const embedded = parsed.searchParams.get("embedded");
-      if (host) {
-        ssoUrl.searchParams.set("host", host);
-      }
-      if (embedded) {
-        ssoUrl.searchParams.set("embedded", embedded);
-      }
-    } catch {
-      // Ignore malformed return URLs.
-    }
   }
 
   return ssoUrl.toString();

@@ -1,4 +1,3 @@
-import { Suspense } from 'react';
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import Script from 'next/script';
@@ -12,7 +11,6 @@ import { AppBootstrapLoader } from '@/components/providers/app-bootstrap-loader'
 import { AppSetupGate } from '@/components/providers/app-setup-gate';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { SettingsCacheSync } from '@/components/providers/settings-cache-sync';
-import { ShopifyEmbeddedAuthBootstrap } from '@/components/providers/shopify-embedded-provider';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -66,9 +64,6 @@ export default function RootLayout({
         >
           <QueryProvider>
             <SettingsProvider>
-              <Suspense fallback={null}>
-                <ShopifyEmbeddedAuthBootstrap />
-              </Suspense>
               <AppSetupGate>
                 <AppBootstrapLoader>
                   <SettingsCacheSync />

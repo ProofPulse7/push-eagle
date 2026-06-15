@@ -11,6 +11,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/storefront',
   '/api/integrations/shopify/sso',
   '/api/integrations/shopify/session-check',
+  '/api/integrations/shopify/embedded-entry',
   '/api/auth',
   '/api/health',
   '/api/cron',
@@ -91,14 +92,19 @@ export function middleware(request: NextRequest) {
 
   if (!authenticated) {
     if (isEmbeddedRequest(request)) {
-      const response = NextResponse.next();
-      response.cookies.set('pe_shop', shop, {
-        path: '/',
-        maxAge: 60 * 60 * 24 * 30,
-        sameSite: 'none',
-        secure: true,
-      });
-      return response;
+      const entry = new URL('/api/integrations/shopify/embedded-entry', request.url);
+      entry.searchParams.set('shop', shop);
+      const host = request.nextUrl.searchParams.get('host');
+      const embedded = request.nextUrl.searchParams.get('embedded');
+      if (host) {
+        entry.searchParams.set('host', host);
+      }
+      entry.searchParams.set('embedded', embedded || '1');
+      entry.searchParams.set(
+        'return_to',
+        `${request.nextUrl.pathname}${request.nextUrl.search}`,
+      );
+      return NextResponse.redirect(entry);
     }
 
     return buildConnectRedirect(request, shop);
