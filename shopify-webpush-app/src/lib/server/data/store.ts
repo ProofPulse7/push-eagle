@@ -670,6 +670,10 @@ const ensureSchema = async () => {
         revenue_cents INTEGER NOT NULL DEFAULT 0
       )`;
 
+      await sql`ALTER TABLE campaign_deliveries ADD COLUMN IF NOT EXISTS external_id TEXT`;
+      await sql`ALTER TABLE campaign_deliveries ADD COLUMN IF NOT EXISTS user_agent TEXT`;
+      await sql`ALTER TABLE campaign_deliveries ADD COLUMN IF NOT EXISTS ip_address TEXT`;
+
       await sql`CREATE TABLE IF NOT EXISTS campaign_clicks (
         id BIGSERIAL PRIMARY KEY,
         campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -684,6 +688,8 @@ const ensureSchema = async () => {
         converted_at TIMESTAMPTZ,
         revenue_cents INTEGER NOT NULL DEFAULT 0
       )`;
+
+      await sql`ALTER TABLE campaign_clicks ADD COLUMN IF NOT EXISTS external_id TEXT`;
 
       await sql`CREATE TABLE IF NOT EXISTS automation_deliveries (
         id BIGSERIAL PRIMARY KEY,
@@ -987,6 +993,9 @@ const ensureSchema = async () => {
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_subscriber ON campaign_deliveries(campaign_id, subscriber_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_external_time ON campaign_deliveries(shop_domain, external_id, delivered_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_user_agent_time ON campaign_deliveries(shop_domain, user_agent, delivered_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_external_time ON campaign_clicks(shop_domain, external_id, clicked_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_rule_time ON automation_deliveries(shop_domain, rule_key, delivered_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_external_time ON automation_deliveries(shop_domain, external_id, delivered_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_user_agent_time ON automation_deliveries(shop_domain, user_agent, delivered_at DESC)`;
@@ -6185,7 +6194,8 @@ export const resolveCampaignAudience = async (
           t.vapid_auth,
           s.id AS subscriber_id,
           s.external_id,
-          s.platform
+          s.platform,
+          t.user_agent
         FROM subscribers s
         JOIN subscriber_tokens t ON t.subscriber_id = s.id
         WHERE s.shop_domain = ${shopDomain}
@@ -6209,7 +6219,8 @@ export const resolveCampaignAudience = async (
           t.vapid_auth,
           s.id AS subscriber_id,
           s.external_id,
-          s.platform
+          s.platform,
+          t.user_agent
         FROM subscribers s
         JOIN subscriber_tokens t ON t.subscriber_id = s.id
         WHERE s.shop_domain = ${shopDomain}
@@ -6257,7 +6268,8 @@ export const resolveCampaignAudience = async (
         t.vapid_auth,
         s.id AS subscriber_id,
         s.external_id,
-        s.platform
+        s.platform,
+        t.user_agent
       FROM subscribers s
       JOIN subscriber_tokens t ON t.subscriber_id = s.id
       WHERE s.shop_domain = ${shopDomain}
@@ -6282,7 +6294,8 @@ export const resolveCampaignAudience = async (
         t.vapid_auth,
         s.id AS subscriber_id,
         s.external_id,
-        s.platform
+        s.platform,
+        t.user_agent
       FROM subscribers s
       JOIN subscriber_tokens t ON t.subscriber_id = s.id
       WHERE s.shop_domain = ${shopDomain}
@@ -7279,6 +7292,8 @@ type CampaignDeliveryInsertRow = {
   shopDomain: string;
   subscriberId: number;
   tokenId: number;
+  externalId?: string | null;
+  userAgent?: string | null;
   messageId: string | null;
 };
 
@@ -7307,16 +7322,20 @@ const claimCampaignDeliverySlots = async (
   const filteredShopDomains = filteredRows.map((row) => row.shopDomain);
   const filteredSubscriberIds = filteredRows.map((row) => row.subscriberId);
   const filteredTokenIds = filteredRows.map((row) => row.tokenId);
+  const filteredExternalIds = filteredRows.map((row) => row.externalId ?? null);
+  const filteredUserAgents = filteredRows.map((row) => row.userAgent ?? null);
 
   const claimedRows = await sql`
-    INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id)
-    SELECT u.campaign_id, u.shop_domain, u.subscriber_id, u.token_id, NULL
+    INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, external_id, user_agent, fcm_message_id)
+    SELECT u.campaign_id, u.shop_domain, u.subscriber_id, u.token_id, u.external_id, u.user_agent, NULL
     FROM UNNEST(
       ${filteredCampaignIds}::text[],
       ${filteredShopDomains}::text[],
       ${filteredSubscriberIds}::bigint[],
-      ${filteredTokenIds}::bigint[]
-    ) AS u(campaign_id, shop_domain, subscriber_id, token_id)
+      ${filteredTokenIds}::bigint[],
+      ${filteredExternalIds}::text[],
+      ${filteredUserAgents}::text[]
+    ) AS u(campaign_id, shop_domain, subscriber_id, token_id, external_id, user_agent)
     ON CONFLICT (campaign_id, subscriber_id) DO NOTHING
     RETURNING subscriber_id, token_id
   `;
@@ -7556,6 +7575,10 @@ export const sendCampaign = async (
         shopDomain,
         subscriberId: Number(item.subscriber_id),
         tokenId: Number(item.token_id),
+        externalId: item.external_id ? String(item.external_id) : null,
+        userAgent: (item as { user_agent?: string | null }).user_agent
+          ? String((item as { user_agent?: string | null }).user_agent)
+          : null,
         messageId: null,
       }));
       const claimedSlots = await claimCampaignDeliverySlots(sql, claimRows);
@@ -8619,6 +8642,7 @@ export const clearWelcomeAutomationHistory = async (shopDomain: string) => {
 export const trackCampaignClick = async (input: TrackCampaignClickInput) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const normalizedExternalId = input.externalId?.trim() || null;
 
   const subscriberRows = input.externalId
     ? await sql`
@@ -8636,6 +8660,7 @@ export const trackCampaignClick = async (input: TrackCampaignClickInput) => {
       campaign_id,
       shop_domain,
       subscriber_id,
+      external_id,
       target_url,
       user_agent,
       ip_address,
@@ -8645,10 +8670,26 @@ export const trackCampaignClick = async (input: TrackCampaignClickInput) => {
       ${input.campaignId},
       ${input.shopDomain},
       ${subscriberId},
+      ${normalizedExternalId},
       ${input.targetUrl},
       ${input.userAgent ?? null},
       ${input.ipAddress ?? null},
       ${input.referrer ?? null}
+    )
+  `;
+
+  await sql`
+    UPDATE campaign_deliveries
+    SET clicked_at = NOW()
+    WHERE id = (
+      SELECT id
+      FROM campaign_deliveries
+      WHERE campaign_id = ${input.campaignId}
+        AND shop_domain = ${input.shopDomain}
+        AND clicked_at IS NULL
+        ${normalizedExternalId ? sql`AND external_id = ${normalizedExternalId}` : subscriberId ? sql`AND subscriber_id = ${subscriberId}` : sql``}
+      ORDER BY delivered_at DESC
+      LIMIT 1
     )
   `;
 
@@ -9153,6 +9194,167 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     }));
   };
 
+  const fetchCampaignClickFingerprintFallback = async (campaignId?: string | null) => {
+    const ipAddress = input.ipAddress?.trim() || null;
+    const userAgent = input.userAgent?.trim() || null;
+
+    if (!ipAddress && !userAgent) {
+      return [] as CampaignTouch[];
+    }
+
+    let rows: Array<{ id: number | string; campaign_id: string; clicked_at: string | Date }> = [];
+
+    if (ipAddress && userAgent) {
+      rows = campaignId
+        ? await sql`
+          SELECT id, campaign_id, clicked_at
+          FROM campaign_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND campaign_id = ${campaignId}
+            AND ip_address = ${ipAddress}
+            AND user_agent = ${userAgent}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        `
+        : await sql`
+          SELECT id, campaign_id, clicked_at
+          FROM campaign_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND ip_address = ${ipAddress}
+            AND user_agent = ${userAgent}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        `;
+    } else if (ipAddress) {
+      rows = campaignId
+        ? await sql`
+          SELECT id, campaign_id, clicked_at
+          FROM campaign_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND campaign_id = ${campaignId}
+            AND ip_address = ${ipAddress}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        `
+        : await sql`
+          SELECT id, campaign_id, clicked_at
+          FROM campaign_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND ip_address = ${ipAddress}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        `;
+    } else if (userAgent) {
+      rows = campaignId
+        ? await sql`
+          SELECT id, campaign_id, clicked_at
+          FROM campaign_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND campaign_id = ${campaignId}
+            AND user_agent = ${userAgent}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        `
+        : await sql`
+          SELECT id, campaign_id, clicked_at
+          FROM campaign_clicks
+          WHERE shop_domain = ${input.shopDomain}
+            AND clicked_at >= ${windowStart}
+            AND user_agent = ${userAgent}
+          ORDER BY clicked_at DESC
+          LIMIT 20
+        `;
+    }
+
+    return rows.map((row) => ({
+      id: Number(row.id),
+      campaignId: String(row.campaign_id),
+      touchedAt: new Date(String(row.clicked_at)),
+      table: 'campaign_clicks' as const,
+    }));
+  };
+
+  const fetchCampaignDeliveryFingerprintFallback = async (campaignId?: string | null) => {
+    const userAgent = input.userAgent?.trim() || null;
+    if (!userAgent) {
+      return [] as CampaignTouch[];
+    }
+
+    const rows = campaignId
+      ? await sql`
+        SELECT id, campaign_id, delivered_at
+        FROM campaign_deliveries
+        WHERE shop_domain = ${input.shopDomain}
+          AND delivered_at >= ${windowStart}
+          AND campaign_id = ${campaignId}
+          AND user_agent = ${userAgent}
+        ORDER BY delivered_at DESC
+        LIMIT 20
+      `
+      : await sql`
+        SELECT id, campaign_id, delivered_at
+        FROM campaign_deliveries
+        WHERE shop_domain = ${input.shopDomain}
+          AND delivered_at >= ${windowStart}
+          AND user_agent = ${userAgent}
+        ORDER BY delivered_at DESC
+        LIMIT 20
+      `;
+
+    return rows.map((row) => ({
+      id: Number(row.id),
+      campaignId: String(row.campaign_id),
+      touchedAt: new Date(String(row.delivered_at)),
+      table: 'campaign_deliveries' as const,
+    }));
+  };
+
+  const fetchCampaignTouchesByCampaignId = async (
+    campaignId: string,
+    mode: 'click' | 'impression',
+  ) => {
+    if (mode === 'click') {
+      const rows = await sql`
+        SELECT id, campaign_id, clicked_at
+        FROM campaign_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND campaign_id = ${campaignId}
+          AND clicked_at >= ${windowStart}
+        ORDER BY clicked_at DESC
+        LIMIT 20
+      `;
+
+      return rows.map((row) => ({
+        id: Number(row.id),
+        campaignId: String(row.campaign_id),
+        touchedAt: new Date(String(row.clicked_at)),
+        table: 'campaign_clicks' as const,
+      }));
+    }
+
+    const rows = await sql`
+      SELECT id, campaign_id, delivered_at
+      FROM campaign_deliveries
+      WHERE shop_domain = ${input.shopDomain}
+        AND campaign_id = ${campaignId}
+        AND delivered_at >= ${windowStart}
+      ORDER BY delivered_at DESC
+      LIMIT 20
+    `;
+
+    return rows.map((row) => ({
+      id: Number(row.id),
+      campaignId: String(row.campaign_id),
+      touchedAt: new Date(String(row.delivered_at)),
+      table: 'campaign_deliveries' as const,
+    }));
+  };
+
   const windowDays = settings.attributionModel === 'click'
     ? Math.max(1, settings.clickWindowDays)
     : Math.max(1, settings.impressionWindowDays);
@@ -9166,10 +9368,13 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       ? (await sql`
         SELECT c.id, c.campaign_id, c.clicked_at
         FROM campaign_clicks c
-        JOIN subscribers s ON s.id = c.subscriber_id
+        LEFT JOIN subscribers s ON s.id = c.subscriber_id
         WHERE c.shop_domain = ${input.shopDomain}
-          AND s.external_id = ANY(${externalIdCandidates})
           AND c.clicked_at >= ${windowStart}
+          AND (
+            c.external_id = ANY(${externalIdCandidates})
+            OR s.external_id = ANY(${externalIdCandidates})
+          )
         ORDER BY c.clicked_at DESC
       `).map((row) => ({
         id: Number(row.id),
@@ -9178,6 +9383,16 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
         table: 'campaign_clicks' as const,
       }))
       : [];
+
+    if (campaignTouches.length === 0 && input.campaignId && !automationRuleKeyFromCampaign) {
+      campaignTouches = await fetchCampaignTouchesByCampaignId(String(input.campaignId), 'click');
+    }
+
+    if (campaignTouches.length === 0) {
+      campaignTouches = await fetchCampaignClickFingerprintFallback(
+        input.campaignId && !automationRuleKeyFromCampaign ? String(input.campaignId) : null,
+      );
+    }
 
     automationTouches = externalIdCandidates.length > 0
       ? (await sql`
@@ -9208,10 +9423,13 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       ? (await sql`
         SELECT c.id, c.campaign_id, c.clicked_at
         FROM campaign_clicks c
-        JOIN subscribers s ON s.id = c.subscriber_id
+        LEFT JOIN subscribers s ON s.id = c.subscriber_id
         WHERE c.shop_domain = ${input.shopDomain}
-          AND s.external_id = ANY(${externalIdCandidates})
           AND c.clicked_at >= ${windowStart}
+          AND (
+            c.external_id = ANY(${externalIdCandidates})
+            OR s.external_id = ANY(${externalIdCandidates})
+          )
         ORDER BY c.clicked_at DESC
       `).map((row) => ({
         id: Number(row.id),
@@ -9225,10 +9443,13 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       ? (await sql`
         SELECT d.id, d.campaign_id, d.delivered_at
         FROM campaign_deliveries d
-        JOIN subscribers s ON s.id = d.subscriber_id
+        LEFT JOIN subscribers s ON s.id = d.subscriber_id
         WHERE d.shop_domain = ${input.shopDomain}
-          AND s.external_id = ANY(${externalIdCandidates})
           AND d.delivered_at >= ${windowStart}
+          AND (
+            d.external_id = ANY(${externalIdCandidates})
+            OR s.external_id = ANY(${externalIdCandidates})
+          )
         ORDER BY d.delivered_at DESC
       `).map((row) => ({
         id: Number(row.id),
@@ -9241,21 +9462,14 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     campaignTouches = [...campaignClickTouches, ...campaignImpressionTouches]
       .sort((a, b) => b.touchedAt.getTime() - a.touchedAt.getTime());
 
-    if (campaignTouches.length === 0 && input.campaignId) {
-      const fallbackRows = await sql`
-        SELECT d.id, d.campaign_id, d.delivered_at
-        FROM campaign_deliveries d
-        WHERE d.shop_domain = ${input.shopDomain}
-          AND d.campaign_id = ${input.campaignId}
-          AND d.delivered_at >= ${windowStart}
-        ORDER BY d.delivered_at DESC
-      `;
-      campaignTouches = fallbackRows.map((row) => ({
-        id: Number(row.id),
-        campaignId: String(row.campaign_id),
-        touchedAt: new Date(String(row.delivered_at)),
-        table: 'campaign_deliveries' as const,
-      }));
+    if (campaignTouches.length === 0 && input.campaignId && !automationRuleKeyFromCampaign) {
+      campaignTouches = await fetchCampaignTouchesByCampaignId(String(input.campaignId), 'impression');
+    }
+
+    if (campaignTouches.length === 0) {
+      campaignTouches = await fetchCampaignDeliveryFingerprintFallback(
+        input.campaignId && !automationRuleKeyFromCampaign ? String(input.campaignId) : null,
+      );
     }
 
     const automationClickTouches = externalIdCandidates.length > 0
