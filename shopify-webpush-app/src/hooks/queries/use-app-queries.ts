@@ -152,19 +152,26 @@ export function useBrandingSettings() {
 
 export function useCampaignStats(from?: Date, to?: Date) {
   const shop = useShopDomain();
+  const isAllTime = !from && !to;
   const { fromIso, toIso } = useMemo(() => {
+    if (isAllTime) {
+      return { fromIso: 'all', toIso: 'all' };
+    }
+
     const range = resolveAnalyticsDateRange(
-      from && to ? { from, to } : undefined,
+      from ? { from, to: to ?? from } : undefined,
     );
     return { fromIso: range.fromIso, toIso: range.toIso };
-  }, [from?.getTime(), to?.getTime()]);
+  }, [from?.getTime(), to?.getTime(), isAllTime]);
 
   return useQuery({
     queryKey: queryKeys.campaignStats(shop, fromIso, toIso),
     queryFn: () => {
       const params = new URLSearchParams({ shop });
-      params.set('from', fromIso);
-      params.set('to', toIso);
+      if (!isAllTime) {
+        params.set('from', fromIso);
+        params.set('to', toIso);
+      }
       return fetchJson<Record<string, unknown>>(`/api/campaigns/stats?${params.toString()}`);
     },
     enabled: Boolean(shop),

@@ -10,6 +10,7 @@ import { CampaignsTable } from '@/components/campaigns/campaigns-table';
 import { CampaignStats } from '@/components/campaigns/campaign-stats';
 import { DateRangePicker } from '@/components/analytics/date-range-picker';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
+import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 
@@ -17,12 +18,13 @@ export default function CampaignsPage() {
   const [date, setDate] = useState<DateRange | undefined>(undefined);
   const { atLimit } = useImpressionLimit();
   const { data, isLoading, isFetching } = useCampaigns();
+  const statsPeriodLabel = formatCampaignDateRangeLabel(date);
 
   return (
     <PageLoadingShell
       title="Campaigns"
       isLoading={isLoading}
-      hasData={true}
+      hasData={Boolean(data)}
       isFetching={isFetching}
     >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
@@ -40,8 +42,11 @@ export default function CampaignsPage() {
       </div>
       
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold tracking-tight">Stats</h2>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold tracking-tight">Stats</h2>
+              <p className="text-sm text-muted-foreground">Showing metrics for {statsPeriodLabel}.</p>
+            </div>
             <DateRangePicker date={date} setDate={setDate} />
         </div>
         <CampaignStats date={date} />

@@ -23,7 +23,8 @@ export type OptimisticCampaign = {
   android_image_url?: string | null;
 };
 
-const pinnedCampaignsKey = (shop: string) => `pe:pinned-campaigns:${shop}`;
+const pinnedCampaignIdsKey = (shop: string) => `pe:pinned-campaign-ids:${shop}`;
+const pinnedCampaignSnapshotsKey = (shop: string) => `pe:pinned-campaign-snapshots:${shop}`;
 
 const readPinnedCampaignIds = (shop: string): string[] => {
   if (typeof window === 'undefined' || !shop) {
@@ -31,7 +32,7 @@ const readPinnedCampaignIds = (shop: string): string[] => {
   }
 
   try {
-    const raw = sessionStorage.getItem(pinnedCampaignsKey(shop));
+    const raw = sessionStorage.getItem(pinnedCampaignIdsKey(shop));
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed.map(String) : [];
   } catch {
@@ -45,7 +46,34 @@ const writePinnedCampaignIds = (shop: string, ids: string[]) => {
   }
 
   try {
-    sessionStorage.setItem(pinnedCampaignsKey(shop), JSON.stringify(ids.slice(0, 50)));
+    sessionStorage.setItem(pinnedCampaignIdsKey(shop), JSON.stringify(ids.slice(0, 50)));
+  } catch {
+    // Ignore storage quota errors.
+  }
+};
+
+const readPinnedSnapshots = (shop: string): Record<string, Record<string, unknown>> => {
+  if (typeof window === 'undefined' || !shop) {
+    return {};
+  }
+
+  try {
+    const raw = sessionStorage.getItem(pinnedCampaignSnapshotsKey(shop));
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, Record<string, unknown>>) : {};
+  } catch {
+    return {};
+  }
+};
+
+const writePinnedSnapshots = (shop: string, snapshots: Record<string, Record<string, unknown>>) => {
+  if (typeof window === 'undefined' || !shop) {
+    return;
+  }
+
+  try {
+    const entries = Object.entries(snapshots).slice(0, 50);
+    sessionStorage.setItem(pinnedCampaignSnapshotsKey(shop), JSON.stringify(Object.fromEntries(entries)));
   } catch {
     // Ignore storage quota errors.
   }
@@ -54,6 +82,30 @@ const writePinnedCampaignIds = (shop: string, ids: string[]) => {
 const pinCampaignId = (shop: string, campaignId: string) => {
   const next = [campaignId, ...readPinnedCampaignIds(shop).filter((id) => id !== campaignId)];
   writePinnedCampaignIds(shop, next);
+};
+
+const savePinnedSnapshot = (shop: string, campaign: Record<string, unknown>) => {
+  const id = String(campaign.id ?? '');
+  if (!id) {
+    return;
+  }
+
+  const snapshots = readPinnedSnapshots(shop);
+  snapshots[id] = campaign;
+  writePinnedSnapshots(shop, snapshots);
+};
+
+const removePinnedCampaign = (shop: string, campaignId: string) => {
+  writePinnedCampaignIds(
+    shop,
+    readPinnedCampaignIds(shop).filter((id) => id !== campaignId),
+  );
+
+  const snapshots = readPinnedSnapshots(shop);
+  if (snapshots[campaignId]) {
+    delete snapshots[campaignId];
+    writePinnedSnapshots(shop, snapshots);
+  }
 };
 
 const normalizeCampaignRecord = (campaign: Record<string, unknown>) => {
@@ -76,14 +128,26 @@ const normalizeCampaignRecord = (campaign: Record<string, unknown>) => {
 export const mergeCampaignListPayload = (
   previous: { ok?: boolean; campaigns?: unknown[] } | undefined,
   fresh: { ok?: boolean; campaigns?: unknown[] },
-  pinnedIds: string[] = [],
+  shop: string,
 ) => {
+  const pinnedIds = readPinnedCampaignIds(shop);
+  const snapshots = readPinnedSnapshots(shop);
+
   const freshList = Array.isArray(fresh.campaigns)
     ? fresh.campaigns.map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
     : [];
   const previousList = Array.isArray(previous?.campaigns)
     ? previous.campaigns.map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
     : [];
+
+  const freshIds = new Set(freshList.map((campaign) => String(campaign.id)));
+
+  for (const campaign of freshList) {
+    const id = String(campaign.id);
+    if (pinnedIds.includes(id)) {
+      removePinnedCampaign(shop, id);
+    }
+  }
 
   const byId = new Map<string, Record<string, unknown>>();
 
@@ -111,9 +175,21 @@ export const mergeCampaignListPayload = (
     );
   }
 
+  const activePinnedIds = readPinnedCampaignIds(shop);
+  for (const pinnedId of activePinnedIds) {
+    if (byId.has(pinnedId)) {
+      continue;
+    }
+
+    const snapshot = snapshots[pinnedId];
+    if (snapshot) {
+      byId.set(pinnedId, normalizeCampaignRecord(snapshot));
+    }
+  }
+
   const merged = Array.from(byId.values()).sort((left, right) => {
-    const leftPinned = pinnedIds.includes(String(left.id)) ? 1 : 0;
-    const rightPinned = pinnedIds.includes(String(right.id)) ? 1 : 0;
+    const leftPinned = activePinnedIds.includes(String(left.id)) ? 1 : 0;
+    const rightPinned = activePinnedIds.includes(String(right.id)) ? 1 : 0;
     if (leftPinned !== rightPinned) {
       return rightPinned - leftPinned;
     }
@@ -137,13 +213,13 @@ export const prependOptimisticCampaign = (
   pinCampaignId(shop, campaign.id);
 
   const normalized = normalizeCampaignRecord(campaign as unknown as Record<string, unknown>);
+  savePinnedSnapshot(shop, normalized);
 
   queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
-    const pinnedIds = readPinnedCampaignIds(shop);
     return mergeCampaignListPayload(current, {
       ok: true,
       campaigns: [normalized, ...Array.isArray(current?.campaigns) ? current.campaigns : []],
-    }, pinnedIds);
+    }, shop);
   });
 };
 
@@ -214,5 +290,5 @@ export const mergeCampaignsFromCache = (
   fresh: { ok?: boolean; campaigns?: unknown[] },
 ) => {
   const previous = queryClient.getQueryData<{ ok?: boolean; campaigns?: unknown[] }>(queryKeys.campaigns(shop));
-  return mergeCampaignListPayload(previous, fresh, readPinnedCampaignIds(shop));
+  return mergeCampaignListPayload(previous, fresh, shop);
 };

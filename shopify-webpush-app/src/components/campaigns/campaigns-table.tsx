@@ -1,21 +1,20 @@
 
 'use client';
 
-import { useState, useEffect, useMemo, startTransition } from "react";
+import { useState, useMemo, startTransition, useEffect } from "react";
 import Link from "next/link";
 import { formatDistanceToNow, isWithinInterval } from 'date-fns';
 import type { DateRange } from "react-day-picker";
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge";
-import { PlusCircle, Rocket, Users, Calendar, Hash, Copy, CheckCircle, Clock, AlertCircle } from "lucide-react"
+import { PlusCircle, Rocket, Users, Calendar, Hash, Copy, CheckCircle, Clock, AlertCircle, ChevronDown } from "lucide-react"
 import { Card, CardContent } from "../ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Skeleton } from "../ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
 import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
-import { useShopDomain } from '@/hooks/use-shop-domain';
 
 type Campaign = {
     id: string;
@@ -31,6 +30,11 @@ type Campaign = {
     createdAt?: string;
 };
 
+const CAMPAIGNS_PAGE_SIZE = 10;
+
+const tabTriggerClass =
+    "rounded-md px-4 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm data-[state=inactive]:bg-transparent";
+
 const TableSkeleton = () => (
     <div className="space-y-4">
         <Skeleton className="h-48 w-full" />
@@ -39,65 +43,63 @@ const TableSkeleton = () => (
     </div>
 )
 
-export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined }) {
-    const shopDomain = useShopDomain();
-    const { data, isLoading, isError, error: queryError } = useCampaigns();
-    const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-    const [error, setError] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState('sent');
-
-    const mapApiCampaign = (campaign: any): Campaign => {
-        const statusMap: Record<string, Campaign['status']> = {
-            draft: 'Draft',
-            scheduled: 'Scheduled',
-            queued: 'Scheduled',
-            sending: 'Sending',
-            sent: 'Sent',
-            archived: 'Archived',
-            paused: 'Paused',
-        };
-
-        const clickCount = Number(campaign.click_count ?? 0);
-        const deliveryCount = Number(campaign.delivery_count ?? 0);
-        const ctr = deliveryCount > 0 ? `${((clickCount / deliveryCount) * 100).toFixed(1)}%` : '0.0%';
-
-        return {
-            id: String(campaign.id),
-            name: campaign.title ?? 'Untitled Campaign',
-            message: campaign.body ?? '',
-            imagePreviewUrl: pickCampaignBarImageUrl({
-                imageUrl: campaign.image_url ?? campaign.imageUrl,
-                windowsImageUrl: campaign.windows_image_url ?? campaign.windowsImageUrl,
-                macosImageUrl: campaign.macos_image_url ?? campaign.macosImageUrl,
-                androidImageUrl: campaign.android_image_url ?? campaign.androidImageUrl,
-            }),
-            sendTime: campaign.sent_at ?? campaign.created_at ?? new Date().toISOString(),
-            segment: campaign.segment_id === 'all' || !campaign.segment_id
-                ? 'All Subscribers'
-                : `Segment ${campaign.segment_id}`,
-            reached: deliveryCount,
-            clickRate: ctr,
-            sales: Number(campaign.revenue_cents ?? 0) / 100,
-            status: statusMap[String(campaign.status ?? '').toLowerCase()] ?? 'Draft',
-            createdAt: campaign.created_at ?? new Date().toISOString(),
-        };
+const mapApiCampaign = (campaign: Record<string, unknown>): Campaign => {
+    const statusMap: Record<string, Campaign['status']> = {
+        draft: 'Draft',
+        scheduled: 'Scheduled',
+        queued: 'Scheduled',
+        sending: 'Sending',
+        sent: 'Sent',
+        archived: 'Archived',
+        paused: 'Paused',
     };
 
-    useEffect(() => {
-        if (!data?.campaigns) {
-            return;
+    const clickCount = Number(campaign.click_count ?? campaign.clickCount ?? 0);
+    const deliveryCount = Number(campaign.delivery_count ?? campaign.deliveryCount ?? 0);
+    const ctr = deliveryCount > 0 ? `${((clickCount / deliveryCount) * 100).toFixed(1)}%` : '0.0%';
+
+    return {
+        id: String(campaign.id),
+        name: String(campaign.title ?? 'Untitled Campaign'),
+        message: String(campaign.body ?? ''),
+        imagePreviewUrl: pickCampaignBarImageUrl({
+            imageUrl: (campaign.image_url ?? campaign.imageUrl) as string | null | undefined,
+            windowsImageUrl: (campaign.windows_image_url ?? campaign.windowsImageUrl) as string | null | undefined,
+            macosImageUrl: (campaign.macos_image_url ?? campaign.macosImageUrl) as string | null | undefined,
+            androidImageUrl: (campaign.android_image_url ?? campaign.androidImageUrl) as string | null | undefined,
+        }),
+        sendTime: String(campaign.sent_at ?? campaign.sentAt ?? campaign.created_at ?? campaign.createdAt ?? new Date().toISOString()),
+        segment: campaign.segment_id === 'all' || !campaign.segment_id
+            ? 'All Subscribers'
+            : `Segment ${String(campaign.segment_id ?? campaign.segmentId ?? '')}`,
+        reached: deliveryCount,
+        clickRate: ctr,
+        sales: Number(campaign.revenue_cents ?? campaign.revenueCents ?? 0) / 100,
+        status: statusMap[String(campaign.status ?? '').toLowerCase()] ?? 'Draft',
+        createdAt: String(campaign.created_at ?? campaign.createdAt ?? new Date().toISOString()),
+    };
+};
+
+export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined }) {
+    const { data, isLoading, isError, error: queryError, isFetching } = useCampaigns();
+    const [activeTab, setActiveTab] = useState('sent');
+    const [visibleCount, setVisibleCount] = useState(CAMPAIGNS_PAGE_SIZE);
+
+    const campaigns = useMemo(() => {
+        if (!Array.isArray(data?.campaigns)) {
+            return [];
         }
-        setCampaigns((data.campaigns as unknown[]).map(mapApiCampaign));
-        setError(null);
+
+        return (data.campaigns as Record<string, unknown>[]).map(mapApiCampaign);
     }, [data]);
 
-    useEffect(() => {
-        if (isError) {
-            setError(queryError instanceof Error ? queryError.message : 'Failed to load campaigns.');
-        }
-    }, [isError, queryError]);
+    const error = isError
+        ? queryError instanceof Error
+            ? queryError.message
+            : 'Failed to load campaigns.'
+        : null;
 
-    const loading = isLoading && !data && campaigns.length === 0;
+    const loading = isLoading && campaigns.length === 0 && !data;
     
     const filteredCampaigns = useMemo(() => {
         let tabFiltered;
@@ -119,11 +121,22 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                  
                 const toDate = dateRange.to ?? dateRange.from!;
                 return isWithinInterval(campaignDate, { start: dateRange.from!, end: toDate });
-            } catch(e) {
+            } catch {
                 return false;
             }
         });
     }, [campaigns, activeTab, dateRange]);
+
+    useEffect(() => {
+        setVisibleCount(CAMPAIGNS_PAGE_SIZE);
+    }, [activeTab, dateRange?.from?.getTime(), dateRange?.to?.getTime()]);
+
+    const visibleCampaigns = useMemo(
+        () => filteredCampaigns.slice(0, visibleCount),
+        [filteredCampaigns, visibleCount],
+    );
+
+    const hasMoreCampaigns = filteredCampaigns.length > visibleCount;
 
     const tabCounts = useMemo(() => {
         return {
@@ -175,7 +188,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
 
     const renderCampaignsList = () => (
         <div className="space-y-4">
-            {filteredCampaigns.map(campaign => {
+            {visibleCampaigns.map(campaign => {
                 const ctr = Number.parseFloat(campaign.clickRate);
                 const clicks = Number.isFinite(ctr) ? Math.round(campaign.reached * (ctr / 100)) : null;
 
@@ -268,6 +281,19 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                     </Card>
                 );
             })}
+
+            {hasMoreCampaigns ? (
+                <div className="flex justify-center pt-2">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setVisibleCount((current) => current + CAMPAIGNS_PAGE_SIZE)}
+                    >
+                        <ChevronDown className="mr-2 h-4 w-4" />
+                        Show more ({Math.min(CAMPAIGNS_PAGE_SIZE, filteredCampaigns.length - visibleCount)} of {filteredCampaigns.length - visibleCount} remaining)
+                    </Button>
+                </div>
+            ) : null}
         </div>
     );
 
@@ -286,12 +312,23 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
 
     return (
         <div className="space-y-4">
-            <h2 className="text-xl font-semibold tracking-tight">Campaign History</h2>
-            <Tabs defaultValue="sent" onValueChange={(value) => startTransition(() => setActiveTab(value))}>
-                <TabsList className="bg-white border shadow-sm">
-                    <TabsTrigger value="sent" className="data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:font-semibold">Sent <Badge variant={activeTab === 'sent' ? 'default' : 'secondary'} className="ml-2">{tabCounts.sent}</Badge></TabsTrigger>
-                    <TabsTrigger value="scheduled" className="data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:font-semibold">Scheduled <Badge variant={activeTab === 'scheduled' ? 'default' : 'secondary'} className="ml-2">{tabCounts.scheduled}</Badge></TabsTrigger>
-                    <TabsTrigger value="draft" className="data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:font-semibold">Drafts <Badge variant={activeTab === 'draft' ? 'default' : 'secondary'} className="ml-2">{tabCounts.draft}</Badge></TabsTrigger>
+            <div className="flex items-center justify-between gap-3">
+                <h2 className="text-xl font-semibold tracking-tight">Campaign History</h2>
+                {isFetching && campaigns.length > 0 ? (
+                    <span className="text-xs text-muted-foreground">Updating…</span>
+                ) : null}
+            </div>
+            <Tabs value={activeTab} onValueChange={(value) => startTransition(() => setActiveTab(value))}>
+                <TabsList className="bg-white border shadow-sm h-auto p-1 gap-1">
+                    <TabsTrigger value="sent" className={tabTriggerClass}>
+                        Sent <Badge variant={activeTab === 'sent' ? 'secondary' : 'outline'} className="ml-2">{tabCounts.sent}</Badge>
+                    </TabsTrigger>
+                    <TabsTrigger value="scheduled" className={tabTriggerClass}>
+                        Scheduled <Badge variant={activeTab === 'scheduled' ? 'secondary' : 'outline'} className="ml-2">{tabCounts.scheduled}</Badge>
+                    </TabsTrigger>
+                    <TabsTrigger value="draft" className={tabTriggerClass}>
+                        Drafts <Badge variant={activeTab === 'draft' ? 'secondary' : 'outline'} className="ml-2">{tabCounts.draft}</Badge>
+                    </TabsTrigger>
                 </TabsList>
                 <TabsContent value={activeTab} className="mt-6">
                     {renderContent()}

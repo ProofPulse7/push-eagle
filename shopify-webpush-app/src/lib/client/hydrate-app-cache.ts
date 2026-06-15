@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
+import { mergeCampaignsFromCache } from '@/lib/client/optimistic-campaigns';
 import { queryKeys } from '@/lib/client/query-keys';
 
 export type AppBootstrapPayload = {
@@ -35,10 +36,13 @@ export const hydrateAppCache = (
     ...payload.merchantOverview,
   });
 
-  queryClient.setQueryData(queryKeys.campaigns(shopDomain), {
-    ok: true,
-    campaigns: payload.campaigns,
-  });
+  queryClient.setQueryData(
+    queryKeys.campaigns(shopDomain),
+    mergeCampaignsFromCache(queryClient, shopDomain, {
+      ok: true,
+      campaigns: payload.campaigns,
+    }),
+  );
 
   queryClient.setQueryData(queryKeys.automationsOverview(shopDomain), {
     ok: true,
