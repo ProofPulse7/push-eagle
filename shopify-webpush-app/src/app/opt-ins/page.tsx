@@ -13,8 +13,15 @@ import { Settings, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { useMerchantOverview, useOptInSettings, useSubscribersOverview } from '@/hooks/queries/use-app-queries';
+import {
+  useMerchantOverview,
+  useOptInSettings,
+  useSaveOptInSettings,
+  useSubscribersOverview,
+} from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { useToast } from '@/hooks/use-toast';
+import { mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 
 const StatBlock = ({ label, value }: { label: string, value: string | number }) => (
     <div className="flex flex-col gap-1">
@@ -45,39 +52,44 @@ const TopStat = ({ label, value, tooltipText }: { label: string, value: string |
 
 export default function OptInsPage() {
   const shopDomain = useShopDomain();
+  const { toast } = useToast();
   const { data: optInData } = useOptInSettings();
+  const saveOptInMutation = useSaveOptInSettings();
   const { data: overviewData } = useMerchantOverview();
   const { data: subscribersData } = useSubscribersOverview();
-  const [livePromptType, setLivePromptType] = useState<'browser' | 'custom'>('custom');
   const [selectedPromptType, setSelectedPromptType] = useState<'browser' | 'custom'>('custom');
-  const [savingPromptType, setSavingPromptType] = useState(false);
-  const [iosWidgetEnabled, setIosWidgetEnabled] = useState(true);
 
-  useEffect(() => {
-    if (!optInData?.ok) {
-      return;
+  const mergedSettings = useMemo(() => {
+    if (!shopDomain) {
+      return null;
     }
 
-    const serverPromptType = optInData.promptType === 'browser' ? 'browser' : 'custom';
-    setLivePromptType(serverPromptType);
-    setSelectedPromptType(serverPromptType);
-    setIosWidgetEnabled(optInData.iosWidgetEnabled !== false);
-  }, [optInData]);
+    return mergePendingSettings(shopDomain, 'optIn', optInData?.ok ? optInData : null);
+  }, [shopDomain, optInData]);
+
+  const livePromptType = mergedSettings?.promptType === 'browser' ? 'browser' : 'custom';
+  const iosWidgetEnabled = mergedSettings?.iosWidgetEnabled !== false;
+
+  useEffect(() => {
+    if (mergedSettings) {
+      setSelectedPromptType(mergedSettings.promptType === 'browser' ? 'browser' : 'custom');
+    }
+  }, [mergedSettings?.promptType]);
 
   const settingsSummary = useMemo(() => {
-    if (!optInData?.ok) {
+    if (!mergedSettings || (!optInData?.ok && !mergedSettings.title)) {
       return null;
     }
 
     return {
-      title: String(optInData.title ?? 'Subscribe for updates'),
-      position: `${optInData.desktopPosition} (desktop), ${optInData.mobilePosition} (mobile)`,
-      desktopDelay: Number(optInData.desktopDelaySeconds ?? 0),
-      mobileDelay: Number(optInData.mobileDelaySeconds ?? 0),
-      hideForDays: Number(optInData.hideForDays ?? 0),
-      maxDisplaysPerSession: Number(optInData.maxDisplaysPerSession ?? 0),
+      title: String(mergedSettings.title ?? 'Subscribe for updates'),
+      position: `${mergedSettings.desktopPosition ?? 'top-center'} (desktop), ${mergedSettings.mobilePosition ?? 'top'} (mobile)`,
+      desktopDelay: Number(mergedSettings.desktopDelaySeconds ?? 0),
+      mobileDelay: Number(mergedSettings.mobileDelaySeconds ?? 0),
+      hideForDays: Number(mergedSettings.hideForDays ?? 0),
+      maxDisplaysPerSession: Number(mergedSettings.maxDisplaysPerSession ?? 0),
     };
-  }, [optInData]);
+  }, [mergedSettings, optInData?.ok]);
 
   const stats = useMemo(() => {
     const subscribed = Number(
@@ -95,56 +107,46 @@ export default function OptInsPage() {
     setSelectedPromptType(next);
   };
 
-  const savePromptType = async () => {
+  const savePromptType = () => {
     if (!shopDomain) {
       return;
     }
 
-    setLivePromptType(selectedPromptType);
-    try {
-      setSavingPromptType(true);
-      const res = await fetch('/api/settings/opt-in', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          shopDomain,
-          promptType: selectedPromptType,
-        }),
-      });
-      const data = await res.json().catch(() => ({ ok: false }));
-      if (!data?.ok) {
-        setLivePromptType(livePromptType);
-      }
-    } catch (_error) {
-      setLivePromptType(livePromptType);
-    } finally {
-      setSavingPromptType(false);
-    }
+    const body = { promptType: selectedPromptType };
+    writePendingSettings(shopDomain, 'optIn', body);
+    saveOptInMutation.mutate(body, {
+      onSuccess: () => {
+        toast({
+          title: 'Prompt type saved',
+          description: `${selectedPromptType === 'browser' ? 'Browser' : 'Custom'} prompt is now live.`,
+        });
+      },
+      onError: (error) => {
+        toast({
+          variant: 'destructive',
+          title: 'Failed to save prompt type',
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+      },
+    });
   };
 
-  const updateIosWidgetEnabled = async (checked: boolean) => {
-    setIosWidgetEnabled(checked);
-
+  const updateIosWidgetEnabled = (checked: boolean) => {
     if (!shopDomain) {
       return;
     }
 
-    try {
-      await fetch('/api/settings/opt-in', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          shopDomain,
-          iosWidgetEnabled: checked,
-        }),
-      });
-    } catch (_error) {
-      // UI already reflects the latest choice.
-    }
+    const body = { iosWidgetEnabled: checked };
+    writePendingSettings(shopDomain, 'optIn', body);
+    saveOptInMutation.mutate(body, {
+      onError: (error) => {
+        toast({
+          variant: 'destructive',
+          title: 'Failed to update iOS widget',
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+      },
+    });
   };
 
   const statusLabel = useMemo(() => {
@@ -258,9 +260,9 @@ export default function OptInsPage() {
             <div className="mt-4 flex justify-end">
               <Button
                 onClick={savePromptType}
-                disabled={!shopDomain || savingPromptType || selectedPromptType === livePromptType}
+                disabled={!shopDomain || selectedPromptType === livePromptType}
               >
-                {savingPromptType ? 'SAVING...' : 'SAVE PROMPT TYPE'}
+                SAVE PROMPT TYPE
               </Button>
             </div>
             <div className="mt-4 rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">

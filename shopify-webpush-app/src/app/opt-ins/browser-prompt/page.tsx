@@ -133,8 +133,6 @@ export default function BrowserPromptPage() {
         );
     }
 
-    const saving = saveOptInMutation.isPending;
-
     return (
         <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
             <div className="bg-card p-6 rounded-lg relative overflow-hidden border">
@@ -171,7 +169,7 @@ export default function BrowserPromptPage() {
                                     <Label>Desktop</Label>
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm text-muted-foreground whitespace-nowrap">Show prompt after</p>
-                                        <Select value={desktopDelaySeconds} onValueChange={setDesktopDelaySeconds} disabled={saving}>
+                                        <Select value={desktopDelaySeconds} onValueChange={setDesktopDelaySeconds}>
                                             <SelectTrigger className="w-full">
                                                 <SelectValue />
                                             </SelectTrigger>
@@ -186,7 +184,7 @@ export default function BrowserPromptPage() {
                                     <Label>Mobile</Label>
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm text-muted-foreground whitespace-nowrap">Show prompt after</p>
-                                        <Select value={mobileDelaySeconds} onValueChange={setMobileDelaySeconds} disabled={saving}>
+                                        <Select value={mobileDelaySeconds} onValueChange={setMobileDelaySeconds}>
                                             <SelectTrigger className="w-full">
                                                 <SelectValue />
                                             </SelectTrigger>
@@ -224,7 +222,7 @@ export default function BrowserPromptPage() {
                 <Button variant="outline" asChild>
                     <Link href="/opt-ins">CANCEL</Link>
                 </Button>
-                <Button onClick={saveChanges} disabled={saving}>{saving ? 'SAVING...' : 'SAVE CHANGES'}</Button>
+                <Button onClick={saveChanges}>SAVE CHANGES</Button>
             </div>
         </div>
     );

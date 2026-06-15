@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import { ArrowLeft, Book, ChevronLeft, ChevronRight, Loader2, RefreshCw, Share, Smile, Square, X } from 'lucide-react';
+import { ArrowLeft, Book, ChevronLeft, ChevronRight, RefreshCw, Share, Smile, Square, X } from 'lucide-react';
 
 import { PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
@@ -15,26 +15,11 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Textarea } from '@/components/ui/textarea';
 import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
+import { useOptInSettings, useSaveOptInSettings } from '@/hooks/queries/use-app-queries';
+import { useShopDomain } from '@/hooks/use-shop-domain';
+import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
-
-type IOSWidgetSettingsResponse = {
-  ok: boolean;
-  iosWidgetEnabled: boolean;
-  iosWidgetTitle: string;
-  iosWidgetMessage: string;
-  error?: string;
-};
-
-const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 25000) => {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-};
 
 const ShareIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" {...props}>
@@ -111,152 +96,84 @@ const IOSWidgetPreview = ({ enabled, title, message, storeUrl }: { enabled: bool
 };
 
 export default function IOSWidgetPage() {
-  const { shopDomain, storeUrl } = useSettings();
+  const shopDomain = useShopDomain();
+  const { storeUrl } = useSettings();
   const { toast } = useToast();
-  const loadedShopRef = useRef<string | null>(null);
+  const { data: optInData, isLoading: optInLoading } = useOptInSettings();
+  const saveOptInMutation = useSaveOptInSettings();
 
   const [enabled, setEnabled] = useState(true);
   const [title, setTitle] = useState('Get notifications on your iPhone or iPad');
   const [message, setMessage] = useState("Add this store to your Home Screen. Then open it from there and we'll ask for notification permission using your saved opt-in settings. Tap {{share icon}} and choose 'Add to Home Screen'.");
-  const [resolvedShopDomain, setResolvedShopDomain] = useState('');
-  const [queryShopDomain, setQueryShopDomain] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-
-  const normalizeShopDomain = (value: string) => value.trim().toLowerCase();
-  const isValidShopDomain = (value: string) => value.endsWith('.myshopify.com');
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    const fromQuery = normalizeShopDomain(new URLSearchParams(window.location.search).get('shop') || '');
-    setQueryShopDomain(fromQuery);
-  }, []);
-
-  useEffect(() => {
-    const fromContext = normalizeShopDomain(shopDomain || '');
-    const fromStorage = normalizeShopDomain(localStorage.getItem('shopDomain') || '');
-    const candidate = [fromContext, queryShopDomain, fromStorage].find((value) => value && isValidShopDomain(value)) || '';
-    setResolvedShopDomain(candidate);
-  }, [queryShopDomain, shopDomain]);
-
-  useEffect(() => {
-    setLoadError(null);
-
-    if (!resolvedShopDomain) {
-      setLoading(false);
-      setLoadError('Missing Shopify shop context. Re-open the app from Shopify Admin so the shop parameter is available.');
+    if (!shopDomain) {
+      setHydrated(false);
       return;
     }
 
-    if (loadedShopRef.current === resolvedShopDomain) {
-      setLoading(false);
+    if (!optInData?.ok && !hasPendingSettings(shopDomain, 'optIn')) {
+      if (!optInLoading) {
+        setHydrated(false);
+      }
       return;
     }
 
-    let isMounted = true;
-    setLoading(true);
+    const merged = mergePendingSettings(shopDomain, 'optIn', optInData);
+    setEnabled(merged.iosWidgetEnabled !== false);
+    setTitle(String(merged.iosWidgetTitle ?? title));
+    setMessage(String(merged.iosWidgetMessage ?? message));
+    setHydrated(true);
+  }, [shopDomain, optInData, optInLoading]);
 
-    fetchWithTimeout(`/api/settings/opt-in?shop=${encodeURIComponent(resolvedShopDomain)}`)
-      .then(async (res) => {
-        const data = (await res.json()) as IOSWidgetSettingsResponse;
-        if (!res.ok || !data?.ok || !isMounted) {
-          throw new Error(data?.error ?? 'Failed to load iOS widget settings.');
-        }
-
-        setEnabled(Boolean(data.iosWidgetEnabled));
-        setTitle(data.iosWidgetTitle);
-        setMessage(data.iosWidgetMessage);
-        loadedShopRef.current = resolvedShopDomain;
-      })
-      .catch((error) => {
-        if (!isMounted) {
-          return;
-        }
-
-        const nextMessage = error instanceof Error
-          ? (error.name === 'AbortError' ? 'Loading settings timed out. Please refresh and try again.' : error.message)
-          : 'Unexpected error while loading iOS widget settings.';
-        setLoadError(nextMessage);
-        toast({
-          variant: 'destructive',
-          title: 'Failed to load iOS widget settings',
-          description: nextMessage,
-        });
-      })
-      .finally(() => {
-        if (isMounted) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [resolvedShopDomain, toast]);
-
-  const saveChanges = async () => {
-    if (!resolvedShopDomain) {
-      const nextMessage = 'Open the dashboard from a connected Shopify store before saving iOS widget settings.';
-      setSaveStatus({ type: 'error', message: nextMessage });
+  const saveChanges = () => {
+    if (!shopDomain) {
       toast({
         variant: 'destructive',
         title: 'Shop domain required',
-        description: nextMessage,
+        description: 'Open the dashboard from Shopify Admin before saving iOS widget settings.',
       });
       return;
     }
 
-    setSaving(true);
-    setSaveStatus(null);
+    const body = {
+      iosWidgetEnabled: enabled,
+      iosWidgetTitle: title,
+      iosWidgetMessage: message,
+    };
 
-    try {
-      const response = await fetchWithTimeout('/api/settings/opt-in', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          shopDomain: resolvedShopDomain,
-          iosWidgetEnabled: enabled,
-          iosWidgetTitle: title,
-          iosWidgetMessage: message,
-        }),
-      });
-
-      const raw = await response.text();
-      const result = (raw ? JSON.parse(raw) : {}) as IOSWidgetSettingsResponse;
-      if (!response.ok || !result?.ok) {
-        throw new Error(result?.error ?? 'Failed to save iOS widget settings.');
-      }
-
-      const savedAt = new Date().toLocaleTimeString();
-      const nextMessage = `iOS widget settings saved successfully at ${savedAt}.`;
-      setSaveStatus({ type: 'success', message: nextMessage });
-      toast({
-        title: 'iOS widget saved',
-        description: 'The storefront will use this Home Screen onboarding copy for iPhone and iPad visitors.',
-      });
-    } catch (error) {
-      const nextMessage = error instanceof Error
-        ? (error.name === 'AbortError' ? 'Save request timed out. Please try again.' : error.message)
-        : 'Unexpected error while saving iOS widget settings.';
-      setSaveStatus({ type: 'error', message: nextMessage });
-      toast({
-        variant: 'destructive',
-        title: 'Save failed',
-        description: nextMessage,
-      });
-    } finally {
-      setSaving(false);
-    }
+    writePendingSettings(shopDomain, 'optIn', body);
+    saveOptInMutation.mutate(body, {
+      onSuccess: () => {
+        toast({
+          title: 'iOS widget saved',
+          description: 'The storefront will use this Home Screen onboarding copy for iPhone and iPad visitors.',
+        });
+      },
+      onError: (error) => {
+        toast({
+          variant: 'destructive',
+          title: 'Save failed',
+          description: error instanceof Error ? error.message : 'Unexpected error while saving.',
+        });
+      },
+    });
   };
 
   const handleMessageEmojiSelect = (emoji: { emoji: string }) => {
     setMessage((prev) => prev + emoji.emoji);
   };
 
-  if (loading && !loadError) {
+  if (!shopDomain) {
+    return (
+      <div className="min-h-screen">
+        <PageLoadingView title="iOS widget" description="Waiting for shop context…" />
+      </div>
+    );
+  }
+
+  if (!hydrated && optInLoading) {
     return (
       <div className="min-h-screen">
         <PageLoadingView title="iOS widget" />
@@ -279,18 +196,6 @@ export default function IOSWidgetPage() {
         </div>
       </div>
 
-      {loadError ? (
-        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          Failed to load saved settings: {loadError}
-        </div>
-      ) : null}
-
-      {saveStatus ? (
-        <div className={`rounded-md border px-4 py-3 text-sm ${saveStatus.type === 'success' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-destructive/40 bg-destructive/10 text-destructive'}`}>
-          {saveStatus.message}
-        </div>
-      ) : null}
-
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
         <Card>
           <CardHeader>
@@ -310,16 +215,16 @@ export default function IOSWidgetPage() {
 
             <div className="space-y-2">
               <Label htmlFor="title">Title</Label>
-              <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} disabled={loading} />
+              <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="message">Message</Label>
               <div className="relative">
-                <Textarea id="message" value={message} onChange={(e) => setMessage(e.target.value)} className="min-h-[140px] pr-10" disabled={loading} />
+                <Textarea id="message" value={message} onChange={(e) => setMessage(e.target.value)} className="min-h-[140px] pr-10" />
                 <Popover>
                   <PopoverTrigger asChild>
-                    <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-8 w-8 text-muted-foreground" disabled={loading}>
+                    <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-8 w-8 text-muted-foreground">
                       <Smile className="h-4 w-4" />
                     </Button>
                   </PopoverTrigger>
@@ -356,10 +261,7 @@ export default function IOSWidgetPage() {
         <Button variant="outline" asChild>
           <Link href="/opt-ins">Cancel</Link>
         </Button>
-        <Button onClick={saveChanges} disabled={loading || saving}>
-          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-          {loading ? 'Loading...' : saving ? 'Saving...' : 'Save Changes'}
-        </Button>
+        <Button onClick={saveChanges}>Save Changes</Button>
       </div>
     </div>
   );

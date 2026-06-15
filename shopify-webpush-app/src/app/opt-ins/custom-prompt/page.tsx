@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Upload, Crop, Smile, Check, Trash2, ImageIcon, Wifi, Signal, Battery, Square, Circle as CircleIcon, Triangle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Upload, Crop, Smile, Check, Trash2, ImageIcon, Wifi, Signal, Battery, Square, Circle as CircleIcon, Triangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -19,43 +19,16 @@ import { ImageEditorSheet } from '@/components/composer/editor-parts/image-edito
 import { PageLoadingView } from '@/components/ui/loading-ui';
 import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
+import { useOptInSettings, useSaveOptInSettings } from '@/hooks/queries/use-app-queries';
+import { useShopDomain } from '@/hooks/use-shop-domain';
+import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
 
 type DesktopPosition = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
 type MobilePosition = 'top' | 'bottom';
 
-type OptInSettingsResponse = {
-    ok: boolean;
-    promptType: 'browser' | 'custom';
-    title: string;
-    message: string;
-    allowText: string;
-    allowBgColor: string;
-    allowTextColor: string;
-    laterText: string;
-    logoUrl: string | null;
-    desktopDelaySeconds: number;
-    mobileDelaySeconds: number;
-    maxDisplaysPerSession: number;
-    hideForDays: number;
-    desktopPosition: DesktopPosition;
-    mobilePosition: MobilePosition;
-    placementPreset: 'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom';
-    offsetX: number;
-    offsetY: number;
-    error?: string;
-};
-
-const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 25000) => {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-    try {
-        return await fetch(input, { ...init, signal: controller.signal });
-    } finally {
-        window.clearTimeout(timeoutId);
-    }
-};
+type PlacementPreset = 'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom';
 
 
 const DesktopScreen = ({ selected, onSelect }: { selected: DesktopPosition, onSelect: (pos: DesktopPosition) => void }) => {
@@ -221,39 +194,20 @@ export default function CustomPromptPage() {
     const [mobileDelaySeconds, setMobileDelaySeconds] = useState('10');
     const [maxDisplaysPerSession, setMaxDisplaysPerSession] = useState('10');
     const [hideForDays, setHideForDays] = useState('2');
-    const [placementPreset, setPlacementPreset] = useState<'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom'>('balanced');
+    const [placementPreset, setPlacementPreset] = useState<PlacementPreset>('balanced');
     const [offsetX, setOffsetX] = useState('0');
     const [offsetY, setOffsetY] = useState('0');
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const [loadError, setLoadError] = useState<string | null>(null);
-    const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-    const [resolvedShopDomain, setResolvedShopDomain] = useState('');
-    const [queryShopDomain, setQueryShopDomain] = useState('');
-    const { logo, setLogo, shopDomain } = useSettings();
+    const [hydrated, setHydrated] = useState(false);
+    const shopDomain = useShopDomain();
+    const { logo, setLogo } = useSettings();
     const { toast } = useToast();
+    const { data: optInData, isLoading: optInLoading } = useOptInSettings();
+    const saveOptInMutation = useSaveOptInSettings();
     const logoInputRef = useRef<HTMLInputElement | null>(null);
-    const loadedShopRef = useRef<string | null>(null);
 
     const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
 
     const delayOptions = [3, 5, 10, ...Array.from({ length: 11 }, (_, i) => 15 + i * 5)];
-
-    const normalizeShopDomain = (value: string) => value.trim().toLowerCase();
-    const isValidShopDomain = (value: string) => value.endsWith('.myshopify.com');
-
-    useEffect(() => {
-        const fromQuery = normalizeShopDomain(new URLSearchParams(window.location.search).get('shop') || '');
-        setQueryShopDomain(fromQuery);
-    }, []);
-
-    useEffect(() => {
-        const fromContext = normalizeShopDomain(shopDomain || '');
-        const fromStorage = normalizeShopDomain(localStorage.getItem('shopDomain') || '');
-
-        const candidate = [fromContext, queryShopDomain, fromStorage].find((value) => value && isValidShopDomain(value)) || '';
-        setResolvedShopDomain(candidate);
-    }, [queryShopDomain, shopDomain]);
 
     const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -272,149 +226,108 @@ export default function CustomPromptPage() {
     };
 
     useEffect(() => {
-        setLoadError(null);
-        if (!resolvedShopDomain) {
-            setLoading(false);
-            setLoadError('Missing Shopify shop context. Re-open the app from Shopify Admin so the shop parameter is available.');
+        if (!shopDomain) {
+            setHydrated(false);
             return;
         }
 
-        if (loadedShopRef.current === resolvedShopDomain) {
-            setLoading(false);
+        if (!optInData?.ok && !hasPendingSettings(shopDomain, 'optIn')) {
+            if (!optInLoading) {
+                setHydrated(false);
+            }
             return;
         }
 
-        let isMounted = true;
-        setLoading(true);
+        const data = mergePendingSettings(shopDomain, 'optIn', optInData);
+        setTitle(String(data.title ?? title));
+        setMessage(String(data.message ?? message));
+        setAllowText(String(data.allowText ?? allowText));
+        setAllowBgColor(String(data.allowBgColor ?? allowBgColor));
+        setAllowTextColor(String(data.allowTextColor ?? allowTextColor));
+        setLaterText(String(data.laterText ?? laterText));
+        setDesktopDelaySeconds(String(data.desktopDelaySeconds ?? desktopDelaySeconds));
+        setMobileDelaySeconds(String(data.mobileDelaySeconds ?? mobileDelaySeconds));
+        setMaxDisplaysPerSession(String(data.maxDisplaysPerSession ?? maxDisplaysPerSession));
+        setHideForDays(String(data.hideForDays ?? hideForDays));
+        setDesktopPosition((data.desktopPosition as DesktopPosition) ?? desktopPosition);
+        setMobilePosition((data.mobilePosition as MobilePosition) ?? mobilePosition);
+        setPlacementPreset((data.placementPreset as PlacementPreset) ?? placementPreset);
+        setOffsetX(String(data.offsetX ?? offsetX));
+        setOffsetY(String(data.offsetY ?? offsetY));
+        setLogo({ file: null, preview: data.logoUrl ? String(data.logoUrl) : null });
+        setHydrated(true);
+    }, [shopDomain, optInData, optInLoading]);
 
-        fetchWithTimeout(`/api/settings/opt-in?shop=${encodeURIComponent(resolvedShopDomain)}`)
-            .then(async (res) => {
-                const data = (await res.json()) as OptInSettingsResponse;
-                if (!res.ok || !data?.ok || !isMounted) {
-                    throw new Error(data?.error ?? 'Failed to load opt-in settings.');
-                }
-
-                setTitle(data.title);
-                setMessage(data.message);
-                setAllowText(data.allowText);
-                setAllowBgColor(data.allowBgColor);
-                setAllowTextColor(data.allowTextColor);
-                setLaterText(data.laterText);
-                setDesktopDelaySeconds(String(data.desktopDelaySeconds));
-                setMobileDelaySeconds(String(data.mobileDelaySeconds));
-                setMaxDisplaysPerSession(String(data.maxDisplaysPerSession));
-                setHideForDays(String(data.hideForDays));
-                setDesktopPosition(data.desktopPosition);
-                setMobilePosition(data.mobilePosition);
-                setPlacementPreset(data.placementPreset);
-                setOffsetX(String(data.offsetX));
-                setOffsetY(String(data.offsetY));
-                setLogo({ file: null, preview: data.logoUrl ?? null });
-                loadedShopRef.current = resolvedShopDomain;
-            })
-            .catch((error) => {
-                if (!isMounted) {
-                    return;
-                }
-
-                const message = error instanceof Error
-                    ? (error.name === 'AbortError' ? 'Loading settings timed out. Please refresh and try again.' : error.message)
-                    : 'Unexpected error while loading prompt settings.';
-                setLoadError(message);
-
-                toast({
-                    variant: 'destructive',
-                    title: 'Failed to load custom prompt settings',
-                    description: message,
-                });
-            })
-            .finally(() => {
-                if (isMounted) {
-                    setLoading(false);
-                }
-            });
-
-        return () => {
-            isMounted = false;
-        };
-    }, [resolvedShopDomain]);
-
-    const saveChanges = async () => {
-        if (!resolvedShopDomain) {
-            const message = 'Open the dashboard from a connected Shopify store before saving opt-in settings.';
-            setSaveStatus({ type: 'error', message });
+    const saveChanges = () => {
+        if (!shopDomain) {
             toast({
                 variant: 'destructive',
                 title: 'Shop domain required',
-                description: message,
+                description: 'Open the dashboard from Shopify Admin before saving opt-in settings.',
             });
             return;
         }
 
-        setSaving(true);
-        setSaveStatus(null);
         try {
             const normalizedLogoUrl = !logo.preview || logo.preview.startsWith('blob:') ? null : logo.preview;
             if (normalizedLogoUrl && normalizedLogoUrl.startsWith('data:') && normalizedLogoUrl.length > 700000) {
                 throw new Error('Logo image is too large. Please upload a smaller image (recommended under 200 KB).');
             }
 
-            const response = await fetchWithTimeout('/api/settings/opt-in', {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
+            const body = {
+                promptType: 'custom' as const,
+                title,
+                message,
+                allowText,
+                allowBgColor,
+                allowTextColor,
+                laterText,
+                logoUrl: normalizedLogoUrl,
+                desktopDelaySeconds: Number(desktopDelaySeconds),
+                mobileDelaySeconds: Number(mobileDelaySeconds),
+                maxDisplaysPerSession: Number(maxDisplaysPerSession),
+                hideForDays: Number(hideForDays),
+                desktopPosition,
+                mobilePosition,
+                placementPreset,
+                offsetX: Number(offsetX),
+                offsetY: Number(offsetY),
+            };
+
+            writePendingSettings(shopDomain, 'optIn', body);
+            saveOptInMutation.mutate(body, {
+                onSuccess: () => {
+                    toast({
+                        title: 'Custom prompt saved',
+                        description: 'The live storefront popup now uses these settings.',
+                    });
                 },
-                body: JSON.stringify({
-                    shopDomain: resolvedShopDomain,
-                    promptType: 'custom',
-                    title,
-                    message,
-                    allowText,
-                    allowBgColor,
-                    allowTextColor,
-                    laterText,
-                    logoUrl: normalizedLogoUrl,
-                    desktopDelaySeconds: Number(desktopDelaySeconds),
-                    mobileDelaySeconds: Number(mobileDelaySeconds),
-                    maxDisplaysPerSession: Number(maxDisplaysPerSession),
-                    hideForDays: Number(hideForDays),
-                    desktopPosition,
-                    mobilePosition,
-                    placementPreset,
-                    offsetX: Number(offsetX),
-                    offsetY: Number(offsetY),
-                }),
-            });
-
-            const raw = await response.text();
-            const result = (raw ? JSON.parse(raw) : {}) as OptInSettingsResponse;
-            if (!response.ok || !result?.ok) {
-                throw new Error(result?.error ?? 'Failed to save custom prompt settings.');
-            }
-
-            const savedAt = new Date().toLocaleTimeString();
-            setSaveStatus({ type: 'success', message: `Settings saved successfully at ${savedAt}.` });
-
-            toast({
-                title: 'Custom prompt saved',
-                description: 'The live storefront popup now uses these settings.',
+                onError: (error) => {
+                    toast({
+                        variant: 'destructive',
+                        title: 'Save failed',
+                        description: error instanceof Error ? error.message : 'Unexpected error while saving.',
+                    });
+                },
             });
         } catch (error) {
-            const message = error instanceof Error
-                ? (error.name === 'AbortError' ? 'Save request timed out. Please try again.' : error.message)
-                : 'Unexpected error while saving custom prompt settings.';
-            setSaveStatus({ type: 'error', message });
             toast({
                 variant: 'destructive',
                 title: 'Save failed',
-                description: message,
+                description: error instanceof Error ? error.message : 'Unexpected error while saving.',
             });
-        } finally {
-            setSaving(false);
         }
     };
     
-    if (loading && !loadError) {
+    if (!shopDomain) {
+        return (
+            <div className="min-h-screen">
+                <PageLoadingView title="Custom prompt" description="Waiting for shop context…" />
+            </div>
+        );
+    }
+
+    if (!hydrated && optInLoading) {
         return (
             <div className="min-h-screen">
                 <PageLoadingView title="Custom prompt" />
@@ -437,11 +350,6 @@ export default function CustomPromptPage() {
             </div>
             
             <div className="p-4 sm:p-6 md:p-8 flex-grow">
-                {loadError && (
-                    <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                        Failed to load saved settings: {loadError}
-                    </div>
-                )}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-2 space-y-8">
                         <Card>
@@ -636,7 +544,7 @@ export default function CustomPromptPage() {
                             <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                 <div className="space-y-2 md:col-span-1">
                                     <Label>Placement preset</Label>
-                                    <Select value={placementPreset} onValueChange={(value) => setPlacementPreset(value as 'balanced' | 'safe-left' | 'safe-right' | 'safe-top' | 'safe-bottom')}>
+                                    <Select value={placementPreset} onValueChange={(value) => setPlacementPreset(value as PlacementPreset)}>
                                         <SelectTrigger><SelectValue /></SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="balanced">Balanced (default)</SelectItem>
@@ -705,23 +613,10 @@ export default function CustomPromptPage() {
                 </div>
 
                 <div className="fixed bottom-8 right-8 z-50 flex gap-2">
-                    {saveStatus && (
-                        <div className={cn(
-                            'rounded-md border px-3 py-2 text-sm max-w-[360px]',
-                            saveStatus.type === 'success'
-                                ? 'border-green-300 bg-green-50 text-green-900'
-                                : 'border-destructive/40 bg-destructive/10 text-destructive'
-                        )}>
-                            {saveStatus.message}
-                        </div>
-                    )}
                     <Button variant="outline" size="lg" asChild>
                       <Link href="/opt-ins">Cancel</Link>
                     </Button>
-                    <Button size="lg" onClick={saveChanges} disabled={saving || loading}>
-                        {(saving || loading) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                        {loading ? 'Loading...' : saving ? 'Saving...' : 'Save Changes'}
-                    </Button>
+                    <Button size="lg" onClick={saveChanges}>Save Changes</Button>
                 </div>
             </div>
 
