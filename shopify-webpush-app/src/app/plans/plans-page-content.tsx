@@ -13,6 +13,7 @@ import { useBillingStatus, useConfirmBilling } from '@/hooks/queries/use-billing
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
 import { ImpressionUsageBar } from '@/components/billing/impression-usage-bar';
+import { AppSetupScreen } from '@/components/ui/loading-ui';
 import { queryKeys } from '@/lib/client/query-keys';
 
 const BUSINESS_FEATURES = [
@@ -182,6 +183,25 @@ export function PlansPageContent() {
       planKey === 'business' && tierId ? `business:${tierId}` : planKey;
     setPendingPlan(pendingKey);
 
+    const params = new URLSearchParams({
+      shop,
+      planKey,
+    });
+    if (tierId) {
+      params.set('tierId', tierId);
+    }
+    if (host) {
+      params.set('host', host);
+    }
+    if (embedded) {
+      params.set('embedded', embedded);
+    }
+
+    const checkoutUrl = `/api/billing/subscribe-redirect?${params.toString()}`;
+
+    // Navigate immediately so Shopify billing opens without waiting on React updates.
+    (window.top ?? window).location.assign(checkoutUrl);
+
     const nextBilling =
       planKey === 'basic'
         ? {
@@ -205,22 +225,6 @@ export function PlansPageContent() {
       ok: true,
       billing: nextBilling,
     });
-
-    const params = new URLSearchParams({
-      shop,
-      planKey,
-    });
-    if (tierId) {
-      params.set('tierId', tierId);
-    }
-    if (host) {
-      params.set('host', host);
-    }
-    if (embedded) {
-      params.set('embedded', embedded);
-    }
-
-    (window.top ?? window).location.href = `/api/billing/subscribe-redirect?${params.toString()}`;
   };
 
   const handleSubscribeBasic = () => startShopifyCheckout('basic');
@@ -260,6 +264,16 @@ export function PlansPageContent() {
 
   return (
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8 pe-page-enter">
+      {pendingPlan ? (
+        <AppSetupScreen
+          progress={pendingPlan.startsWith('business') ? 55 : 40}
+          stepLabel={
+            pendingPlan.startsWith('business')
+              ? 'Opening Shopify billing approval…'
+              : 'Updating your plan…'
+          }
+        />
+      ) : null}
       <div>
         <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Plans</h1>
         <p className="text-muted-foreground mt-1">

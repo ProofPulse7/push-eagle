@@ -30,9 +30,11 @@ const runSubscriptionCheckout = async (input: {
     accessToken: input.accessToken,
   });
 
-  await markBillingCheckoutPending({
+  void markBillingCheckoutPending({
     shopDomain: input.shopDomain,
     shopifySubscriptionId: result.subscriptionId,
+  }).catch(() => {
+    // Non-blocking: redirect to Shopify approval must not wait on DB writes.
   });
 
   return {

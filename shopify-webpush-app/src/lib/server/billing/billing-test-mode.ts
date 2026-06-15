@@ -1,11 +1,13 @@
 const adminApiVersion = () =>
   process.env.SHOPIFY_ADMIN_API_VERSION?.trim() || '2025-04';
 
-const SHOPIFY_FETCH_TIMEOUT_MS = 8_000;
+const SHOPIFY_FETCH_TIMEOUT_MS = 4_000;
+const TEST_MODE_CACHE_TTL_MS = 10 * 60 * 1000;
+const testModeCache = new Map<string, { value: boolean; expiresAt: number }>();
 
 /**
  * Resolve whether Shopify billing charges should be created in test mode.
- * Avoids a separate token-validation round trip before appSubscriptionCreate.
+ * Skips the dev-store GraphQL round trip in production for faster checkout redirects.
  */
 export const resolveBillingTestMode = async (shopDomain: string, accessToken: string) => {
   if (process.env.SHOPIFY_BILLING_TEST === 'true') {
@@ -14,6 +16,15 @@ export const resolveBillingTestMode = async (shopDomain: string, accessToken: st
 
   if (process.env.SHOPIFY_BILLING_TEST === 'false') {
     return false;
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    return false;
+  }
+
+  const cached = testModeCache.get(shopDomain);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
   }
 
   try {
@@ -34,7 +45,9 @@ export const resolveBillingTestMode = async (shopDomain: string, accessToken: st
       data?: { shop?: { plan?: { partnerDevelopment?: boolean } } };
     } | null;
 
-    return Boolean(payload?.data?.shop?.plan?.partnerDevelopment);
+    const value = Boolean(payload?.data?.shop?.plan?.partnerDevelopment);
+    testModeCache.set(shopDomain, { value, expiresAt: Date.now() + TEST_MODE_CACHE_TTL_MS });
+    return value;
   } catch {
     return process.env.NODE_ENV !== 'production';
   }
