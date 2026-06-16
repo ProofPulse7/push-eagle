@@ -9,6 +9,7 @@
     "db:bootstrap": "node scripts/bootstrap-neon.mjs",
     "db:init-schema": "tsx scripts/init-schema-on-neon.ts",
     "db:cleanup-merchants": "node scripts/cleanup-merchant-tables.mjs",
+    "db:purge-shop": "node scripts/purge-shop-data.mjs",
     "automations:step": "node scripts/step-all-automations.mjs",
     "automations:test-six": "node scripts/verify-six-automations.mjs",
     "build": "next build",
