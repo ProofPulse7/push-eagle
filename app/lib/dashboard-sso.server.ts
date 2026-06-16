@@ -25,10 +25,16 @@ export const readReturnTo = (request: Request) => {
   return decodeURIComponent(entry.slice("pe_return_to=".length));
 };
 
+type DashboardSsoOptions = {
+  host?: string | null;
+  embedded?: string | null;
+};
+
 export const buildDashboardSsoUrl = (
   shopDomain: string,
   returnTo?: string | null,
   baseDashboardUrl = resolveDashboardUrl(),
+  options?: DashboardSsoOptions,
 ) => {
   let redirectPath = "/dashboard";
 
@@ -47,6 +53,13 @@ export const buildDashboardSsoUrl = (
   const ssoUrl = new URL("/api/integrations/shopify/sso", baseDashboardUrl);
   ssoUrl.searchParams.set("shop", shopDomain);
   ssoUrl.searchParams.set("redirect", redirectPath.startsWith("/") ? redirectPath : "/dashboard");
+
+  if (options?.host) {
+    ssoUrl.searchParams.set("host", options.host);
+  }
+  if (options?.embedded) {
+    ssoUrl.searchParams.set("embedded", options.embedded);
+  }
 
   const secret =
     process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() || process.env.SHOPIFY_API_SECRET?.trim() || "";

@@ -1,4 +1,4 @@
-import { redirect } from "react-router";
+import { redirect, redirectDocument } from "react-router";
 
 import {
   buildDashboardSsoUrl,
@@ -7,6 +7,8 @@ import {
 } from "./dashboard-sso.server";
 import {
   getShopifyApi,
+  getShopifyConfigError,
+  hasShopifyConfig,
   runAfterAuthForSession,
   sessionStorage,
   unauthenticated,
@@ -15,9 +17,21 @@ import {
 const returnToCookie = (returnTo: string) =>
   `pe_return_to=${encodeURIComponent(returnTo)}; Path=/; Max-Age=600; Secure; SameSite=Lax`;
 
+const readEmbeddedParams = (request: Request) => {
+  const requestUrl = new URL(request.url);
+  return {
+    host: requestUrl.searchParams.get("host"),
+    embedded: requestUrl.searchParams.get("embedded"),
+  };
+};
+
 export const sanitizeShopParam = (shop: string | null) => {
   if (!shop) {
     return null;
+  }
+
+  if (!hasShopifyConfig) {
+    throw new Response(getShopifyConfigError(), { status: 503 });
   }
 
   return getShopifyApi().utils.sanitizeShop(shop);
@@ -87,20 +101,37 @@ export const handleStandaloneOAuthCallback = async (request: Request) => {
   await runAfterAuthForSession(session, admin);
 
   const returnTo = readReturnTo(request);
-  const ssoUrl = buildDashboardSsoUrl(session.shop, returnTo, resolveDashboardUrl());
-  const headers = new Headers(authHeaders ?? undefined);
+  const { host, embedded } = readEmbeddedParams(request);
+  const ssoUrl = buildDashboardSsoUrl(session.shop, returnTo, resolveDashboardUrl(), {
+    host,
+    embedded,
+  });
 
-  throw redirect(ssoUrl, { headers });
+  throw redirectDocument(ssoUrl, authHeaders ? { headers: authHeaders } : undefined);
 };
 
 export const redirectToOAuthOrDashboard = async (request: Request, shop: string) => {
+  if (!hasShopifyConfig) {
+    throw new Response(getShopifyConfigError(), { status: 503 });
+  }
+
   const sanitizedShop = sanitizeShopParam(shop);
   if (!sanitizedShop) {
     throw redirect("/auth/login");
   }
 
-  const session = await loadOfflineSession(sanitizedShop);
   const returnTo = readReturnTo(request);
+  const { host, embedded } = readEmbeddedParams(request);
+
+  let session = null;
+  try {
+    session = await loadOfflineSession(sanitizedShop);
+  } catch (error) {
+    console.error("[push-eagle] Failed to load offline session", {
+      shop: sanitizedShop,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   if (!session) {
     const authUrl = new URL("/auth", new URL(request.url).origin);
@@ -108,9 +139,19 @@ export const redirectToOAuthOrDashboard = async (request: Request, shop: string)
     if (returnTo) {
       authUrl.searchParams.set("return_to", returnTo);
     }
+    if (host) {
+      authUrl.searchParams.set("host", host);
+    }
+    if (embedded) {
+      authUrl.searchParams.set("embedded", embedded);
+    }
     throw redirect(authUrl.toString());
   }
 
-  const ssoUrl = buildDashboardSsoUrl(sanitizedShop, returnTo, resolveDashboardUrl());
-  throw redirect(ssoUrl);
+  const ssoUrl = buildDashboardSsoUrl(sanitizedShop, returnTo, resolveDashboardUrl(), {
+    host,
+    embedded,
+  });
+
+  throw redirectDocument(ssoUrl);
 };

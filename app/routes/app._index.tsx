@@ -1,5 +1,5 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { redirect } from "react-router";
+import { redirect, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { redirectToOAuthOrDashboard } from "../lib/standalone-auth.server";
@@ -14,7 +14,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await redirectToOAuthOrDashboard(request, shop);
 };
 
-export default function Index() {
+export default function AppIndex() {
   return (
     <s-page heading="Push Eagle">
       <s-section heading="Redirecting">
@@ -22,6 +22,10 @@ export default function Index() {
       </s-section>
     </s-page>
   );
+}
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {
