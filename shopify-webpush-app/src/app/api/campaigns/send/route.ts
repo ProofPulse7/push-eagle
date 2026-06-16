@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { deferAfterResponse } from '@/lib/server/defer-after-response';
-import { sendCampaign } from '@/lib/server/data/store';
+import { countCampaignAudienceTokens, getCampaignById, sendCampaign } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -23,6 +23,14 @@ export async function POST(request: Request) {
     const runAsync = body.async !== false;
 
     if (runAsync) {
+      const campaign = await getCampaignById(shopDomain, body.campaignId);
+      const recipientCount = campaign
+        ? await countCampaignAudienceTokens(
+            shopDomain,
+            (campaign as { segment_id?: string | null }).segment_id ?? null,
+          )
+        : null;
+
       deferAfterResponse(async () => {
         try {
           await sendCampaign(shopDomain, body.campaignId, { maxBatches });
@@ -39,8 +47,9 @@ export async function POST(request: Request) {
         queued: true,
         completed: false,
         successCount: 0,
-        recipientCount: null,
-        remainingRecipients: null,
+        recipientCount,
+        targetRecipientCount: recipientCount,
+        remainingRecipients: recipientCount,
         message: 'Campaign delivery started in the background.',
       });
     }

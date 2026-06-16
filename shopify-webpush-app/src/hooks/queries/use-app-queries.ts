@@ -80,8 +80,9 @@ export function useCampaigns() {
         return status === 'sending' || status === 'queued';
       });
 
-      return hasActiveSend ? 2500 : false;
+      return hasActiveSend ? 5000 : false;
     },
+    refetchIntervalInBackground: false,
     placeholderData: (previous) => previous,
   });
 }

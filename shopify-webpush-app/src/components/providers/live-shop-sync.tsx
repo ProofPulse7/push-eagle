@@ -78,9 +78,12 @@ export function LiveShopSync() {
       });
 
       if (hasActiveSend) {
-        refetchShopQueries(queryClient, shop, ['campaigns', 'dashboard']);
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.campaigns(shop),
+          refetchType: 'active',
+        });
       }
-    }, 4000);
+    }, 8000);
 
     const onFocus = () => {
       refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'campaigns', 'subscribers']);

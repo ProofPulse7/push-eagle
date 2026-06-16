@@ -8,7 +8,8 @@ import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
-import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
+import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
+import { runWithBackgroundRetries } from '@/lib/client/background-save';
 import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
 
@@ -267,6 +268,7 @@ export default function ScheduleCampaignPage() {
                 sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
                 scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
                 delivery_count: 0,
+                target_recipient_count: segmentSubscriberCount,
                 click_count: 0,
                 revenue_cents: 0,
             });
@@ -303,39 +305,41 @@ export default function ScheduleCampaignPage() {
                         resolveCampaignMediaUrl(androidHero.preview, shopDomain),
                     ]);
 
-                    const createResponse = await fetch('/api/campaigns', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            shopDomain,
-                            title: title || 'Untitled Campaign',
-                            body: message || ' ',
-                            targetUrl: primaryLink || null,
-                            iconUrl,
-                            imageUrl: macosImageUrl,
-                            windowsImageUrl,
-                            macosImageUrl,
-                            androidImageUrl,
-                            actionButtons: actionButtons
-                                .filter((button) => button.title?.trim() && button.link?.trim())
-                                .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
-                            segmentId,
-                            status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
-                            scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                            smartDeliver,
-                            flashSaleEnabled,
-                            flashSaleConfig: flashSaleEnabled ? {
-                                discountPercent: flashSaleDiscountPercent,
-                                originalPrice: flashSaleOriginalPrice,
-                                salePrice: flashSaleSalePrice,
-                                expiresAt: flashSaleExpiresAt?.toISOString(),
-                                urgencyText: flashSaleUrgencyText,
-                            } : undefined,
-                            recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
+                    const createResponse = await runWithBackgroundRetries(() =>
+                        fetch('/api/campaigns', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                shopDomain,
+                                title: title || 'Untitled Campaign',
+                                body: message || ' ',
+                                targetUrl: primaryLink || null,
+                                iconUrl,
+                                imageUrl: macosImageUrl,
+                                windowsImageUrl,
+                                macosImageUrl,
+                                androidImageUrl,
+                                actionButtons: actionButtons
+                                    .filter((button) => button.title?.trim() && button.link?.trim())
+                                    .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
+                                segmentId,
+                                status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
+                                scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
+                                smartDeliver,
+                                flashSaleEnabled,
+                                flashSaleConfig: flashSaleEnabled ? {
+                                    discountPercent: flashSaleDiscountPercent,
+                                    originalPrice: flashSaleOriginalPrice,
+                                    salePrice: flashSaleSalePrice,
+                                    expiresAt: flashSaleExpiresAt?.toISOString(),
+                                    urgencyText: flashSaleUrgencyText,
+                                } : undefined,
+                                recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
+                            }),
                         }),
-                    });
+                    );
 
                     const createPayload = await parseApiResponse(createResponse);
                     const createResult = createPayload.json;
@@ -360,6 +364,7 @@ export default function ScheduleCampaignPage() {
                         sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
                         scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
                         delivery_count: 0,
+                        target_recipient_count: segmentSubscriberCount,
                         click_count: 0,
                         revenue_cents: 0,
                     });
@@ -420,22 +425,34 @@ export default function ScheduleCampaignPage() {
                         return;
                     }
 
-                    const sendResponse = await fetch('/api/campaigns/send', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            campaignId,
-                            shopDomain,
-                            maxBatches: 2000,
+                    const sendResponse = await runWithBackgroundRetries(() =>
+                        fetch('/api/campaigns/send', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                campaignId,
+                                shopDomain,
+                                maxBatches: 2000,
+                                async: true,
+                            }),
                         }),
-                    });
+                    );
 
                     const sendPayload = await parseApiResponse(sendResponse);
                     const sendResult = sendPayload.json;
                     if (!sendResponse.ok || !sendResult?.ok) {
                         throw new Error(buildResponseError('Failed to send campaign.', sendPayload));
+                    }
+
+                    const resolvedTargetCount = Number(
+                        sendResult.targetRecipientCount ?? sendResult.recipientCount ?? segmentSubscriberCount ?? 0,
+                    );
+                    if (resolvedTargetCount > 0) {
+                        patchOptimisticCampaign(queryClient, shopDomain, campaignId, {
+                            target_recipient_count: resolvedTargetCount,
+                        });
                     }
                 } catch (backgroundError) {
                     toast({

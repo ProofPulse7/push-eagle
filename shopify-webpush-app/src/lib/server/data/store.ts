@@ -597,6 +597,7 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS macos_image_url TEXT`;
       await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS android_image_url TEXT`;
       await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS action_buttons JSONB`;
+      await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS target_recipient_count INTEGER`;
 
       await sql`CREATE TABLE IF NOT EXISTS media_assets (
         id TEXT PRIMARY KEY,
@@ -6515,7 +6516,7 @@ export const listQueuedCampaigns = async (limit = 25, shardCount = 1, shardIndex
   const rows = await sql`
     SELECT id, shop_domain
     FROM campaigns
-    WHERE status = 'queued'
+    WHERE status IN ('queued', 'sending')
       AND (
         ${safeShardCount} = 1
         OR MOD(ABS(hashtext(id)), ${safeShardCount}) = ${safeShardIndex}
@@ -7737,6 +7738,12 @@ export const sendCampaign = async (
     (recipient) => !deliveredSubscriberIds.has(Number(recipient.subscriber_id)),
   );
 
+  await sql`
+    UPDATE campaigns
+    SET target_recipient_count = ${recipients.length}
+    WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+  `;
+
   await assertCanSendNotifications(shopDomain, Math.max(recipients.length, 1));
 
   if (recipients.length === 0) {
@@ -8077,6 +8084,35 @@ export const sendCampaign = async (
       remainingRecipients: 0,
     };
   } catch (error) {
+    const partialRows = await sql`
+      SELECT COUNT(*)::INT AS count
+      FROM campaign_deliveries
+      WHERE campaign_id = ${campaignId}
+        AND fcm_message_id IS NOT NULL
+    `;
+    const partialDelivered = Number(partialRows[0]?.count ?? 0);
+
+    if (partialDelivered > 0) {
+      await sql`
+        UPDATE campaigns
+        SET
+          status = 'queued',
+          delivery_count = ${partialDelivered}
+        WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+      `;
+
+      const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+      void bumpCronWakeNow();
+
+      return {
+        successCount: partialDelivered,
+        failureCount: 0,
+        recipientCount: recipients.length,
+        completed: false,
+        remainingRecipients: Math.max(recipients.length - partialDelivered, 0),
+      };
+    }
+
     await sql`
       UPDATE campaigns
       SET status = ${previousStatus}

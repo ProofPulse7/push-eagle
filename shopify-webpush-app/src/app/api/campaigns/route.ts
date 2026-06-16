@@ -26,6 +26,7 @@ const createCampaignSchema = z.object({
 const transformCampaign = (campaign: any) => ({
   ...campaign,
   deliveryCount: Number(campaign.delivery_count ?? 0),
+  targetRecipientCount: Number(campaign.target_recipient_count ?? 0),
   clickCount: Number(campaign.click_count ?? 0),
   revenueCents: Number(campaign.revenue_cents ?? 0),
   targetUrl: campaign.target_url,

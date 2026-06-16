@@ -25,7 +25,8 @@ type Campaign = {
     imagePreviewUrl?: string | null;
     sendTime: string;
     segment: string;
-    reached: number;
+    impressions: number;
+    deliveryCount: number;
     clickRate: string;
     sales: number;
     status: 'Sent' | 'Scheduled' | 'Draft' | 'Archived' | 'Paused' | 'Sending';
@@ -59,7 +60,18 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
 
     const clickCount = Number(enriched.click_count ?? enriched.clickCount ?? 0);
     const deliveryCount = Number(enriched.delivery_count ?? enriched.deliveryCount ?? 0);
-    const ctr = deliveryCount > 0 ? `${((clickCount / deliveryCount) * 100).toFixed(1)}%` : '0.0%';
+    const targetRecipientCount = Number(
+        enriched.target_recipient_count ?? enriched.targetRecipientCount ?? 0,
+    );
+    const mappedStatus = statusMap[String(enriched.status ?? '').toLowerCase()] ?? 'Draft';
+    const impressions =
+        mappedStatus === 'Sending'
+            ? Math.max(targetRecipientCount, 0)
+            : deliveryCount;
+    const ctr =
+        mappedStatus === 'Sent' && deliveryCount > 0
+            ? `${((clickCount / deliveryCount) * 100).toFixed(1)}%`
+            : '0.0%';
 
     return {
         id: String(enriched.id),
@@ -75,17 +87,18 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
         segment: enriched.segment_id === 'all' || !enriched.segment_id
             ? 'All Subscribers'
             : `Segment ${String(enriched.segment_id ?? enriched.segmentId ?? '')}`,
-        reached: deliveryCount,
+        impressions,
+        deliveryCount,
         clickRate: ctr,
         sales: Number(enriched.revenue_cents ?? enriched.revenueCents ?? 0) / 100,
-        status: statusMap[String(enriched.status ?? '').toLowerCase()] ?? 'Draft',
+        status: mappedStatus,
         createdAt: String(enriched.created_at ?? enriched.createdAt ?? new Date().toISOString()),
     };
 };
 
 export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined }) {
     const shopDomain = useShopDomain();
-    const { data, isLoading, isError, error: queryError, isFetching } = useCampaigns();
+    const { data, isLoading, isError, error: queryError } = useCampaigns();
     const [activeTab, setActiveTab] = useState('sent');
     const [visibleCount, setVisibleCount] = useState(CAMPAIGNS_PAGE_SIZE);
 
@@ -196,7 +209,10 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
         <div className="space-y-4">
             {visibleCampaigns.map(campaign => {
                 const ctr = Number.parseFloat(campaign.clickRate);
-                const clicks = Number.isFinite(ctr) ? Math.round(campaign.reached * (ctr / 100)) : null;
+                const clicks =
+                    campaign.status === 'Sent' && Number.isFinite(ctr)
+                        ? Math.round(campaign.deliveryCount * (ctr / 100))
+                        : 0;
 
                 const getStatusIcon = (status: string) => {
                     switch (status) {
@@ -255,26 +271,24 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                             {campaign.message || "No message provided."}
                                         </p>
                                     </div>
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm sm:text-right w-full sm:max-w-md">
-                                        <div>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm sm:text-right w-full sm:max-w-md shrink-0">
+                                        <div className="min-w-[5rem]">
                                             <p className="text-muted-foreground">Impressions</p>
-                                            <p className="font-medium">
-                                                {campaign.status === 'Sending' && campaign.reached === 0
-                                                    ? 'Sending…'
-                                                    : (campaign.reached?.toLocaleString() ?? '0')}
+                                            <p className="font-medium tabular-nums">
+                                                {campaign.impressions.toLocaleString()}
                                             </p>
                                         </div>
-                                        <div>
+                                        <div className="min-w-[4rem]">
                                             <p className="text-muted-foreground">Clicks</p>
-                                            <p className="font-medium">{clicks === null ? 'N/A' : clicks.toLocaleString()}</p>
+                                            <p className="font-medium tabular-nums">{clicks.toLocaleString()}</p>
                                         </div>
-                                        <div>
+                                        <div className="min-w-[4rem]">
                                             <p className="text-muted-foreground">CTR</p>
-                                            <p className="font-medium">{campaign.clickRate}</p>
+                                            <p className="font-medium tabular-nums">{campaign.clickRate}</p>
                                         </div>
-                                        <div>
+                                        <div className="min-w-[5rem]">
                                             <p className="text-muted-foreground">Revenue</p>
-                                            <p className="font-medium">{typeof campaign.sales === 'number' ? formatCurrency(campaign.sales) : 'N/A'}</p>
+                                            <p className="font-medium tabular-nums">{typeof campaign.sales === 'number' ? formatCurrency(campaign.sales) : 'N/A'}</p>
                                         </div>
                                     </div>
                                 </div>
@@ -324,9 +338,6 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
         <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
                 <h2 className="text-xl font-semibold tracking-tight">Campaign History</h2>
-                {isFetching && campaigns.length > 0 ? (
-                    <span className="text-xs text-muted-foreground">Updating…</span>
-                ) : null}
             </div>
             <Tabs value={activeTab} onValueChange={(value) => startTransition(() => setActiveTab(value))}>
                 <TabsList className="bg-white border shadow-sm h-auto p-1 gap-1">

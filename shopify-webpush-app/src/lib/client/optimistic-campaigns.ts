@@ -23,6 +23,7 @@ export type OptimisticCampaign = {
   sent_at?: string | null;
   scheduled_at?: string | null;
   delivery_count?: number;
+  target_recipient_count?: number;
   click_count?: number;
   revenue_cents?: number;
   windows_image_url?: string | null;
@@ -182,6 +183,10 @@ export const mergeCampaignListPayload = (
         ? normalizeCampaignRecord(shop, {
             ...existing,
             ...campaign,
+            target_recipient_count:
+              Number(campaign.target_recipient_count ?? campaign.targetRecipientCount ?? 0) > 0
+                ? Number(campaign.target_recipient_count ?? campaign.targetRecipientCount ?? 0)
+                : Number(existing.target_recipient_count ?? existing.targetRecipientCount ?? 0),
             image_url:
               campaign.image_url ??
               existing.image_url ??
@@ -339,6 +344,28 @@ export const replaceOptimisticCampaignId = (
   });
 
   broadcastShopSync(shop, { type: 'campaigns' });
+};
+
+export const patchOptimisticCampaign = (
+  queryClient: QueryClient,
+  shop: string,
+  campaignId: string,
+  patch: Partial<OptimisticCampaign>,
+) => {
+  queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
+    const currentList = Array.isArray(current?.campaigns)
+      ? current.campaigns.map((item) => normalizeCampaignRecord(shop, item as Record<string, unknown>))
+      : [];
+
+    return {
+      ok: true,
+      campaigns: currentList.map((item) =>
+        String(item.id) === campaignId
+          ? normalizeCampaignRecord(shop, { ...item, ...patch })
+          : item,
+      ),
+    };
+  });
 };
 
 export const bumpDashboardCampaignSent = (queryClient: QueryClient, shop: string) => {
