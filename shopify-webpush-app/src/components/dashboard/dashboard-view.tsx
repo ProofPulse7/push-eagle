@@ -4,6 +4,7 @@ import { DollarSign, Send, TrendingUp, Users } from 'lucide-react';
 import Link from 'next/link';
 
 import { SubscriberGrowthChart } from '@/components/dashboard/subscriber-growth-chart';
+import { ThemeExtensionWarningBanner } from '@/components/dashboard/theme-extension-warning-banner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -77,6 +78,8 @@ export function DashboardView() {
           </AlertDescription>
         </Alert>
       ) : null}
+
+      {shopDomain ? <ThemeExtensionWarningBanner /> : null}
 
       {isError && !data ? (
         <Alert variant="destructive">

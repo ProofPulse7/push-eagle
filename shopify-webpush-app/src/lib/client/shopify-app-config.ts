@@ -10,10 +10,11 @@ export const buildThemeAppEmbedDeepLink = (shopDomain: string): string | null =>
     return null;
   }
 
+  const storeHandle = shop.slice(0, -'.myshopify.com'.length);
   const params = new URLSearchParams({
     context: 'apps',
     activateAppId: `${SHOPIFY_APP_CLIENT_ID}/${PUSH_EAGLE_THEME_EMBED_HANDLE}`,
   });
 
-  return `https://${shop}/admin/themes/current/editor?${params.toString()}`;
+  return `https://admin.shopify.com/store/${encodeURIComponent(storeHandle)}/themes/current/editor?${params.toString()}`;
 };

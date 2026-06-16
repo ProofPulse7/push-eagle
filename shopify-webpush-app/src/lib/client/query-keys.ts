@@ -20,5 +20,6 @@ export const queryKeys = {
   analyticsStats: (shop: string, from: string, to: string) =>
     ['pe', shop, 'analytics', 'stats', from, to] as const,
   dashboardSummary: (shop: string) => ['pe', shop, 'dashboard', 'summary'] as const,
+  themeEmbedStatus: (shop: string) => ['pe', shop, 'theme', 'embed-status'] as const,
   billingStatus: (shop: string) => ['pe', shop, 'billing', 'status'] as const,
 };

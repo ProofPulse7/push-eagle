@@ -290,6 +290,26 @@ export function useDashboardSummary() {
   });
 }
 
+export function useThemeEmbedStatus() {
+  const shop = useShopDomain();
+
+  return useQuery({
+    queryKey: queryKeys.themeEmbedStatus(shop),
+    queryFn: () =>
+      fetchJsonWithShop<{
+        ok: boolean;
+        enabled?: boolean;
+        checkAvailable?: boolean;
+        themeName?: string | null;
+        themeEditorUrl?: string | null;
+      }>('/api/theme/embed-status', shop),
+    enabled: Boolean(shop),
+    staleTime: 60_000,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+  });
+}
+
 export function useOptInSettings() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();

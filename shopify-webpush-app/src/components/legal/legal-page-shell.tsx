@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
 import type { ReactNode } from 'react';
 
@@ -23,17 +24,29 @@ export function LegalPageShell({
   alternateHref,
   alternateLabel,
 }: LegalPageShellProps) {
+  const router = useRouter();
+
+  const handleBack = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      router.back();
+      return;
+    }
+
+    router.push('/dashboard');
+  };
+
   return (
     <main className="min-h-screen bg-gradient-to-b from-muted/50 via-background to-background">
       <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
         <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-          <Link
-            href="/"
+          <button
+            type="button"
+            onClick={handleBack}
             className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted/60"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Push Eagle
-          </Link>
+            Back
+          </button>
           {alternateHref && alternateLabel ? (
             <Link href={alternateHref} className="text-sm font-medium text-primary hover:underline">
               {alternateLabel}
