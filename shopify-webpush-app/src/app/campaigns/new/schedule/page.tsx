@@ -9,6 +9,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
 import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
+import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
 
 import { ArrowLeft, Users, Clock, Send, Save, Loader2, Edit } from 'lucide-react';
@@ -215,7 +216,7 @@ export default function ScheduleCampaignPage() {
         };
     }, [queryClient, shopDomain, segmentId]);
     
-    const handleLaunchCampaign = () => {
+    const handleLaunchCampaign = async () => {
         try {
             if (!shopDomain) {
                 throw new Error('Set your Shopify subdomain in Settings before launching campaigns.');
@@ -243,15 +244,23 @@ export default function ScheduleCampaignPage() {
             const launchStatus =
                 sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
 
+            const cachedMedia = await cacheLaunchMedia(shopDomain, optimisticId, {
+                imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
+                windowsImageUrl: windowsHero.preview,
+                macosImageUrl: macHero.preview,
+                androidImageUrl: androidHero.preview,
+                iconUrl: logo.preview,
+            });
+
             prependOptimisticCampaign(queryClient, shopDomain, {
                 id: optimisticId,
                 title: title || 'Untitled Campaign',
                 body: message || '',
-                image_url: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
-                windows_image_url: windowsHero.preview,
-                macos_image_url: macHero.preview,
-                android_image_url: androidHero.preview,
-                icon_url: logo.preview,
+                image_url: cachedMedia.imageUrl,
+                windows_image_url: cachedMedia.windowsImageUrl,
+                macos_image_url: cachedMedia.macosImageUrl,
+                android_image_url: cachedMedia.androidImageUrl,
+                icon_url: cachedMedia.iconUrl,
                 segment_id: segmentId,
                 status: launchStatus,
                 created_at: new Date().toISOString(),
@@ -335,32 +344,32 @@ export default function ScheduleCampaignPage() {
                     }
 
                     const campaignId = String(createResult.campaign.id);
-                    const savedCampaign = createResult.campaign as Record<string, unknown>;
 
                     replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
                         id: campaignId,
                         title: title || 'Untitled Campaign',
                         body: message || '',
-                        image_url:
-                            macosImageUrl
-                            ?? windowsImageUrl
-                            ?? androidImageUrl
-                            ?? savedCampaign.image_url
-                            ?? macHero.preview
-                            ?? windowsHero.preview
-                            ?? androidHero.preview,
-                        windows_image_url: windowsImageUrl ?? savedCampaign.windows_image_url ?? windowsHero.preview,
-                        macos_image_url: macosImageUrl ?? savedCampaign.macos_image_url ?? macHero.preview,
-                        android_image_url: androidImageUrl ?? savedCampaign.android_image_url ?? androidHero.preview,
-                        icon_url: iconUrl ?? savedCampaign.icon_url ?? logo.preview,
+                        image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? cachedMedia.imageUrl,
+                        windows_image_url: windowsImageUrl ?? cachedMedia.windowsImageUrl,
+                        macos_image_url: macosImageUrl ?? cachedMedia.macosImageUrl,
+                        android_image_url: androidImageUrl ?? cachedMedia.androidImageUrl,
+                        icon_url: iconUrl ?? cachedMedia.iconUrl,
                         segment_id: segmentId,
                         status: launchStatus,
-                        created_at: String(savedCampaign.created_at ?? new Date().toISOString()),
+                        created_at: new Date().toISOString(),
                         sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
                         scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
                         delivery_count: 0,
                         click_count: 0,
                         revenue_cents: 0,
+                    });
+
+                    void cacheLaunchMedia(shopDomain, campaignId, {
+                        imageUrl: macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? cachedMedia.imageUrl,
+                        windowsImageUrl: windowsImageUrl ?? cachedMedia.windowsImageUrl,
+                        macosImageUrl: macosImageUrl ?? cachedMedia.macosImageUrl,
+                        androidImageUrl: androidImageUrl ?? cachedMedia.androidImageUrl,
+                        iconUrl: iconUrl ?? cachedMedia.iconUrl,
                     });
 
                     if (sendingOption === 'schedule' || sendingOption === 'recurring') {

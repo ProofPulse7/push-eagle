@@ -1,6 +1,12 @@
 'use client';
 
 import { broadcastShopSync } from '@/lib/client/shop-sync-bus';
+import {
+  applyLaunchMediaToCampaign,
+  migrateLaunchMedia,
+  readOptimisticReplacements,
+  registerOptimisticReplacement,
+} from '@/lib/client/campaign-launch-media-cache';
 import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import { queryKeys } from '@/lib/client/query-keys';
 import type { QueryClient } from '@tanstack/react-query';
@@ -24,16 +30,8 @@ export type OptimisticCampaign = {
   android_image_url?: string | null;
 };
 
-type LaunchBridge = {
-  optimisticId: string;
-  realId?: string;
-  title?: string;
-  supersededIds: string[];
-};
-
 const pinnedCampaignIdsKey = (shop: string) => `pe:pinned-campaign-ids:${shop}`;
 const pinnedCampaignSnapshotsKey = (shop: string) => `pe:pinned-campaign-snapshots:${shop}`;
-const launchBridgeKey = (shop: string) => `pe:launch-bridge:${shop}`;
 
 const readPinnedCampaignIds = (shop: string): string[] => {
   if (typeof window === 'undefined' || !shop) {
@@ -88,52 +86,6 @@ const writePinnedSnapshots = (shop: string, snapshots: Record<string, Record<str
   }
 };
 
-const readLaunchBridge = (shop: string): LaunchBridge | null => {
-  if (typeof window === 'undefined' || !shop) {
-    return null;
-  }
-
-  try {
-    const raw = sessionStorage.getItem(launchBridgeKey(shop));
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw) as LaunchBridge;
-    if (!parsed?.optimisticId) {
-      return null;
-    }
-    return {
-      optimisticId: String(parsed.optimisticId),
-      realId: parsed.realId ? String(parsed.realId) : undefined,
-      title: parsed.title ? String(parsed.title) : undefined,
-      supersededIds: Array.isArray(parsed.supersededIds) ? parsed.supersededIds.map(String) : [],
-    };
-  } catch {
-    return null;
-  }
-};
-
-const writeLaunchBridge = (shop: string, bridge: LaunchBridge | null) => {
-  if (typeof window === 'undefined' || !shop) {
-    return;
-  }
-
-  try {
-    if (!bridge) {
-      sessionStorage.removeItem(launchBridgeKey(shop));
-      return;
-    }
-    sessionStorage.setItem(launchBridgeKey(shop), JSON.stringify(bridge));
-  } catch {
-    // Ignore storage quota errors.
-  }
-};
-
-const readSupersededIds = (shop: string): Set<string> => {
-  const bridge = readLaunchBridge(shop);
-  return new Set(bridge?.supersededIds ?? []);
-};
-
 const pinCampaignId = (shop: string, campaignId: string) => {
   const next = [campaignId, ...readPinnedCampaignIds(shop).filter((id) => id !== campaignId)];
   writePinnedCampaignIds(shop, next);
@@ -163,130 +115,22 @@ const removePinnedCampaign = (shop: string, campaignId: string) => {
   }
 };
 
-const preferImageUrl = (next: unknown, previous: unknown): string | null => {
-  const nextValue = String(next ?? '').trim();
-  const previousValue = String(previous ?? '').trim();
-
-  if (nextValue && !nextValue.startsWith('blob:') && !nextValue.startsWith('data:')) {
-    return nextValue;
-  }
-
-  if (previousValue) {
-    return previousValue;
-  }
-
-  return nextValue || null;
-};
-
-const mergeCampaignImages = (
-  incoming: Record<string, unknown>,
-  existing?: Record<string, unknown>,
-) => {
-  const merged = {
-    ...existing,
-    ...incoming,
-    windows_image_url: preferImageUrl(incoming.windows_image_url ?? incoming.windowsImageUrl, existing?.windows_image_url ?? existing?.windowsImageUrl),
-    macos_image_url: preferImageUrl(incoming.macos_image_url ?? incoming.macosImageUrl, existing?.macos_image_url ?? existing?.macosImageUrl),
-    android_image_url: preferImageUrl(incoming.android_image_url ?? incoming.androidImageUrl, existing?.android_image_url ?? existing?.androidImageUrl),
-    icon_url: preferImageUrl(incoming.icon_url ?? incoming.iconUrl, existing?.icon_url ?? existing?.iconUrl),
-  };
-
+const normalizeCampaignRecord = (shop: string, campaign: Record<string, unknown>) => {
+  const withMedia = applyLaunchMediaToCampaign(shop, campaign);
   const listImage = pickCampaignBarImageUrl({
-    imageUrl: (merged.image_url ?? merged.imageUrl ?? incoming.image_url ?? incoming.imageUrl) as string | null,
-    windowsImageUrl: merged.windows_image_url as string | null,
-    macosImageUrl: merged.macos_image_url as string | null,
-    androidImageUrl: merged.android_image_url as string | null,
-  });
-
-  merged.image_url = preferImageUrl(listImage ?? incoming.image_url ?? incoming.imageUrl, existing?.image_url ?? existing?.imageUrl);
-
-  return merged;
-};
-
-const normalizeCampaignRecord = (campaign: Record<string, unknown>) => {
-  const listImage = pickCampaignBarImageUrl({
-    imageUrl: (campaign.image_url ?? campaign.imageUrl) as string | null | undefined,
-    windowsImageUrl: (campaign.windows_image_url ?? campaign.windowsImageUrl) as string | null | undefined,
-    macosImageUrl: (campaign.macos_image_url ?? campaign.macosImageUrl) as string | null | undefined,
-    androidImageUrl: (campaign.android_image_url ?? campaign.androidImageUrl) as string | null | undefined,
+    imageUrl: (withMedia.image_url ?? withMedia.imageUrl) as string | null | undefined,
+    windowsImageUrl: (withMedia.windows_image_url ?? withMedia.windowsImageUrl) as string | null | undefined,
+    macosImageUrl: (withMedia.macos_image_url ?? withMedia.macosImageUrl) as string | null | undefined,
+    androidImageUrl: (withMedia.android_image_url ?? withMedia.androidImageUrl) as string | null | undefined,
   });
 
   return {
-    ...campaign,
-    image_url: listImage ?? campaign.image_url ?? campaign.imageUrl ?? null,
-    windows_image_url: campaign.windows_image_url ?? campaign.windowsImageUrl ?? null,
-    macos_image_url: campaign.macos_image_url ?? campaign.macosImageUrl ?? null,
-    android_image_url: campaign.android_image_url ?? campaign.androidImageUrl ?? null,
+    ...withMedia,
+    image_url: listImage ?? withMedia.image_url ?? withMedia.imageUrl ?? null,
+    windows_image_url: withMedia.windows_image_url ?? withMedia.windowsImageUrl ?? null,
+    macos_image_url: withMedia.macos_image_url ?? withMedia.macosImageUrl ?? null,
+    android_image_url: withMedia.android_image_url ?? withMedia.androidImageUrl ?? null,
   };
-};
-
-const sortCampaigns = (campaigns: Record<string, unknown>[], pinnedIds: string[]) =>
-  campaigns.sort((left, right) => {
-    const leftPinned = pinnedIds.includes(String(left.id)) ? 1 : 0;
-    const rightPinned = pinnedIds.includes(String(right.id)) ? 1 : 0;
-    if (leftPinned !== rightPinned) {
-      return rightPinned - leftPinned;
-    }
-
-    const leftTime = Date.parse(String(left.created_at ?? left.sent_at ?? 0));
-    const rightTime = Date.parse(String(right.created_at ?? right.sent_at ?? 0));
-    return rightTime - leftTime;
-  });
-
-const linkPendingLaunchFromServer = (
-  shop: string,
-  previousList: Record<string, unknown>[],
-  freshList: Record<string, unknown>[],
-) => {
-  const bridge = readLaunchBridge(shop);
-  if (!bridge || bridge.realId) {
-    return freshList;
-  }
-
-  const previousIds = new Set(previousList.map((campaign) => String(campaign.id)));
-  const newFromServer = freshList.filter((campaign) => !previousIds.has(String(campaign.id)));
-  if (newFromServer.length !== 1) {
-    return freshList;
-  }
-
-  const serverCampaign = newFromServer[0];
-  const snapshots = readPinnedSnapshots(shop);
-  const optimisticSnapshot = snapshots[bridge.optimisticId];
-  const sameTitle =
-    bridge.title && String(serverCampaign.title ?? '') === bridge.title;
-
-  if (!optimisticSnapshot && !sameTitle) {
-    return freshList;
-  }
-
-  const superseded = new Set(bridge.supersededIds);
-  superseded.add(bridge.optimisticId);
-
-  writeLaunchBridge(shop, {
-    ...bridge,
-    realId: String(serverCampaign.id),
-    supersededIds: Array.from(superseded),
-  });
-
-  removePinnedCampaign(shop, bridge.optimisticId);
-
-  const linked = freshList.map((campaign) => {
-    if (String(campaign.id) !== String(serverCampaign.id)) {
-      return campaign;
-    }
-
-    return normalizeCampaignRecord(
-      mergeCampaignImages(campaign, optimisticSnapshot),
-    );
-  });
-
-  const linkedRecord = linked.find((campaign) => String(campaign.id) === String(serverCampaign.id));
-  if (linkedRecord) {
-    pinCampaignId(shop, String(linkedRecord.id));
-    savePinnedSnapshot(shop, linkedRecord);
-  }
-
-  return linked;
 };
 
 export const mergeCampaignListPayload = (
@@ -294,20 +138,23 @@ export const mergeCampaignListPayload = (
   fresh: { ok?: boolean; campaigns?: unknown[] },
   shop: string,
 ) => {
-  const supersededIds = readSupersededIds(shop);
   const pinnedIds = readPinnedCampaignIds(shop);
   const snapshots = readPinnedSnapshots(shop);
 
-  let freshList = Array.isArray(fresh.campaigns)
-    ? fresh.campaigns.map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
+  const freshList = Array.isArray(fresh.campaigns)
+    ? fresh.campaigns.map((item) => normalizeCampaignRecord(shop, item as Record<string, unknown>))
     : [];
   const previousList = Array.isArray(previous?.campaigns)
-    ? previous.campaigns
-        .map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
-        .filter((campaign) => !supersededIds.has(String(campaign.id)))
+    ? previous.campaigns.map((item) => normalizeCampaignRecord(shop, item as Record<string, unknown>))
     : [];
 
-  freshList = linkPendingLaunchFromServer(shop, previousList, freshList);
+  const freshIds = new Set(freshList.map((campaign) => String(campaign.id)));
+  const replacements = readOptimisticReplacements(shop);
+  const supersededOptimisticIds = new Set(
+    Object.entries(replacements)
+      .filter(([, realId]) => freshIds.has(String(realId)))
+      .map(([optimisticId]) => optimisticId),
+  );
 
   for (const campaign of freshList) {
     const id = String(campaign.id);
@@ -320,7 +167,7 @@ export const mergeCampaignListPayload = (
 
   for (const campaign of previousList) {
     const id = String(campaign.id);
-    if (supersededIds.has(id)) {
+    if (supersededOptimisticIds.has(id)) {
       continue;
     }
     byId.set(id, campaign);
@@ -329,39 +176,93 @@ export const mergeCampaignListPayload = (
   for (const campaign of freshList) {
     const id = String(campaign.id);
     const existing = byId.get(id);
-    const snapshot = snapshots[id];
     byId.set(
       id,
-      normalizeCampaignRecord(
-        mergeCampaignImages(campaign, mergeCampaignImages(existing ?? {}, snapshot ?? {})),
-      ),
+      existing
+        ? normalizeCampaignRecord(shop, {
+            ...existing,
+            ...campaign,
+            image_url:
+              campaign.image_url ??
+              existing.image_url ??
+              existing.macos_image_url ??
+              existing.windows_image_url ??
+              existing.android_image_url,
+            windows_image_url: campaign.windows_image_url ?? existing.windows_image_url,
+            macos_image_url: campaign.macos_image_url ?? existing.macos_image_url,
+            android_image_url: campaign.android_image_url ?? existing.android_image_url,
+          })
+        : campaign,
+    );
+  }
+
+  for (const optimisticId of supersededOptimisticIds) {
+    byId.delete(optimisticId);
+  }
+
+  for (const [optimisticId, realId] of Object.entries(replacements)) {
+    if (byId.has(String(realId))) {
+      byId.delete(optimisticId);
+    }
+  }
+
+  const previousIds = new Set(previousList.map((campaign) => String(campaign.id)));
+  const newFromServer = freshList.filter((campaign) => !previousIds.has(String(campaign.id)));
+  const pinnedOnlyInCache = pinnedIds.filter((id) => !freshIds.has(id));
+
+  if (pinnedOnlyInCache.length === 1 && newFromServer.length === 1) {
+    const optimisticId = pinnedOnlyInCache[0];
+    const realCampaign = newFromServer[0];
+    const realId = String(realCampaign.id);
+    const optimisticCampaign = byId.get(optimisticId);
+
+    registerOptimisticReplacement(shop, optimisticId, realId);
+    migrateLaunchMedia(shop, optimisticId, realId);
+    removePinnedCampaign(shop, optimisticId);
+    pinCampaignId(shop, realId);
+
+    byId.delete(optimisticId);
+    byId.set(
+      realId,
+      normalizeCampaignRecord(shop, {
+        ...(optimisticCampaign ?? {}),
+        ...realCampaign,
+        image_url:
+          realCampaign.image_url ??
+          optimisticCampaign?.image_url ??
+          optimisticCampaign?.macos_image_url ??
+          optimisticCampaign?.windows_image_url ??
+          optimisticCampaign?.android_image_url,
+        windows_image_url: realCampaign.windows_image_url ?? optimisticCampaign?.windows_image_url,
+        macos_image_url: realCampaign.macos_image_url ?? optimisticCampaign?.macos_image_url,
+        android_image_url: realCampaign.android_image_url ?? optimisticCampaign?.android_image_url,
+      }),
     );
   }
 
   const activePinnedIds = readPinnedCampaignIds(shop);
   for (const pinnedId of activePinnedIds) {
-    if (supersededIds.has(pinnedId) || byId.has(pinnedId)) {
+    if (byId.has(pinnedId)) {
       continue;
     }
 
     const snapshot = snapshots[pinnedId];
     if (snapshot) {
-      byId.set(pinnedId, normalizeCampaignRecord(snapshot));
+      byId.set(pinnedId, normalizeCampaignRecord(shop, snapshot));
     }
   }
 
-  const bridge = readLaunchBridge(shop);
-  if (bridge?.realId && byId.has(bridge.realId) && byId.has(bridge.optimisticId)) {
-    byId.delete(bridge.optimisticId);
-  }
-
-  if (bridge?.realId) {
-    for (const id of supersededIds) {
-      byId.delete(id);
+  const merged = Array.from(byId.values()).sort((left, right) => {
+    const leftPinned = activePinnedIds.includes(String(left.id)) ? 1 : 0;
+    const rightPinned = activePinnedIds.includes(String(right.id)) ? 1 : 0;
+    if (leftPinned !== rightPinned) {
+      return rightPinned - leftPinned;
     }
-  }
 
-  const merged = sortCampaigns(Array.from(byId.values()), activePinnedIds);
+    const leftTime = Date.parse(String(left.created_at ?? left.sent_at ?? 0));
+    const rightTime = Date.parse(String(right.created_at ?? right.sent_at ?? 0));
+    return rightTime - leftTime;
+  });
 
   return {
     ok: true,
@@ -374,29 +275,24 @@ export const prependOptimisticCampaign = (
   shop: string,
   campaign: OptimisticCampaign,
 ) => {
-  writeLaunchBridge(shop, {
-    optimisticId: campaign.id,
-    title: campaign.title,
-    supersededIds: [],
-  });
-
   pinCampaignId(shop, campaign.id);
 
-  const normalized = normalizeCampaignRecord(campaign as unknown as Record<string, unknown>);
+  const normalized = normalizeCampaignRecord(shop, campaign as unknown as Record<string, unknown>);
   savePinnedSnapshot(shop, normalized);
 
   queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
     const currentList = Array.isArray(current?.campaigns)
-      ? current.campaigns
-          .map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
-          .filter((item) => String(item.id) !== campaign.id)
+      ? current.campaigns.map((item) => normalizeCampaignRecord(shop, item as Record<string, unknown>))
       : [];
 
+    const withoutDuplicate = currentList.filter((item) => String(item.id) !== campaign.id);
     return {
       ok: true,
-      campaigns: sortCampaigns([normalized, ...currentList], readPinnedCampaignIds(shop)),
+      campaigns: [normalized, ...withoutDuplicate],
     };
   });
+
+  broadcastShopSync(shop, { type: 'campaigns' });
 };
 
 export const replaceOptimisticCampaignId = (
@@ -405,36 +301,40 @@ export const replaceOptimisticCampaignId = (
   optimisticId: string,
   campaign: OptimisticCampaign,
 ) => {
-  const bridge = readLaunchBridge(shop);
-  const superseded = new Set(bridge?.supersededIds ?? []);
-  superseded.add(optimisticId);
-
-  writeLaunchBridge(shop, {
-    optimisticId,
-    realId: campaign.id,
-    title: campaign.title,
-    supersededIds: Array.from(superseded),
-  });
-
   removePinnedCampaign(shop, optimisticId);
+  registerOptimisticReplacement(shop, optimisticId, campaign.id);
+  migrateLaunchMedia(shop, optimisticId, campaign.id);
   pinCampaignId(shop, campaign.id);
 
-  const normalized = normalizeCampaignRecord(campaign as unknown as Record<string, unknown>);
+  const normalized = normalizeCampaignRecord(shop, campaign as unknown as Record<string, unknown>);
   savePinnedSnapshot(shop, normalized);
 
   queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
     const currentList = Array.isArray(current?.campaigns)
-      ? current.campaigns.map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
+      ? current.campaigns.map((item) => normalizeCampaignRecord(shop, item as Record<string, unknown>))
       : [];
 
-    const filtered = currentList.filter((item) => {
-      const id = String(item.id);
-      return id !== optimisticId && id !== campaign.id && !superseded.has(id);
-    });
+    const withoutOptimistic = currentList.filter((item) => String(item.id) !== optimisticId);
+    const existingIndex = withoutOptimistic.findIndex((item) => String(item.id) === campaign.id);
+
+    let nextList: Record<string, unknown>[];
+    if (existingIndex >= 0) {
+      nextList = withoutOptimistic.map((item, index) =>
+        index === existingIndex
+          ? normalizeCampaignRecord(shop, { ...item, ...normalized })
+          : item,
+      );
+    } else {
+      nextList = [normalized, ...withoutOptimistic];
+    }
 
     return {
       ok: true,
-      campaigns: sortCampaigns([normalized, ...filtered], readPinnedCampaignIds(shop)),
+      campaigns: nextList.sort((left, right) => {
+        const leftTime = Date.parse(String(left.created_at ?? left.sent_at ?? 0));
+        const rightTime = Date.parse(String(right.created_at ?? right.sent_at ?? 0));
+        return rightTime - leftTime;
+      }),
     };
   });
 

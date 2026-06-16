@@ -14,7 +14,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Skeleton } from "../ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
 import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
+import { applyLaunchMediaToCampaign } from '@/lib/client/campaign-launch-media-cache';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 
 type Campaign = {
     id: string;
@@ -43,7 +45,8 @@ const TableSkeleton = () => (
     </div>
 )
 
-const mapApiCampaign = (campaign: Record<string, unknown>): Campaign => {
+const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campaign => {
+    const enriched = applyLaunchMediaToCampaign(shop, campaign);
     const statusMap: Record<string, Campaign['status']> = {
         draft: 'Draft',
         scheduled: 'Scheduled',
@@ -54,33 +57,34 @@ const mapApiCampaign = (campaign: Record<string, unknown>): Campaign => {
         paused: 'Paused',
     };
 
-    const clickCount = Number(campaign.click_count ?? campaign.clickCount ?? 0);
-    const deliveryCount = Number(campaign.delivery_count ?? campaign.deliveryCount ?? 0);
+    const clickCount = Number(enriched.click_count ?? enriched.clickCount ?? 0);
+    const deliveryCount = Number(enriched.delivery_count ?? enriched.deliveryCount ?? 0);
     const ctr = deliveryCount > 0 ? `${((clickCount / deliveryCount) * 100).toFixed(1)}%` : '0.0%';
 
     return {
-        id: String(campaign.id),
-        name: String(campaign.title ?? 'Untitled Campaign'),
-        message: String(campaign.body ?? ''),
+        id: String(enriched.id),
+        name: String(enriched.title ?? 'Untitled Campaign'),
+        message: String(enriched.body ?? ''),
         imagePreviewUrl: pickCampaignBarImageUrl({
-            imageUrl: (campaign.image_url ?? campaign.imageUrl) as string | null | undefined,
-            windowsImageUrl: (campaign.windows_image_url ?? campaign.windowsImageUrl) as string | null | undefined,
-            macosImageUrl: (campaign.macos_image_url ?? campaign.macosImageUrl) as string | null | undefined,
-            androidImageUrl: (campaign.android_image_url ?? campaign.androidImageUrl) as string | null | undefined,
+            imageUrl: (enriched.image_url ?? enriched.imageUrl) as string | null | undefined,
+            windowsImageUrl: (enriched.windows_image_url ?? enriched.windowsImageUrl) as string | null | undefined,
+            macosImageUrl: (enriched.macos_image_url ?? enriched.macosImageUrl) as string | null | undefined,
+            androidImageUrl: (enriched.android_image_url ?? enriched.androidImageUrl) as string | null | undefined,
         }),
-        sendTime: String(campaign.sent_at ?? campaign.sentAt ?? campaign.created_at ?? campaign.createdAt ?? new Date().toISOString()),
-        segment: campaign.segment_id === 'all' || !campaign.segment_id
+        sendTime: String(enriched.sent_at ?? enriched.sentAt ?? enriched.created_at ?? enriched.createdAt ?? new Date().toISOString()),
+        segment: enriched.segment_id === 'all' || !enriched.segment_id
             ? 'All Subscribers'
-            : `Segment ${String(campaign.segment_id ?? campaign.segmentId ?? '')}`,
+            : `Segment ${String(enriched.segment_id ?? enriched.segmentId ?? '')}`,
         reached: deliveryCount,
         clickRate: ctr,
-        sales: Number(campaign.revenue_cents ?? campaign.revenueCents ?? 0) / 100,
-        status: statusMap[String(campaign.status ?? '').toLowerCase()] ?? 'Draft',
-        createdAt: String(campaign.created_at ?? campaign.createdAt ?? new Date().toISOString()),
+        sales: Number(enriched.revenue_cents ?? enriched.revenueCents ?? 0) / 100,
+        status: statusMap[String(enriched.status ?? '').toLowerCase()] ?? 'Draft',
+        createdAt: String(enriched.created_at ?? enriched.createdAt ?? new Date().toISOString()),
     };
 };
 
 export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined }) {
+    const shopDomain = useShopDomain();
     const { data, isLoading, isError, error: queryError, isFetching } = useCampaigns();
     const [activeTab, setActiveTab] = useState('sent');
     const [visibleCount, setVisibleCount] = useState(CAMPAIGNS_PAGE_SIZE);
@@ -90,8 +94,10 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             return [];
         }
 
-        return (data.campaigns as Record<string, unknown>[]).map(mapApiCampaign);
-    }, [data]);
+        return (data.campaigns as Record<string, unknown>[]).map((campaign) =>
+            mapApiCampaign(shopDomain, campaign),
+        );
+    }, [data, shopDomain]);
 
     const error = isError
         ? queryError instanceof Error
