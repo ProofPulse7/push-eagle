@@ -9,7 +9,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 
-import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
+import { ApiError, fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { fetchJsonWithRetry, fetchJsonWithShopRetry } from '@/lib/client/background-save';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
@@ -58,8 +58,14 @@ export function useCampaigns() {
     queryFn: () => fetchCampaignsList(queryClient, shop),
     enabled: Boolean(shop),
     staleTime: 60_000,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    retry: (failureCount, error) => {
+      if (error instanceof ApiError && error.status === 401) {
+        return false;
+      }
+      return failureCount < 2;
+    },
     refetchInterval: (query) => {
       const campaigns = (query.state.data as { campaigns?: Array<Record<string, unknown>> } | undefined)?.campaigns;
       if (!Array.isArray(campaigns)) {

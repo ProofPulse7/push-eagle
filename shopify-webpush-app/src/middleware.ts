@@ -28,6 +28,24 @@ const pickShop = (request: NextRequest) =>
   request.cookies.get('pe_shop')?.value?.trim().toLowerCase() ||
   null;
 
+const toHex = (buffer: ArrayBuffer) =>
+  Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+
+const signShopTimestamp = async (shop: string, ts: string, secret: string) => {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(`${shop}.${ts}`));
+  return toHex(signature);
+};
+
 const buildConnectRedirect = (request: NextRequest, shop: string) => {
   const connectUrl = new URL(`${ROOT_APP_URL}/app`);
   connectUrl.searchParams.set('shop', shop);
@@ -45,7 +63,39 @@ const buildConnectRedirect = (request: NextRequest, shop: string) => {
   return NextResponse.redirect(connectUrl);
 };
 
-export function middleware(request: NextRequest) {
+const buildSsoRedirect = async (request: NextRequest, shop: string) => {
+  const secret =
+    process.env.SHOPIFY_DASHBOARD_SSO_SECRET?.trim() ||
+    process.env.SHOPIFY_API_SECRET?.trim() ||
+    '';
+
+  if (!secret) {
+    return buildConnectRedirect(request, shop);
+  }
+
+  const ts = String(Date.now());
+  const sig = await signShopTimestamp(shop, ts, secret);
+  const redirectPath = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+
+  const ssoUrl = new URL('/api/integrations/shopify/sso', request.nextUrl.origin);
+  ssoUrl.searchParams.set('shop', shop);
+  ssoUrl.searchParams.set('redirect', redirectPath.startsWith('/') ? redirectPath : '/dashboard');
+  ssoUrl.searchParams.set('ts', ts);
+  ssoUrl.searchParams.set('sig', sig);
+
+  const host = request.nextUrl.searchParams.get('host');
+  const embedded = request.nextUrl.searchParams.get('embedded');
+  if (host) {
+    ssoUrl.searchParams.set('host', host);
+  }
+  if (embedded) {
+    ssoUrl.searchParams.set('embedded', embedded);
+  }
+
+  return NextResponse.redirect(ssoUrl);
+};
+
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (PUBLIC_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
@@ -83,7 +133,7 @@ export function middleware(request: NextRequest) {
     request.nextUrl.searchParams.get('from_sso') === '1';
 
   if (!authenticated) {
-    return buildConnectRedirect(request, shop);
+    return buildSsoRedirect(request, shop);
   }
 
   return NextResponse.next();

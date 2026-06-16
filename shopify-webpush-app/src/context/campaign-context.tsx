@@ -1,6 +1,13 @@
 'use client';
 import { createContext, useState, useContext, ReactNode, useEffect, useRef } from 'react';
 import { useSettings } from '@/context/settings-context';
+import { useShopDomain } from '@/hooks/use-shop-domain';
+import {
+    clearCampaignDraft,
+    draftImageToImageValue,
+    persistCampaignDraft,
+    readCampaignDraft,
+} from '@/lib/client/campaign-draft-storage';
 import { isMyshopifyHost, normalizeMerchantWebsiteUrl, resolveMerchantWebsiteUrl } from '@/lib/client/merchant-website-url';
 
 type ActionButton = { title: string; link: string };
@@ -81,6 +88,8 @@ export function useCampaignState() {
 }
 
 export function CampaignStateProvider({ children }: { children: ReactNode }) {
+    const shopDomain = useShopDomain();
+    const hydratedRef = useRef(false);
     const blobUrlsRef = useRef<Set<string>>(new Set());
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
@@ -107,6 +116,116 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [recurringPattern, setRecurringPattern] = useState('');
 
     useEffect(() => {
+        if (!shopDomain || hydratedRef.current) {
+            return;
+        }
+
+        const draft = readCampaignDraft(shopDomain);
+        if (draft) {
+            setTitle(draft.title ?? '');
+            setMessage(draft.message ?? '');
+            setPrimaryLink(draft.primaryLink ?? '');
+            setActionButtons(Array.isArray(draft.actionButtons) ? draft.actionButtons : []);
+            setWindowsHero(draftImageToImageValue(draft.windowsHero));
+            setMacHero(draftImageToImageValue(draft.macHero));
+            setAndroidHero(draftImageToImageValue(draft.androidHero));
+            if (draft.logo?.preview) {
+                setLogo(draftImageToImageValue(draft.logo));
+            }
+            setSendingOption(draft.sendingOption || 'now');
+            setScheduledDate(draft.scheduledDateIso ? new Date(draft.scheduledDateIso) : new Date());
+            setScheduledTime(draft.scheduledTime || '10:00 AM');
+            setSegmentId(draft.segmentId || 'all');
+            setSmartDeliver(Boolean(draft.smartDeliver));
+            setFlashSaleEnabled(Boolean(draft.flashSaleEnabled));
+            setFlashSaleDiscountPercent(Number(draft.flashSaleDiscountPercent ?? 20));
+            setFlashSaleOriginalPrice(Number(draft.flashSaleOriginalPrice ?? 0));
+            setFlashSaleSalePrice(Number(draft.flashSaleSalePrice ?? 0));
+            setFlashSaleExpiresAt(
+                draft.flashSaleExpiresAtIso ? new Date(draft.flashSaleExpiresAtIso) : new Date(Date.now() + 24 * 60 * 60 * 1000),
+            );
+            setFlashSaleUrgencyText(draft.flashSaleUrgencyText || '⏰ Limited time offer!');
+            setRecurringPattern(draft.recurringPattern || '');
+        }
+
+        hydratedRef.current = true;
+    }, [shopDomain, setLogo]);
+
+    useEffect(() => {
+        if (!shopDomain || !hydratedRef.current) {
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            void persistCampaignDraft(shopDomain, {
+                title,
+                message,
+                primaryLink,
+                actionButtons,
+                windowsHero: {
+                    preview: windowsHero.preview,
+                    originalPreview: windowsHero.originalPreview ?? windowsHero.preview,
+                },
+                macHero: {
+                    preview: macHero.preview,
+                    originalPreview: macHero.originalPreview ?? macHero.preview,
+                },
+                androidHero: {
+                    preview: androidHero.preview,
+                    originalPreview: androidHero.originalPreview ?? androidHero.preview,
+                },
+                logo: {
+                    preview: logo.preview,
+                    originalPreview: logo.preview,
+                },
+                sendingOption,
+                scheduledDateIso: scheduledDate?.toISOString() ?? null,
+                scheduledTime,
+                segmentId,
+                smartDeliver,
+                flashSaleEnabled,
+                flashSaleDiscountPercent,
+                flashSaleOriginalPrice,
+                flashSaleSalePrice,
+                flashSaleExpiresAtIso: flashSaleExpiresAt?.toISOString() ?? null,
+                flashSaleUrgencyText,
+                recurringPattern,
+            });
+        }, 350);
+
+        return () => window.clearTimeout(timer);
+    }, [
+        shopDomain,
+        title,
+        message,
+        primaryLink,
+        actionButtons,
+        windowsHero.preview,
+        windowsHero.originalPreview,
+        macHero.preview,
+        macHero.originalPreview,
+        androidHero.preview,
+        androidHero.originalPreview,
+        logo.preview,
+        sendingOption,
+        scheduledDate,
+        scheduledTime,
+        segmentId,
+        smartDeliver,
+        flashSaleEnabled,
+        flashSaleDiscountPercent,
+        flashSaleOriginalPrice,
+        flashSaleSalePrice,
+        flashSaleExpiresAt,
+        flashSaleUrgencyText,
+        recurringPattern,
+    ]);
+
+    useEffect(() => {
+        if (!hydratedRef.current) {
+            return;
+        }
+
         const merchantWebsiteUrl = resolveMerchantWebsiteUrl({ storeUrl });
         const normalizedLink = normalizeTrackedLink(primaryLink);
         if (normalizedLink !== primaryLink) {

@@ -98,7 +98,12 @@ export const handleStandaloneOAuthCallback = async (request: Request) => {
 
   await sessionStorage.storeSession(session);
   const { admin } = await unauthenticated.admin(session.shop);
-  await runAfterAuthForSession(session, admin);
+  void runAfterAuthForSession(session, admin).catch((error) => {
+    console.error("[push-eagle] runAfterAuthForSession failed", {
+      shop: session.shop,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 
   const returnTo = readReturnTo(request);
   const { host, embedded } = readEmbeddedParams(request);
