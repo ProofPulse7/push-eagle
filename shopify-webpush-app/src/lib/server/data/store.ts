@@ -7613,6 +7613,33 @@ const isSendableCampaignRecipient = (item: CampaignRecipientRow) => {
   return Boolean(endpoint && p256dh && auth);
 };
 
+export const requeueStaleSendingCampaigns = async (shopDomain?: string, staleMinutes = 2) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const staleIntervalMinutes = Math.max(1, Math.min(staleMinutes, 60));
+
+  const rows = shopDomain
+    ? await sql`
+      UPDATE campaigns
+      SET status = 'queued'
+      WHERE shop_domain = ${shopDomain}
+        AND status = 'sending'
+        AND COALESCE(delivery_count, 0) = 0
+        AND created_at < NOW() - (${staleIntervalMinutes} * INTERVAL '1 minute')
+      RETURNING id, shop_domain
+    `
+    : await sql`
+      UPDATE campaigns
+      SET status = 'queued'
+      WHERE status = 'sending'
+        AND COALESCE(delivery_count, 0) = 0
+        AND created_at < NOW() - (${staleIntervalMinutes} * INTERVAL '1 minute')
+      RETURNING id, shop_domain
+    `;
+
+  return rows as Array<{ id: string; shop_domain: string }>;
+};
+
 export const markCampaignSendFailed = async (shopDomain: string, campaignId: string) => {
   await ensureSchema();
   const sql = getNeonSql();
@@ -7684,11 +7711,23 @@ export const sendCampaign = async (
     throw new Error(`Campaign cannot be sent from status '${existing.status ?? 'unknown'}'.`);
   }
 
+  const previousStatus = campaign.status === 'sending' ? 'draft' : campaign.status;
+
+  const revertInProgressSend = async () => {
+    await releaseAllPendingCampaignDeliveryClaims(sql, campaignId, shopDomain);
+    await sql`
+      UPDATE campaigns
+      SET status = ${previousStatus}, sent_at = NULL
+      WHERE id = ${campaignId}
+        AND shop_domain = ${shopDomain}
+        AND status = 'sending'
+    `;
+  };
+
+  try {
   let recipients = dedupeRecipientsBySubscriber(
     await resolveCampaignAudience(shopDomain, campaign.segment_id, campaignId),
   );
-
-  const previousStatus = campaign.status === 'sending' ? 'draft' : campaign.status;
 
   const deliveredSubscriberRows = await sql`
     SELECT DISTINCT subscriber_id
@@ -7747,7 +7786,6 @@ export const sendCampaign = async (
     throw new Error('No active browser notification tokens found for this audience. Ask visitors to allow notifications first.');
   }
 
-  try {
     const messaging = getFirebaseAdminMessaging();
     const chunkSize = 500;
     let successCount = 0;
@@ -8041,13 +8079,7 @@ export const sendCampaign = async (
       remainingRecipients: 0,
     };
   } catch (error) {
-    await releaseAllPendingCampaignDeliveryClaims(sql, campaignId, shopDomain);
-    await sql`
-      UPDATE campaigns
-      SET status = ${previousStatus}
-      WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
-    `;
-
+    await revertInProgressSend();
     throw error;
   }
 };

@@ -7,9 +7,11 @@ import {
   countCampaignAudienceTokens,
   getSubscriberKpis,
   listCampaigns,
+  requeueStaleSendingCampaigns,
   resolveCampaignAudience,
 } from '@/lib/server/data/store';
 import { probeCronPendingWork } from '@/lib/server/cron/cron-work-probe';
+import { kickOffCampaignSendContinuation } from '@/lib/server/campaigns/campaign-send-queue';
 
 const redactToken = (value: string | null | undefined) => {
   const trimmed = String(value ?? '').trim();
@@ -27,6 +29,11 @@ export const runCampaignDeliveryDiagnostics = async (shopDomain: string) => {
   const checkedAt = new Date().toISOString();
   const issues: string[] = [];
   const recommendations: string[] = [];
+
+  const requeuedStale = await requeueStaleSendingCampaigns(shopDomain);
+  for (const row of requeuedStale) {
+    kickOffCampaignSendContinuation(String(row.shop_domain), String(row.id));
+  }
 
   const [
     subscriberKpis,
@@ -149,6 +156,10 @@ export const runCampaignDeliveryDiagnostics = async (shopDomain: string) => {
     issues.push('Monthly impression limit reached — campaign sends are blocked by billing.');
   }
 
+  if (requeuedStale.length > 0) {
+    recommendations.push(`Requeued ${requeuedStale.length} stale sending campaign(s) for retry.`);
+  }
+
   if (Number(cronProbe.queuedCampaigns ?? 0) > 0 || Number(cronProbe.sendingCampaigns ?? 0) > 0) {
     recommendations.push('Queued/sending campaigns detected — ensure /api/cron/process-campaigns runs on schedule.');
   }
@@ -207,6 +218,12 @@ export const runCampaignDeliveryDiagnostics = async (shopDomain: string) => {
       processSendEndpoint: '/api/campaigns/process-send',
     },
     cron: cronProbe,
+    recovery: {
+      requeuedStaleSending: requeuedStale.map((row) => ({
+        id: String(row.id),
+        shopDomain: String(row.shop_domain),
+      })),
+    },
     campaigns: {
       recent: (recentCampaigns as Array<Record<string, unknown>>).slice(0, 5).map((row) => ({
         id: String((row as { id?: unknown }).id ?? ''),

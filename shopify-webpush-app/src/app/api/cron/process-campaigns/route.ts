@@ -6,6 +6,7 @@ import {
   completeCronHeartbeat,
   listDueScheduledCampaigns,
   listInProgressCampaigns,
+  requeueStaleSendingCampaigns,
   startCronHeartbeat,
 } from '@/lib/server/data/store';
 
@@ -60,6 +61,7 @@ export async function GET(request: Request) {
       workerId,
     });
 
+    const requeuedStale = await requeueStaleSendingCampaigns();
     const dueCampaigns = await listDueScheduledCampaigns(maxCampaigns, shardCount, shardIndex);
     const inProgressCampaigns = await listInProgressCampaigns(maxCampaigns, shardCount, shardIndex);
     const candidates = [...dueCampaigns, ...inProgressCampaigns];
@@ -102,6 +104,7 @@ export async function GET(request: Request) {
       maxCampaigns,
       maxBatches,
       dueCount: dueCampaigns.length,
+      requeuedStaleCount: requeuedStale.length,
       inProgressCount: inProgressCampaigns.length,
       candidateCount: uniqueCandidates.length,
       processedCount: processed.filter((item) => !item.error).length,

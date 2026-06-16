@@ -1,6 +1,7 @@
 import { env } from '@/lib/config/env';
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { bumpCronWakeNow } from '@/lib/server/cron/cron-idle';
-import { markCampaignSendFailed, sendCampaign } from '@/lib/server/data/store';
+import { markCampaignSendFailed, requeueStaleSendingCampaigns, sendCampaign } from '@/lib/server/data/store';
 
 const DEFAULT_MAX_BATCHES = 50;
 const MAX_LOOP_ITERATIONS = 200;
@@ -8,6 +9,7 @@ const MAX_LOOP_ITERATIONS = 200;
 export type CampaignDeliveryJobResult = Awaited<ReturnType<typeof sendCampaign>> & {
   iterations: number;
   continuedAsync: boolean;
+  requeuedStale?: number;
 };
 
 export const kickOffCampaignSendContinuation = (
@@ -79,17 +81,19 @@ export const processCampaignDeliveryJob = async (
   let iterations = 0;
   let lastResult: Awaited<ReturnType<typeof sendCampaign>> | null = null;
 
+  const requeuedStale = await requeueStaleSendingCampaigns(shopDomain);
+
   try {
     while (iterations < maxIterations) {
       iterations += 1;
       lastResult = await sendCampaign(shopDomain, campaignId, { maxBatches });
 
       if (lastResult.completed) {
-        return { ...lastResult, iterations, continuedAsync: false };
+        return { ...lastResult, iterations, continuedAsync: false, requeuedStale: requeuedStale.length };
       }
 
       if ((lastResult.remainingRecipients ?? 0) <= 0) {
-        return { ...lastResult, iterations, continuedAsync: false };
+        return { ...lastResult, iterations, continuedAsync: false, requeuedStale: requeuedStale.length };
       }
     }
 
@@ -106,6 +110,7 @@ export const processCampaignDeliveryJob = async (
       }),
       iterations,
       continuedAsync: true,
+      requeuedStale: requeuedStale.length,
     };
   } catch (error) {
     console.error('[campaign-send-queue] delivery job failed', campaignId, error);
@@ -116,10 +121,21 @@ export const processCampaignDeliveryJob = async (
 
 export const startCampaignDelivery = async (shopDomain: string, campaignId: string) => {
   await bumpCronWakeNow();
-  const trigger = kickOffCampaignSendContinuation(shopDomain, campaignId);
+
+  deferAfterResponse(async () => {
+    try {
+      await processCampaignDeliveryJob(shopDomain, campaignId);
+    } catch (error) {
+      console.error('[campaign-send-queue] deferred launch delivery failed', campaignId, error);
+    } finally {
+      const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+      void invalidateShopDashboardCaches(shopDomain);
+    }
+  });
+
   return {
     campaignId,
     shopDomain,
-    trigger,
+    triggered: true,
   };
 };

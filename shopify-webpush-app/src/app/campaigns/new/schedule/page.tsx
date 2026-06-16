@@ -8,7 +8,7 @@ import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
-import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
+import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
 
 import { ArrowLeft, Users, Clock, Send, Save, Loader2, Edit } from 'lucide-react';
@@ -154,6 +154,7 @@ export default function ScheduleCampaignPage() {
         setRecurringPattern,
     } = useCampaignState();
     const [isSaving, setIsSaving] = useState(false);
+    const [isLaunching, setIsLaunching] = useState(false);
     const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('windows');
     const [segmentDisplayName, setSegmentDisplayName] = useState('All Subscribers');
     const [segmentSubscriberCount, setSegmentSubscriberCount] = useState(0);
@@ -215,7 +216,7 @@ export default function ScheduleCampaignPage() {
         };
     }, [queryClient, shopDomain, segmentId]);
     
-    const handleLaunchCampaign = () => {
+    const handleLaunchCampaign = async () => {
         try {
             if (!shopDomain) {
                 throw new Error('Set your Shopify subdomain in Settings before launching campaigns.');
@@ -239,6 +240,16 @@ export default function ScheduleCampaignPage() {
                 }
             }
 
+            setIsLaunching(true);
+
+            const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
+                resolveCampaignMediaUrl(logo.preview, shopDomain),
+                resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
+                resolveCampaignMediaUrl(macHero.preview, shopDomain),
+                resolveCampaignMediaUrl(androidHero.preview, shopDomain),
+            ]);
+
+            const listImageUrl = macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? iconUrl;
             const optimisticId = crypto.randomUUID();
             const launchStatus =
                 sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
@@ -247,11 +258,11 @@ export default function ScheduleCampaignPage() {
                 id: optimisticId,
                 title: title || 'Untitled Campaign',
                 body: message || '',
-                image_url: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
-                windows_image_url: windowsHero.preview,
-                macos_image_url: macHero.preview,
-                android_image_url: androidHero.preview,
-                icon_url: logo.preview,
+                image_url: listImageUrl,
+                windows_image_url: windowsImageUrl,
+                macos_image_url: macosImageUrl,
+                android_image_url: androidImageUrl,
+                icon_url: iconUrl,
                 segment_id: segmentId,
                 status: launchStatus,
                 created_at: new Date().toISOString(),
@@ -287,21 +298,6 @@ export default function ScheduleCampaignPage() {
 
             void (async () => {
                 try {
-                    const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
-                        resolveCampaignMediaUrl(logo.preview, shopDomain),
-                        resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
-                        resolveCampaignMediaUrl(macHero.preview, shopDomain),
-                        resolveCampaignMediaUrl(androidHero.preview, shopDomain),
-                    ]);
-
-                    patchOptimisticCampaign(queryClient, shopDomain, optimisticId, {
-                        image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? iconUrl,
-                        windows_image_url: windowsImageUrl,
-                        macos_image_url: macosImageUrl,
-                        android_image_url: androidImageUrl,
-                        icon_url: iconUrl,
-                    });
-
                     const campaignPayload = {
                         shopDomain,
                         title: title || 'Untitled Campaign',
@@ -341,7 +337,7 @@ export default function ScheduleCampaignPage() {
                             id: campaignId,
                             title: title || 'Untitled Campaign',
                             body: message || '',
-                            image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? iconUrl,
+                            image_url: listImageUrl,
                             windows_image_url: windowsImageUrl,
                             macos_image_url: macosImageUrl,
                             android_image_url: androidImageUrl,
@@ -382,7 +378,7 @@ export default function ScheduleCampaignPage() {
                         id: campaignId,
                         title: title || 'Untitled Campaign',
                         body: message || '',
-                        image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl,
+                        image_url: listImageUrl,
                         windows_image_url: windowsImageUrl,
                         macos_image_url: macosImageUrl,
                         android_image_url: androidImageUrl,
@@ -461,6 +457,8 @@ export default function ScheduleCampaignPage() {
                 title: 'Campaign launch failed',
                 description: error instanceof Error ? error.message : 'Unexpected error while launching campaign.',
             });
+        } finally {
+            setIsLaunching(false);
         }
     };
 
@@ -634,11 +632,15 @@ export default function ScheduleCampaignPage() {
                 </Button>
                 <Button 
                     size="lg" 
-                    onClick={handleLaunchCampaign} 
-                    disabled={isSaving || !title || !primaryLink}
+                    onClick={() => void handleLaunchCampaign()} 
+                    disabled={isSaving || isLaunching || !title || !primaryLink}
                 >
-                    <Send className="mr-2 h-4 w-4" />
-                    {sendingOption === 'schedule' ? 'Schedule Campaign' : 'Launch Campaign'}
+                    {isLaunching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                    {isLaunching
+                        ? 'Preparing launch...'
+                        : sendingOption === 'schedule'
+                          ? 'Schedule Campaign'
+                          : 'Launch Campaign'}
                 </Button>
             </div>
         </div>
