@@ -2,22 +2,11 @@
 'use client';
 
 import React, { useState } from 'react';
-import { MoreHorizontal, ChevronDown, ImageIcon } from 'lucide-react';
+import { MoreHorizontal, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useSettings } from '@/context/settings-context';
-
-const ChromeIcon = (props: React.SVGProps<SVGSVGElement>) => (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" {...props}>
-        <g fill="none" fillRule="evenodd">
-            <path fill="#34A853" d="M21.5,12A9.5,9.5 0 0,1 2.5,12A9.5,9.5 0 0,1 21.5,12"/>
-            <path fill="#4285F4" d="M21.5,12A9.5,9.5 0 0,1 12,2.5A9.5,9.5 0 0,1 21.5,12"/>
-            <path fill="#EA4335" d="M12,2.5A9.5,9.5 0 0,1 2.5,12A9.5,9.5 0 0,1 12,2.5"/>
-            <path fill="#FBBC05" d="M2.5,12A9.5,9.5 0 0,1 12,21.5A9.5,9.5 0 0,1 2.5,12"/>
-            <path fill="#4285F4" d="M12,17A5,5 0 0,1 12,7A5,5 0 0,1 12,17"/>
-            <path fill="#FFF" d="M12,16A4,4 0 0,1 12,8A4,4 0 0,1 12,16"/>
-        </g>
-    </svg>
-);
+import { BROWSER_LOGOS } from '@/lib/client/preview-assets';
+import { formatStoreDisplayName } from '@/lib/client/merchant-website-url';
 
 type MacOSPreviewProps = {
   title: string;
@@ -32,6 +21,7 @@ type MacOSPreviewProps = {
 
 export const MacOSPreview = ({ title, message, link, icon, hero, actionButtons, showDeviceName = true }: MacOSPreviewProps) => {
     const { storeUrl } = useSettings();
+    const storeDisplayName = formatStoreDisplayName(storeUrl || link);
     const [isExpanded, setIsExpanded] = useState(false);
     const messageForDisplay = message ? (message.length > 100 ? `${message.substring(0, 100)}...` : message) : 'Your message will appear here...';
     
@@ -42,16 +32,18 @@ export const MacOSPreview = ({ title, message, link, icon, hero, actionButtons, 
                     <p className="text-left text-sm font-medium">macOS</p>
                     <div className="flex gap-2">
                         <div className="h-8 px-3 flex items-center justify-center text-xs bg-white/80 border rounded-md shadow-sm">Big Sur and newer</div>
-                        <div className="h-8 px-3 flex items-center justify-center gap-1 text-xs bg-white/80 border rounded-md shadow-sm"><ChromeIcon className="h-3.5 w-3.5" /> Chrome</div>
+                        <div className="h-8 px-3 flex items-center justify-center gap-1 text-xs bg-white/80 border rounded-md shadow-sm">
+                            <img src={BROWSER_LOGOS.chrome} alt="Chrome" className="h-3.5 w-3.5 object-contain" />
+                            Chrome
+                        </div>
                     </div>
                 </div>
             )}
             {!isExpanded ? (
-                // Collapsed View
                 <div onClick={() => setIsExpanded(true)} className="mx-auto w-[360px] max-w-full cursor-pointer rounded-xl border border-gray-200 bg-white/90 p-3 pb-6 shadow-lg backdrop-blur-xl">
                     <div className="flex justify-between items-center mb-1">
                         <div className="flex items-center gap-2">
-                            <ChromeIcon className="w-4 h-4 text-gray-600"/>
+                            <img src={BROWSER_LOGOS.chrome} alt="Chrome" className="h-4 w-4 object-contain" />
                             <p className="text-xs font-semibold text-gray-500">GOOGLE CHROME</p>
                         </div>
                         <p className="text-xs text-gray-400">1m ago</p>
@@ -59,7 +51,7 @@ export const MacOSPreview = ({ title, message, link, icon, hero, actionButtons, 
                     <div className="flex items-start gap-3">
                         <div className="flex-grow overflow-hidden">
                             <p className="font-semibold text-black truncate">{title || 'Your Title Here'}</p>
-                            <p className="text-xs text-black">{storeUrl}</p>
+                            <p className="text-xs text-black">{storeDisplayName}</p>
                             <p className="text-sm text-gray-600 mt-1" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                 {messageForDisplay}
                             </p>
@@ -72,11 +64,10 @@ export const MacOSPreview = ({ title, message, link, icon, hero, actionButtons, 
                     </div>
                  </div>
             ) : (
-                // Expanded View
                  <div className="mx-auto w-[360px] max-w-full rounded-xl border border-gray-300/80 bg-[#f0f0f0] shadow-lg">
                     <div className="p-2 border-b border-gray-300/80 flex justify-between items-center">
                         <div className="flex items-center gap-2">
-                            <ChromeIcon className="w-4 h-4 text-gray-600"/>
+                            <img src={BROWSER_LOGOS.chrome} alt="Chrome" className="h-4 w-4 object-contain" />
                             <p className="text-xs font-semibold">GOOGLE CHROME</p>
                         </div>
                         <div className="flex items-center gap-2 cursor-pointer" onClick={() => setIsExpanded(false)}>
@@ -95,7 +86,7 @@ export const MacOSPreview = ({ title, message, link, icon, hero, actionButtons, 
 
                         <div className="mt-2">
                             <p className="font-bold text-black">{title || 'Your Title Here'}</p>
-                            <p className="text-sm text-black">{storeUrl}</p>
+                            <p className="text-sm text-black">{storeDisplayName}</p>
                             <p className="text-sm text-gray-700 mt-1">
                                 {messageForDisplay}
                             </p>

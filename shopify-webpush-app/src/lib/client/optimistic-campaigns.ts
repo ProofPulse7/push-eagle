@@ -223,6 +223,31 @@ export const prependOptimisticCampaign = (
   });
 };
 
+export const replaceOptimisticCampaignId = (
+  queryClient: QueryClient,
+  shop: string,
+  optimisticId: string,
+  campaign: OptimisticCampaign,
+) => {
+  removePinnedCampaign(shop, optimisticId);
+  pinCampaignId(shop, campaign.id);
+
+  const normalized = normalizeCampaignRecord(campaign as unknown as Record<string, unknown>);
+  savePinnedSnapshot(shop, normalized);
+
+  queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
+    const currentList = Array.isArray(current?.campaigns)
+      ? current.campaigns.map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
+      : [];
+
+    const withoutOptimistic = currentList.filter((item) => String(item.id) !== optimisticId);
+    return mergeCampaignListPayload(current, {
+      ok: true,
+      campaigns: [normalized, ...withoutOptimistic],
+    }, shop);
+  });
+};
+
 export const bumpDashboardCampaignSent = (queryClient: QueryClient, shop: string) => {
   queryClient.setQueryData(queryKeys.dashboardSummary(shop), (current: Record<string, unknown> | undefined) => {
     const campaignStatsRaw = (current?.campaignStats ?? {}) as Record<string, unknown>;

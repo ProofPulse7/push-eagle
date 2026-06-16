@@ -4,9 +4,7 @@ import Link from 'next/link';
 import { useCampaignState } from '@/context/campaign-context';
 
 import { Button } from "@/components/ui/button";
-import { useToast } from '@/hooks/use-toast';
 
-import { suggestNotificationCopy } from '@/ai/flows';
 import { Loader2, Check, ArrowLeft } from "lucide-react";
 
 import { IOSPreview } from './previews/ios-preview';
@@ -57,9 +55,7 @@ export function Composer() {
     const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
     const [saveStatus, setSaveStatus] = useState<'Unsaved' | 'Saving...' | 'Changes saved'>('Unsaved');
     const [detailsHref, setDetailsHref] = useState('/campaigns/new/details');
-    const [isGenerating, setIsGenerating] = useState(false);
     const [errors, setErrors] = useState<{ title?: string, primaryLink?: string }>({});
-    const { toast } = useToast();
 
     useEffect(() => {
         const queryShop = new URLSearchParams(window.location.search).get('shop');
@@ -182,28 +178,6 @@ export function Composer() {
         return () => clearTimeout(handler);
     }, [title, message, primaryLink, windowsHero, macHero, androidHero, logo, actionButtons]);
     
-    const handleGenerateCopy = async (brandVoice?: string) => {
-        setIsGenerating(true);
-        try {
-            const result = await suggestNotificationCopy({ 
-                topic: title || "Summer Collection Launch", 
-                targetAudience: "Fashion lovers", 
-                goal: brandVoice || "drive sales",
-                brandVoice: brandVoice,
-                currentTitle: title,
-                currentMessage: message,
-            });
-            setTitle(result.titleSuggestions[0] || '');
-            setMessage(result.descriptionSuggestions[0] || '');
-            toast({ title: "AI copy generated!", description: "The title and body have been updated." });
-        } catch (e) {
-            console.error(e);
-            toast({ variant: 'destructive', title: "AI Error", description: "Failed to generate copy." });
-        } finally {
-            setIsGenerating(false);
-        }
-    };
-    
     const validateForm = () => {
         const newErrors: { title?: string, primaryLink?: string } = {};
         if (!title.trim()) {
@@ -259,10 +233,8 @@ export function Composer() {
                             title={title} setTitle={setTitle}
                             message={message} setMessage={setMessage}
                             primaryLink={primaryLink} setPrimaryLink={setPrimaryLink}
-                            handleGenerateCopy={handleGenerateCopy}
                             handleTitleEmojiSelect={handleTitleEmojiSelect}
                             handleMessageEmojiSelect={handleMessageEmojiSelect}
-                            isGenerating={isGenerating}
                             errors={errors}
                         />
                         

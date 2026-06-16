@@ -1,15 +1,17 @@
 'use client';
-import { useState, useMemo, useEffect, type SVGProps } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
-import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, prependOptimisticCampaign } from '@/lib/client/optimistic-campaigns';
+import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
+import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
 
-import { ArrowLeft, Users, Calendar as CalendarIcon, Clock, Send, Save, Eye, Loader2, Edit, Image as ImageIcon, MessageSquare, Link as LinkIcon, MousePointerClick } from 'lucide-react';
+import { ArrowLeft, Users, Clock, Send, Save, Loader2, Edit } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -151,9 +153,8 @@ export default function ScheduleCampaignPage() {
         recurringPattern,
         setRecurringPattern,
     } = useCampaignState();
-    const [isLaunching, setIsLaunching] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
-    const [previewDevice, setPreviewDevice] = useState('windows');
+    const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('windows');
     const [segmentDisplayName, setSegmentDisplayName] = useState('All Subscribers');
     const [segmentSubscriberCount, setSegmentSubscriberCount] = useState(0);
 
@@ -214,8 +215,7 @@ export default function ScheduleCampaignPage() {
         };
     }, [queryClient, shopDomain, segmentId]);
     
-    const handleLaunchCampaign = async () => {
-        setIsLaunching(true);
+    const handleLaunchCampaign = () => {
         try {
             if (!shopDomain) {
                 throw new Error('Set your Shopify subdomain in Settings before launching campaigns.');
@@ -239,69 +239,19 @@ export default function ScheduleCampaignPage() {
                 }
             }
 
-            const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
-                resolveCampaignMediaUrl(logo.preview, shopDomain),
-                resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
-                resolveCampaignMediaUrl(macHero.preview, shopDomain),
-                resolveCampaignMediaUrl(androidHero.preview, shopDomain),
-            ]);
-
-            const createResponse = await fetch('/api/campaigns', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    shopDomain,
-                    title: title || 'Untitled Campaign',
-                    body: message || '',
-                    targetUrl: primaryLink || null,
-                    iconUrl,
-                    imageUrl: macosImageUrl,
-                    windowsImageUrl,
-                    macosImageUrl,
-                    androidImageUrl,
-                    actionButtons: actionButtons
-                        .filter((button) => button.title?.trim() && button.link?.trim())
-                        .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
-                    segmentId,
-                    status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
-                    scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                    // Smart Delivery
-                    smartDeliver,
-                    // Flash Sale
-                    flashSaleEnabled,
-                    flashSaleConfig: flashSaleEnabled ? {
-                        discountPercent: flashSaleDiscountPercent,
-                        originalPrice: flashSaleOriginalPrice,
-                        salePrice: flashSaleSalePrice,
-                        expiresAt: flashSaleExpiresAt?.toISOString(),
-                        urgencyText: flashSaleUrgencyText,
-                    } : undefined,
-                    // Recurring
-                    recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
-                }),
-            });
-
-            const createPayload = await parseApiResponse(createResponse);
-            const createResult = createPayload.json;
-            if (!createResponse.ok || !createResult?.ok || !createResult?.campaign?.id) {
-                throw new Error(buildResponseError('Failed to create campaign.', createPayload));
-            }
-
-            const campaignId = String(createResult.campaign.id);
+            const optimisticId = crypto.randomUUID();
             const launchStatus =
                 sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
 
             prependOptimisticCampaign(queryClient, shopDomain, {
-                id: campaignId,
+                id: optimisticId,
                 title: title || 'Untitled Campaign',
                 body: message || '',
-                image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl,
-                windows_image_url: windowsImageUrl,
-                macos_image_url: macosImageUrl,
-                android_image_url: androidImageUrl,
-                icon_url: iconUrl,
+                image_url: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
+                windows_image_url: windowsHero.preview,
+                macos_image_url: macHero.preview,
+                android_image_url: androidHero.preview,
+                icon_url: logo.preview,
                 segment_id: segmentId,
                 status: launchStatus,
                 created_at: new Date().toISOString(),
@@ -334,10 +284,77 @@ export default function ScheduleCampaignPage() {
                 description: toastDescription,
             });
             router.push(campaignsHref);
-            setIsLaunching(false);
 
-            const runBackgroundLaunch = async () => {
+            void (async () => {
                 try {
+                    const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
+                        resolveCampaignMediaUrl(logo.preview, shopDomain),
+                        resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
+                        resolveCampaignMediaUrl(macHero.preview, shopDomain),
+                        resolveCampaignMediaUrl(androidHero.preview, shopDomain),
+                    ]);
+
+                    const createResponse = await fetch('/api/campaigns', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            shopDomain,
+                            title: title || 'Untitled Campaign',
+                            body: message || ' ',
+                            targetUrl: primaryLink || null,
+                            iconUrl,
+                            imageUrl: macosImageUrl,
+                            windowsImageUrl,
+                            macosImageUrl,
+                            androidImageUrl,
+                            actionButtons: actionButtons
+                                .filter((button) => button.title?.trim() && button.link?.trim())
+                                .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
+                            segmentId,
+                            status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
+                            scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
+                            smartDeliver,
+                            flashSaleEnabled,
+                            flashSaleConfig: flashSaleEnabled ? {
+                                discountPercent: flashSaleDiscountPercent,
+                                originalPrice: flashSaleOriginalPrice,
+                                salePrice: flashSaleSalePrice,
+                                expiresAt: flashSaleExpiresAt?.toISOString(),
+                                urgencyText: flashSaleUrgencyText,
+                            } : undefined,
+                            recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
+                        }),
+                    });
+
+                    const createPayload = await parseApiResponse(createResponse);
+                    const createResult = createPayload.json;
+                    if (!createResponse.ok || !createResult?.ok || !createResult?.campaign?.id) {
+                        throw new Error(buildResponseError('Failed to create campaign.', createPayload));
+                    }
+
+                    const campaignId = String(createResult.campaign.id);
+
+                    replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
+                        id: campaignId,
+                        title: title || 'Untitled Campaign',
+                        body: message || '',
+                        image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl,
+                        windows_image_url: windowsImageUrl,
+                        macos_image_url: macosImageUrl,
+                        android_image_url: androidImageUrl,
+                        icon_url: iconUrl,
+                        segment_id: segmentId,
+                        status: launchStatus,
+                        created_at: new Date().toISOString(),
+                        sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
+                        scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
+                        delivery_count: segmentSubscriberCount,
+                        click_count: 0,
+                        revenue_cents: 0,
+                    });
+
                     if (sendingOption === 'schedule' || sendingOption === 'recurring') {
                         if (sendingOption === 'schedule') {
                             if (!scheduledAt) {
@@ -394,14 +411,7 @@ export default function ScheduleCampaignPage() {
                         body: JSON.stringify({
                             campaignId,
                             shopDomain,
-                            title: title || 'Untitled Campaign',
-                            body: message || '',
-                            targetUrl: primaryLink || null,
-                            iconUrl,
-                            imageUrl: macosImageUrl,
-                            segmentId,
-                            smartDeliver,
-                            testMode: false,
+                            maxBatches: 2000,
                         }),
                     });
 
@@ -420,18 +430,13 @@ export default function ScheduleCampaignPage() {
                                 : 'Background delivery failed. Check campaigns for status.',
                     });
                 }
-            };
-
-            void runBackgroundLaunch();
-            return;
+            })();
         } catch (error) {
             toast({
                 variant: 'destructive',
                 title: 'Campaign launch failed',
                 description: error instanceof Error ? error.message : 'Unexpected error while launching campaign.',
             });
-        } finally {
-            setIsLaunching(false);
         }
     };
 
@@ -566,18 +571,29 @@ export default function ScheduleCampaignPage() {
                         <CardContent>
                             <div className="flex gap-4">
                                <div className="flex flex-col gap-2">
-                                    <Button variant={previewDevice === 'ios' ? 'secondary' : 'ghost'} size="icon" onClick={() => setPreviewDevice('ios')}>
-                                        <ImageIcon className="w-5 h-5" />
-                                    </Button>
-                                    <Button variant={previewDevice === 'android' ? 'secondary' : 'ghost'} size="icon" onClick={() => setPreviewDevice('android')}>
-                                        <AndroidPreviewIcon className="w-5 h-5" />
-                                    </Button>
-                                    <Button variant={previewDevice === 'windows' ? 'secondary' : 'ghost'} size="icon" onClick={() => setPreviewDevice('windows')}>
-                                        <WindowsPreviewIcon className="w-5 h-5" />
-                                    </Button>
-                                    <Button variant={previewDevice === 'macos' ? 'secondary' : 'ghost'} size="icon" onClick={() => setPreviewDevice('macos')}>
-                                        <MacOSPreviewIcon className="w-5 h-5" />
-                                    </Button>
+                                    {([
+                                        { device: 'ios' as const, label: 'Safari on iOS' },
+                                        { device: 'android' as const, label: 'Chrome on Android' },
+                                        { device: 'windows' as const, label: 'Microsoft Edge on Windows' },
+                                        { device: 'macos' as const, label: 'Chrome on macOS' },
+                                    ]).map(({ device, label }) => (
+                                        <Button
+                                            key={device}
+                                            variant={previewDevice === device ? 'secondary' : 'ghost'}
+                                            size="icon"
+                                            className="h-10 w-10 p-1"
+                                            onClick={() => setPreviewDevice(device)}
+                                            aria-label={label}
+                                        >
+                                            <Image
+                                                src={OS_PREVIEW_LOGOS[device]}
+                                                alt={label}
+                                                width={24}
+                                                height={24}
+                                                className="h-6 w-6 object-contain"
+                                            />
+                                        </Button>
+                                    ))}
                                </div>
                                <div className="flex-1 p-4 bg-muted rounded-md flex items-center justify-center min-h-[200px]">
                                  {renderPreview()}
@@ -588,39 +604,19 @@ export default function ScheduleCampaignPage() {
                 </div>
             </div>
              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={handleSaveDraft} disabled={isSaving || isLaunching}>
+                <Button variant="outline" onClick={handleSaveDraft} disabled={isSaving}>
                     {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                     {isSaving ? 'Saving...' : 'Save as Draft'}
                 </Button>
                 <Button 
                     size="lg" 
                     onClick={handleLaunchCampaign} 
-                    disabled={isLaunching || isSaving || !title || !primaryLink}
+                    disabled={isSaving || !title || !primaryLink}
                 >
-                    {isLaunching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                    {isLaunching ? 'Processing...' : (sendingOption === 'schedule' ? 'Schedule Campaign' : 'Launch Campaign')}
+                    <Send className="mr-2 h-4 w-4" />
+                    {sendingOption === 'schedule' ? 'Schedule Campaign' : 'Launch Campaign'}
                 </Button>
             </div>
         </div>
     );
 }
-
-// Icons for preview switching
-const AndroidPreviewIcon = (props: SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
-    <path d="M16 8c0-2.2-1.8-4-4-4S8 5.8 8 8v4h8V8zm-2 0c0-1.1-.9-2-2-2s-2 .9-2 2v2h4V8z"/>
-    <path d="M19 12H5c-1.1 0-2 .9-2 2v5h18v-5c0-1.1-.9-2-2-2zm-9 4H8v-2h2v2zm4 0h-2v-2h2v2z"/>
-  </svg>
-);
-
-const WindowsPreviewIcon = (props: SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
-    <path d="M2 3h9v9H2V3zm11 0h9v9h-9V3zM2 12h9v9H2v-9zm11 0h9v9h-9v-9z"/>
-  </svg>
-);
-
-const MacOSPreviewIcon = (props: SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
-    <path d="M20 12c0-2.2-1.8-4-4-4s-4 1.8-4 4 1.8 4 4 4 4-1.8 4-4zM9 12c0-2.2-1.8-4-4-4s-4 1.8-4 4 1.8 4 4 4 4-1.8 4-4zm11 7H4c-.6 0-1-.4-1-1s.4-1 1-1h16c.6 0 1 .4 1 1s-.4 1-1 1z"/>
-  </svg>
-);

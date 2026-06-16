@@ -6305,6 +6305,18 @@ export const resolveCampaignAudience = async (
         WHERE s.shop_domain = ${shopDomain}
           AND t.shop_domain = ${shopDomain}
           AND t.status = 'active'
+          AND (
+            (
+              COALESCE(t.token_type, 'fcm') = 'vapid'
+              AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+              AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+              AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+            )
+            OR (
+              COALESCE(t.token_type, 'fcm') <> 'vapid'
+              AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+            )
+          )
           AND NOT EXISTS (
             SELECT 1
             FROM campaign_deliveries cd
@@ -6330,6 +6342,18 @@ export const resolveCampaignAudience = async (
         WHERE s.shop_domain = ${shopDomain}
           AND t.shop_domain = ${shopDomain}
           AND t.status = 'active'
+          AND (
+            (
+              COALESCE(t.token_type, 'fcm') = 'vapid'
+              AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+              AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+              AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+            )
+            OR (
+              COALESCE(t.token_type, 'fcm') <> 'vapid'
+              AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+            )
+          )
         ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
       `;
     return rows as Array<{
@@ -6379,6 +6403,18 @@ export const resolveCampaignAudience = async (
       WHERE s.shop_domain = ${shopDomain}
         AND t.shop_domain = ${shopDomain}
         AND t.status = 'active'
+        AND (
+          (
+            COALESCE(t.token_type, 'fcm') = 'vapid'
+            AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+            AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+            AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+          )
+          OR (
+            COALESCE(t.token_type, 'fcm') <> 'vapid'
+            AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+          )
+        )
         AND s.id = ANY(${subscriberIds})
         AND NOT EXISTS (
           SELECT 1
@@ -6405,6 +6441,18 @@ export const resolveCampaignAudience = async (
       WHERE s.shop_domain = ${shopDomain}
         AND t.shop_domain = ${shopDomain}
         AND t.status = 'active'
+        AND (
+          (
+            COALESCE(t.token_type, 'fcm') = 'vapid'
+            AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+            AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+            AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+          )
+          OR (
+            COALESCE(t.token_type, 'fcm') <> 'vapid'
+            AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+          )
+        )
         AND s.id = ANY(${subscriberIds})
       ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
     `;
@@ -7518,7 +7566,6 @@ export const sendCampaign = async (
   options?: { maxBatches?: number },
 ) => {
   const { assertCanSendNotifications } = await import('@/lib/server/billing/merchant-billing');
-  await assertCanSendNotifications(shopDomain, 1);
 
   await ensureSchema();
   const sql = getNeonSql();
@@ -7529,7 +7576,7 @@ export const sendCampaign = async (
     SET status = 'sending'
     WHERE id = ${campaignId}
       AND shop_domain = ${shopDomain}
-      AND status IN ('draft', 'scheduled', 'queued')
+      AND status IN ('draft', 'scheduled', 'queued', 'sending')
     RETURNING *
   `;
 
@@ -7568,18 +7615,14 @@ export const sendCampaign = async (
       throw new Error('Campaign has already been sent.');
     }
 
-    if (existing.status === 'sending') {
-      throw new Error('Campaign is already being processed.');
-    }
-
     throw new Error(`Campaign cannot be sent from status '${existing.status ?? 'unknown'}'.`);
   }
-
-  const previousStatus = campaign.status;
 
   let recipients = dedupeRecipientsBySubscriber(
     await resolveCampaignAudience(shopDomain, campaign.segment_id, campaignId),
   );
+
+  const previousStatus = campaign.status === 'sending' ? 'draft' : campaign.status;
 
   const deliveredSubscriberRows = await sql`
     SELECT DISTINCT subscriber_id
@@ -7597,6 +7640,8 @@ export const sendCampaign = async (
   recipients = recipients.filter(
     (recipient) => !deliveredSubscriberIds.has(Number(recipient.subscriber_id)),
   );
+
+  await assertCanSendNotifications(shopDomain, Math.max(recipients.length, 1));
 
   if (recipients.length === 0) {
     const deliveredRows = await sql`
@@ -7692,8 +7737,22 @@ export const sendCampaign = async (
         };
       });
 
-      const fcmRecipients = chunkWithPayload.filter(({ item }) => String((item as { token_type?: string | null }).token_type ?? 'fcm') !== 'vapid');
-      const vapidRecipients = chunkWithPayload.filter(({ item }) => String((item as { token_type?: string | null }).token_type ?? 'fcm') === 'vapid');
+      const fcmRecipients = chunkWithPayload.filter(({ item }) => {
+        if (String((item as { token_type?: string | null }).token_type ?? 'fcm') === 'vapid') {
+          return false;
+        }
+        return Boolean(String(item.fcm_token ?? '').trim());
+      });
+      const vapidRecipients = chunkWithPayload.filter(({ item }) => {
+        if (String((item as { token_type?: string | null }).token_type ?? 'fcm') !== 'vapid') {
+          return false;
+        }
+        return Boolean(
+          String((item as { vapid_endpoint?: string | null }).vapid_endpoint ?? '').trim()
+          && String((item as { vapid_p256dh?: string | null }).vapid_p256dh ?? '').trim()
+          && String((item as { vapid_auth?: string | null }).vapid_auth ?? '').trim(),
+        );
+      });
 
       const claimRows: CampaignDeliveryInsertRow[] = chunkWithPayload.map(({ item }) => ({
         campaignId,
@@ -7860,6 +7919,9 @@ export const sendCampaign = async (
         WHERE id = ${campaignId}
       `;
 
+      const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+      void bumpCronWakeNow();
+
       return {
         successCount,
         failureCount,
@@ -7873,9 +7935,20 @@ export const sendCampaign = async (
       SELECT COUNT(*)::INT AS count
       FROM campaign_deliveries
       WHERE campaign_id = ${campaignId}
+        AND fcm_message_id IS NOT NULL
     `;
 
     const deliveredCount = Number(deliveredRows[0]?.count ?? 0);
+
+    if (deliveredCount === 0 && recipients.length > 0) {
+      await sql`
+        UPDATE campaigns
+        SET status = ${previousStatus}, sent_at = NULL, delivery_count = 0
+        WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+      `;
+
+      throw new Error('Failed to deliver campaign notifications to the selected audience. Check subscriber tokens and try again.');
+    }
 
     await sql`
       UPDATE campaigns

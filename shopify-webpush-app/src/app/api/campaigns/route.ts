@@ -10,7 +10,7 @@ export const runtime = 'nodejs';
 const createCampaignSchema = z.object({
   shopDomain: z.string().optional(),
   title: z.string().min(1),
-  body: z.string().min(1),
+  body: z.string().default(''),
   targetUrl: z.string().optional().nullable(),
   iconUrl: z.string().optional().nullable(),
   imageUrl: z.string().optional().nullable(),

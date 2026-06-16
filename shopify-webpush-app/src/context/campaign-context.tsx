@@ -1,6 +1,7 @@
 'use client';
 import { createContext, useState, useContext, ReactNode, useEffect, useRef } from 'react';
 import { useSettings } from '@/context/settings-context';
+import { isMyshopifyHost, normalizeMerchantWebsiteUrl, resolveMerchantWebsiteUrl } from '@/lib/client/merchant-website-url';
 
 type ActionButton = { title: string; link: string };
 type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
@@ -88,7 +89,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
     const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
     const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
-    const { storeUrl, shopDomain, logo, setLogo } = useSettings();
+    const { storeUrl, logo, setLogo } = useSettings();
     const [sendingOption, setSendingOption] = useState('now');
     const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
     const [scheduledTime, setScheduledTime] = useState('10:00 AM');
@@ -106,23 +107,27 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [recurringPattern, setRecurringPattern] = useState('');
 
     useEffect(() => {
-        if (primaryLink) {
-            const normalized = normalizeTrackedLink(primaryLink);
-            if (normalized !== primaryLink) {
-                setPrimaryLink(normalized);
-                return;
-            }
-        }
-
-        if (primaryLink) {
+        const merchantWebsiteUrl = resolveMerchantWebsiteUrl({ storeUrl });
+        const normalizedLink = normalizeTrackedLink(primaryLink);
+        if (normalizedLink !== primaryLink) {
+            setPrimaryLink(normalizedLink);
             return;
         }
 
-        const fallbackStoreUrl = storeUrl || (shopDomain ? `https://${shopDomain}` : '');
-        if (fallbackStoreUrl) {
-            setPrimaryLink(fallbackStoreUrl);
+        if (!merchantWebsiteUrl) {
+            return;
         }
-    }, [primaryLink, storeUrl, shopDomain]);
+
+        if (!primaryLink || isMyshopifyHost(primaryLink)) {
+            setPrimaryLink(merchantWebsiteUrl);
+            return;
+        }
+
+        const normalizedPrimary = normalizeMerchantWebsiteUrl(primaryLink);
+        if (normalizedPrimary && isMyshopifyHost(normalizedPrimary)) {
+            setPrimaryLink(merchantWebsiteUrl);
+        }
+    }, [primaryLink, storeUrl]);
 
     const value: CampaignContextType = {
         title, setTitle,

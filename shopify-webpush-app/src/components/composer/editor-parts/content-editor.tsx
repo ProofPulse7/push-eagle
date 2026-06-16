@@ -2,12 +2,7 @@
 'use client';
 
 import {
-    Sparkles,
-    Siren,
-    Gift,
-    Zap,
     Smile,
-    Loader2,
     Info,
 } from "lucide-react";
 import TextareaAutosize from 'react-textarea-autosize';
@@ -16,17 +11,10 @@ import dynamic from 'next/dynamic';
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
-
-const aiPrompts = [
-    { icon: Siren, label: "Make it urgent" },
-    { icon: Gift, label: "Holiday discount" },
-    { icon: Zap, label: "Make it exciting" }
-];
 
 const TITLE_LIMIT = 44;
 const MESSAGE_LIMIT = 100;
@@ -35,10 +23,8 @@ export const ContentEditor = ({
     title, setTitle,
     message, setMessage,
     primaryLink, setPrimaryLink,
-    handleGenerateCopy,
     handleTitleEmojiSelect,
     handleMessageEmojiSelect,
-    isGenerating,
     errors = {}
 }: {
     title: string;
@@ -47,40 +33,12 @@ export const ContentEditor = ({
     setMessage: (message: string) => void;
     primaryLink: string;
     setPrimaryLink: (link: string) => void;
-    handleGenerateCopy?: (brandVoice?: string) => void;
     handleTitleEmojiSelect: (emoji: { emoji: string }) => void;
     handleMessageEmojiSelect: (emoji: { emoji: string }) => void;
-    isGenerating?: boolean;
     errors: { title?: string, primaryLink?: string };
 }) => {
     return (
         <div className="space-y-4 pt-2">
-            {handleGenerateCopy && (
-                <div className="p-4">
-                    <h3 className="text-sm font-medium text-muted-foreground">AI ASSISTANT</h3>
-                    <div className="space-y-2 pt-2">
-                        <Button onClick={() => handleGenerateCopy()} className="w-full justify-start" disabled={isGenerating}>
-                            {isGenerating ? <Loader2 className="mr-2 animate-spin" /> : <Sparkles className="mr-2" />}
-                            {isGenerating ? 'Generating...' : 'Suggest Title & Message'}
-                        </Button>
-                        <div className="flex items-center gap-2">
-                            {aiPrompts.map(prompt => (
-                                <TooltipProvider key={prompt.label}>
-                                    <Tooltip>
-                                        <TooltipTrigger asChild>
-                                            <Button variant="outline" size="icon" className="h-9 w-9 flex-1" onClick={() => handleGenerateCopy(prompt.label)} disabled={isGenerating}>
-                                                <prompt.icon className="h-4 w-4" />
-                                            </Button>
-                                        </TooltipTrigger>
-                                        <TooltipContent><p>{prompt.label}</p></TooltipContent>
-                                    </Tooltip>
-                                </TooltipProvider>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-
             <div className="p-4 space-y-4">
                 <div className="space-y-1.5">
                     <Label htmlFor="title">Title <span className="text-destructive">*</span></Label>
@@ -120,7 +78,7 @@ export const ContentEditor = ({
                     <div className="relative">
                         <TextareaAutosize
                             id="message"
-                            maxLength={MESSAGE_LIMIT + 50} // Allow overtyping to show warning
+                            maxLength={MESSAGE_LIMIT + 50}
                             placeholder="Your message here"
                             value={message}
                             onChange={e => setMessage(e.target.value)}

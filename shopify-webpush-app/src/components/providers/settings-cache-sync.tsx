@@ -9,6 +9,7 @@ import {
 } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useSettings } from '@/context/settings-context';
+import { resolveMerchantWebsiteUrl } from '@/lib/client/merchant-website-url';
 import { mergePendingSettings } from '@/lib/client/pending-settings';
 
 /** Applies React Query cached merchant settings into SettingsContext (instant UI). */
@@ -39,16 +40,15 @@ export function SettingsCacheSync() {
       return;
     }
 
-    const nextStoreUrl = String(overview.storeUrl ?? '').trim();
+    const nextStoreUrl = resolveMerchantWebsiteUrl({
+      storeUrl: String(overview.storeUrl ?? ''),
+      primaryDomain: String(overview.primaryDomain ?? overview.primary_domain ?? ''),
+    });
+
     if (nextStoreUrl) {
       setStoreUrl(nextStoreUrl);
-      return;
     }
-
-    if (!storeUrl && shop) {
-      setStoreUrl(`https://${shop}`);
-    }
-  }, [overview, setStoreUrl, shop, storeUrl]);
+  }, [overview, setStoreUrl]);
 
   useEffect(() => {
     if (!branding) {
