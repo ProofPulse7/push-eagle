@@ -1,13 +1,7 @@
 'use client';
-import { createContext, useState, useContext, ReactNode, useEffect, useRef, useCallback } from 'react';
+import { createContext, useState, useContext, ReactNode, useEffect, useRef } from 'react';
 import { useSettings } from '@/context/settings-context';
 import { isMyshopifyHost, normalizeMerchantWebsiteUrl, resolveMerchantWebsiteUrl } from '@/lib/client/merchant-website-url';
-import {
-  clearWizardSession,
-  loadWizardSession,
-  saveWizardSession,
-  type SerializableWizardState,
-} from '@/lib/client/campaign-wizard-bridge';
 
 type ActionButton = { title: string; link: string };
 type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
@@ -37,8 +31,10 @@ export interface CampaignContextType {
     setScheduledTime: (value: string) => void;
     segmentId: string;
     setSegmentId: (value: string) => void;
+    // Smart Delivery
     smartDeliver: boolean;
     setSmartDeliver: (enabled: boolean) => void;
+    // Flash Sale
     flashSaleEnabled: boolean;
     setFlashSaleEnabled: (enabled: boolean) => void;
     flashSaleDiscountPercent: number;
@@ -51,15 +47,9 @@ export interface CampaignContextType {
     setFlashSaleExpiresAt: (date: Date | undefined) => void;
     flashSaleUrgencyText: string;
     setFlashSaleUrgencyText: (text: string) => void;
+    // Recurring campaigns
     recurringPattern: string;
     setRecurringPattern: (pattern: string) => void;
-    editingCampaignId: string | null;
-    setEditingCampaignId: (value: string | null) => void;
-    wizardReady: boolean;
-    setWizardReady: (value: boolean) => void;
-    hydrateWizardState: (state: SerializableWizardState) => void;
-    resetWizard: () => void;
-    serializeWizardState: () => SerializableWizardState;
 }
 
 export const CampaignContext = createContext<CampaignContextType | undefined>(undefined);
@@ -82,12 +72,6 @@ const normalizeTrackedLink = (value: string | null | undefined) => {
     return raw;
 };
 
-const toImageValue = (preview: string | null | undefined): ImageValue => ({
-    file: null,
-    preview: preview ?? null,
-    originalPreview: preview ?? null,
-});
-
 export function useCampaignState() {
     const context = useContext(CampaignContext);
     if (!context) {
@@ -98,7 +82,6 @@ export function useCampaignState() {
 
 export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const blobUrlsRef = useRef<Set<string>>(new Set());
-    const skipPrimaryLinkAutofillRef = useRef(false);
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
     const [primaryLink, setPrimaryLink] = useState('');
@@ -106,106 +89,24 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
     const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
     const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
-    const { storeUrl, shopDomain, logo, setLogo } = useSettings();
+    const { storeUrl, logo, setLogo } = useSettings();
     const [sendingOption, setSendingOption] = useState('now');
     const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
     const [scheduledTime, setScheduledTime] = useState('10:00 AM');
     const [segmentId, setSegmentId] = useState('all');
+    // Smart Delivery
     const [smartDeliver, setSmartDeliver] = useState(false);
+    // Flash Sale
     const [flashSaleEnabled, setFlashSaleEnabled] = useState(false);
     const [flashSaleDiscountPercent, setFlashSaleDiscountPercent] = useState(20);
     const [flashSaleOriginalPrice, setFlashSaleOriginalPrice] = useState(0);
     const [flashSaleSalePrice, setFlashSaleSalePrice] = useState(0);
-    const [flashSaleExpiresAt, setFlashSaleExpiresAt] = useState<Date | undefined>(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    const [flashSaleExpiresAt, setFlashSaleExpiresAt] = useState<Date | undefined>(new Date(Date.now() + 24 * 60 * 60 * 1000)); // 24 hours from now
     const [flashSaleUrgencyText, setFlashSaleUrgencyText] = useState('⏰ Limited time offer!');
+    // Recurring
     const [recurringPattern, setRecurringPattern] = useState('');
-    const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
-    const [wizardReady, setWizardReady] = useState(false);
-
-    const serializeWizardState = useCallback((): SerializableWizardState => ({
-        title,
-        message,
-        primaryLink,
-        actionButtons,
-        windowsHeroPreview: windowsHero.preview,
-        macHeroPreview: macHero.preview,
-        androidHeroPreview: androidHero.preview,
-        logoPreview: logo.preview,
-        sendingOption,
-        scheduledDateIso: scheduledDate ? scheduledDate.toISOString() : null,
-        scheduledTime,
-        segmentId,
-        smartDeliver,
-        flashSaleEnabled,
-        editingCampaignId,
-    }), [
-        actionButtons,
-        androidHero.preview,
-        editingCampaignId,
-        flashSaleEnabled,
-        logo.preview,
-        macHero.preview,
-        message,
-        primaryLink,
-        scheduledDate,
-        scheduledTime,
-        segmentId,
-        sendingOption,
-        smartDeliver,
-        title,
-        windowsHero.preview,
-    ]);
-
-    const hydrateWizardState = useCallback((state: SerializableWizardState) => {
-        skipPrimaryLinkAutofillRef.current = Boolean(state.primaryLink?.trim());
-        setTitle(state.title ?? '');
-        setMessage(state.message ?? '');
-        setPrimaryLink(state.primaryLink ?? '');
-        setActionButtons(Array.isArray(state.actionButtons) ? state.actionButtons : []);
-        setWindowsHero(toImageValue(state.windowsHeroPreview));
-        setMacHero(toImageValue(state.macHeroPreview));
-        setAndroidHero(toImageValue(state.androidHeroPreview));
-        setLogo(toImageValue(state.logoPreview));
-        setSendingOption(state.sendingOption ?? 'now');
-        setScheduledDate(state.scheduledDateIso ? new Date(state.scheduledDateIso) : new Date());
-        setScheduledTime(state.scheduledTime ?? '10:00 AM');
-        setSegmentId(state.segmentId ?? 'all');
-        setSmartDeliver(Boolean(state.smartDeliver));
-        setFlashSaleEnabled(Boolean(state.flashSaleEnabled));
-        setEditingCampaignId(state.editingCampaignId ?? null);
-    }, [setLogo]);
-
-    const resetWizard = useCallback(() => {
-        skipPrimaryLinkAutofillRef.current = false;
-        setTitle('');
-        setMessage('');
-        setPrimaryLink('');
-        setActionButtons([]);
-        setWindowsHero({ file: null, preview: null, originalPreview: null });
-        setMacHero({ file: null, preview: null, originalPreview: null });
-        setAndroidHero({ file: null, preview: null, originalPreview: null });
-        setLogo({ file: null, preview: null });
-        setSendingOption('now');
-        setScheduledDate(new Date());
-        setScheduledTime('10:00 AM');
-        setSegmentId('all');
-        setSmartDeliver(false);
-        setFlashSaleEnabled(false);
-        setEditingCampaignId(null);
-        if (shopDomain) {
-            clearWizardSession(shopDomain);
-        }
-    }, [setLogo, shopDomain]);
 
     useEffect(() => {
-        if (skipPrimaryLinkAutofillRef.current) {
-            const normalizedLink = normalizeTrackedLink(primaryLink);
-            if (normalizedLink !== primaryLink) {
-                setPrimaryLink(normalizedLink);
-            }
-            return;
-        }
-
         const merchantWebsiteUrl = resolveMerchantWebsiteUrl({ storeUrl });
         const normalizedLink = normalizeTrackedLink(primaryLink);
         if (normalizedLink !== primaryLink) {
@@ -228,29 +129,6 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
         }
     }, [primaryLink, storeUrl]);
 
-    useEffect(() => {
-        if (!shopDomain || !wizardReady) {
-            return;
-        }
-
-        const timer = window.setTimeout(() => {
-            saveWizardSession(shopDomain, serializeWizardState());
-        }, 250);
-
-        return () => window.clearTimeout(timer);
-    }, [serializeWizardState, shopDomain, wizardReady]);
-
-    useEffect(() => {
-        if (!shopDomain || wizardReady) {
-            return;
-        }
-
-        const saved = loadWizardSession(shopDomain);
-        if (saved) {
-            hydrateWizardState(saved);
-        }
-    }, [hydrateWizardState, shopDomain, wizardReady]);
-
     const value: CampaignContextType = {
         title, setTitle,
         message, setMessage,
@@ -264,19 +142,17 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
         scheduledDate, setScheduledDate,
         scheduledTime, setScheduledTime,
         segmentId, setSegmentId,
+        // Smart Delivery
         smartDeliver, setSmartDeliver,
+        // Flash Sale
         flashSaleEnabled, setFlashSaleEnabled,
         flashSaleDiscountPercent, setFlashSaleDiscountPercent,
         flashSaleOriginalPrice, setFlashSaleOriginalPrice,
         flashSaleSalePrice, setFlashSaleSalePrice,
         flashSaleExpiresAt, setFlashSaleExpiresAt,
         flashSaleUrgencyText, setFlashSaleUrgencyText,
+        // Recurring
         recurringPattern, setRecurringPattern,
-        editingCampaignId, setEditingCampaignId,
-        wizardReady, setWizardReady,
-        hydrateWizardState,
-        resetWizard,
-        serializeWizardState,
     };
 
     useEffect(() => {

@@ -248,60 +248,6 @@ export const replaceOptimisticCampaignId = (
   });
 };
 
-export const updateOptimisticCampaign = (
-  queryClient: QueryClient,
-  shop: string,
-  campaignId: string,
-  patch: Partial<OptimisticCampaign>,
-) => {
-  pinCampaignId(shop, campaignId);
-
-  queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
-    const currentList = Array.isArray(current?.campaigns)
-      ? current.campaigns.map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
-      : [];
-
-    const nextList = currentList.map((item) => {
-      if (String(item.id) !== campaignId) {
-        return item;
-      }
-
-      const merged = normalizeCampaignRecord({ ...item, ...patch, id: campaignId });
-      savePinnedSnapshot(shop, merged);
-      return merged;
-    });
-
-    return mergeCampaignListPayload(current, { ok: true, campaigns: nextList }, shop);
-  });
-};
-
-export const removeOptimisticCampaign = (queryClient: QueryClient, shop: string, campaignId: string) => {
-  removePinnedCampaign(shop, campaignId);
-
-  queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
-    const currentList = Array.isArray(current?.campaigns)
-      ? current.campaigns.map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
-      : [];
-
-    return {
-      ok: true,
-      campaigns: currentList.filter((item) => String(item.id) !== campaignId),
-    };
-  });
-};
-
-export const markOptimisticCampaignAsDraft = (
-  queryClient: QueryClient,
-  shop: string,
-  campaignId: string,
-) => {
-  updateOptimisticCampaign(queryClient, shop, campaignId, {
-    status: 'draft',
-    sent_at: null,
-    delivery_count: 0,
-  });
-};
-
 export const bumpDashboardCampaignSent = (queryClient: QueryClient, shop: string) => {
   queryClient.setQueryData(queryKeys.dashboardSummary(shop), (current: Record<string, unknown> | undefined) => {
     const campaignStatsRaw = (current?.campaignStats ?? {}) as Record<string, unknown>;
