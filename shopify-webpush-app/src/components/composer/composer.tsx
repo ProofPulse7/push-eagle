@@ -6,6 +6,7 @@ import { useCampaignState } from '@/context/campaign-context';
 import { Button } from "@/components/ui/button";
 
 import { Loader2, Check, ArrowLeft } from "lucide-react";
+import { buildWizardPath, readWizardQueryParams } from '@/lib/client/campaign-wizard-bridge';
 
 import { IOSPreview } from './previews/ios-preview';
 import { AndroidPreview } from './previews/android-preview';
@@ -58,12 +59,11 @@ export function Composer() {
     const [errors, setErrors] = useState<{ title?: string, primaryLink?: string }>({});
 
     useEffect(() => {
-        const queryShop = new URLSearchParams(window.location.search).get('shop');
-        setDetailsHref(
-            queryShop
-                ? `/campaigns/new/details?shop=${encodeURIComponent(queryShop)}`
-                : '/campaigns/new/details',
-        );
+        const { shop, draftId, duplicateId } = readWizardQueryParams();
+        setDetailsHref(buildWizardPath('/campaigns/new/details', shop, {
+            draft: draftId || undefined,
+            duplicate: duplicateId || undefined,
+        }));
     }, []);
 
     const handleTitleEmojiSelect = (emoji: { emoji: string }) => {

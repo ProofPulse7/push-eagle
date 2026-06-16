@@ -1,7 +1,6 @@
-
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { DateRange } from 'react-day-picker';
 import Link from 'next/link';
 import { PlusCircle } from 'lucide-react';
@@ -16,9 +15,17 @@ import { useImpressionLimit } from '@/hooks/use-impression-limit';
 
 export default function CampaignsPage() {
   const [date, setDate] = useState<DateRange | undefined>(undefined);
+  const [initialTab, setInitialTab] = useState<'sent' | 'scheduled' | 'draft'>('sent');
   const { atLimit } = useImpressionLimit();
   const { data, isLoading, isFetching } = useCampaigns();
   const statsPeriodLabel = formatCampaignDateRangeLabel(date);
+
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    if (tab === 'draft' || tab === 'scheduled' || tab === 'sent') {
+      setInitialTab(tab);
+    }
+  }, []);
 
   return (
     <PageLoadingShell
@@ -52,7 +59,7 @@ export default function CampaignsPage() {
         <CampaignStats date={date} />
       </div>
 
-      <CampaignsTable dateRange={date} />
+      <CampaignsTable dateRange={date} initialTab={initialTab} />
     </div>
     </PageLoadingShell>
   );

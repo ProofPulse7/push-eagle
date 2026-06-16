@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
@@ -8,10 +8,19 @@ import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
-import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
+import {
+    buildAudienceSegmentsFromCache,
+    bumpDashboardCampaignSent,
+    markOptimisticCampaignAsDraft,
+    prependOptimisticCampaign,
+    replaceOptimisticCampaignId,
+    updateOptimisticCampaign,
+} from '@/lib/client/optimistic-campaigns';
+import { persistCampaignRecord, sendCampaignNow, refreshCampaignQueries } from '@/lib/client/campaign-persist';
+import { buildWizardPath, clearWizardSession, readWizardQueryParams } from '@/lib/client/campaign-wizard-bridge';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
 
-import { ArrowLeft, Users, Clock, Send, Save, Loader2, Edit } from 'lucide-react';
+import { ArrowLeft, Users, Clock, Send, Save, Edit } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -40,62 +49,6 @@ const buildScheduledAt = (scheduledDate?: Date, scheduledTime?: string) => {
     const result = new Date(scheduledDate);
     result.setHours(hours, Number(minuteValue), 0, 0);
     return result;
-};
-
-const sanitizeMediaUrl = (value: string | null | undefined): string | null => {
-    const trimmed = value?.trim();
-    if (!trimmed) {
-        return null;
-    }
-
-    if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
-        return null;
-    }
-
-    return trimmed;
-};
-
-const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ''));
-    reader.onerror = () => reject(new Error('Failed to read image blob.'));
-    reader.readAsDataURL(blob);
-});
-
-const resolveCampaignMediaUrl = async (sourceUrl: string | null | undefined, shopDomain: string): Promise<string | null> => {
-    const direct = sanitizeMediaUrl(sourceUrl);
-    if (direct) {
-        return direct;
-    }
-
-    const value = sourceUrl?.trim();
-    if (!value) {
-        return null;
-    }
-
-    let dataUrl = value;
-    if (value.startsWith('blob:')) {
-        const response = await fetch(value);
-        const blob = await response.blob();
-        dataUrl = await blobToDataUrl(blob);
-    }
-
-    if (!dataUrl.startsWith('data:image/')) {
-        return null;
-    }
-
-    const uploadResponse = await fetch('/api/media/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shopDomain, dataUrl }),
-    });
-
-    const uploadPayload = await parseApiResponse(uploadResponse);
-    if (!uploadResponse.ok || !uploadPayload.json?.ok || !uploadPayload.json?.asset?.url) {
-        throw new Error(buildResponseError('Failed to upload campaign image.', uploadPayload));
-    }
-
-    return String(uploadPayload.json.asset.url);
 };
 
 const parseApiResponse = async (response: Response): Promise<{ json: any | null; text: string }> => {
@@ -152,32 +105,38 @@ export default function ScheduleCampaignPage() {
         // Recurring
         recurringPattern,
         setRecurringPattern,
+        editingCampaignId,
+        setEditingCampaignId,
+        resetWizard,
     } = useCampaignState();
-    const [isSaving, setIsSaving] = useState(false);
     const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('windows');
     const [segmentDisplayName, setSegmentDisplayName] = useState('All Subscribers');
     const [segmentSubscriberCount, setSegmentSubscriberCount] = useState(0);
+    const [wizardQuery, setWizardQuery] = useState({ shop: '', draftId: '', duplicateId: '' });
 
     const router = useRouter();
     const queryClient = useQueryClient();
     const { toast } = useToast();
     const { shopDomain: settingsShop } = useSettings();
-    const [queryShop, setQueryShop] = useState('');
-    const shopDomain = queryShop || settingsShop || '';
+    const shopDomain = wizardQuery.shop || settingsShop || '';
     const scheduledAt = buildScheduledAt(scheduledDate, scheduledTime);
 
-    const editorHref = queryShop
-        ? `/campaigns/new/editor?shop=${encodeURIComponent(queryShop)}`
-        : '/campaigns/new/editor';
-    const detailsHref = queryShop
-        ? `/campaigns/new/details?shop=${encodeURIComponent(queryShop)}`
-        : '/campaigns/new/details';
-    const campaignsHref = queryShop
-        ? `/campaigns?shop=${encodeURIComponent(queryShop)}`
+    const wizardOptions = useMemo(
+        () => ({
+            draft: wizardQuery.draftId || undefined,
+            duplicate: wizardQuery.duplicateId || undefined,
+        }),
+        [wizardQuery.draftId, wizardQuery.duplicateId],
+    );
+
+    const editorHref = buildWizardPath('/campaigns/new/editor', shopDomain, wizardOptions);
+    const detailsHref = buildWizardPath('/campaigns/new/details', shopDomain, wizardOptions);
+    const campaignsHref = shopDomain
+        ? `/campaigns?shop=${encodeURIComponent(shopDomain)}`
         : '/campaigns';
 
     useEffect(() => {
-        setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
+        setWizardQuery(readWizardQueryParams());
     }, []);
 
     useEffect(() => {
@@ -214,7 +173,31 @@ export default function ScheduleCampaignPage() {
             active = false;
         };
     }, [queryClient, shopDomain, segmentId]);
-    
+
+    const buildOptimisticRecord = (id: string, status: string, media?: {
+        iconUrl?: string | null;
+        windowsImageUrl?: string | null;
+        macosImageUrl?: string | null;
+        androidImageUrl?: string | null;
+    }) => ({
+        id,
+        title: title || 'Untitled Campaign',
+        body: message || '',
+        image_url: media?.macosImageUrl ?? media?.windowsImageUrl ?? media?.androidImageUrl ?? macHero.preview ?? windowsHero.preview ?? androidHero.preview,
+        windows_image_url: media?.windowsImageUrl ?? windowsHero.preview,
+        macos_image_url: media?.macosImageUrl ?? macHero.preview,
+        android_image_url: media?.androidImageUrl ?? androidHero.preview,
+        icon_url: media?.iconUrl ?? logo.preview,
+        segment_id: segmentId || 'all',
+        status,
+        created_at: new Date().toISOString(),
+        sent_at: status === 'sending' || status === 'sent' ? new Date().toISOString() : null,
+        scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
+        delivery_count: segmentSubscriberCount,
+        click_count: 0,
+        revenue_cents: 0,
+    });
+
     const handleLaunchCampaign = () => {
         try {
             if (!shopDomain) {
@@ -239,142 +222,70 @@ export default function ScheduleCampaignPage() {
                 }
             }
 
-            const optimisticId = crypto.randomUUID();
             const launchStatus =
                 sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
+            const optimisticId = editingCampaignId || crypto.randomUUID();
+            const optimisticRecord = buildOptimisticRecord(optimisticId, launchStatus);
 
-            prependOptimisticCampaign(queryClient, shopDomain, {
-                id: optimisticId,
-                title: title || 'Untitled Campaign',
-                body: message || '',
-                image_url: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
-                windows_image_url: windowsHero.preview,
-                macos_image_url: macHero.preview,
-                android_image_url: androidHero.preview,
-                icon_url: logo.preview,
-                segment_id: segmentId,
-                status: launchStatus,
-                created_at: new Date().toISOString(),
-                sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
-                scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                delivery_count: segmentSubscriberCount,
-                click_count: 0,
-                revenue_cents: 0,
-            });
+            if (editingCampaignId) {
+                updateOptimisticCampaign(queryClient, shopDomain, editingCampaignId, optimisticRecord);
+            } else {
+                prependOptimisticCampaign(queryClient, shopDomain, optimisticRecord);
+            }
 
             if (launchStatus === 'sending') {
                 bumpDashboardCampaignSent(queryClient, shopDomain);
             }
 
-            const toastTitle =
-                sendingOption === 'schedule'
-                    ? 'Campaign Scheduled!'
-                    : sendingOption === 'recurring'
-                      ? 'Recurring Campaign Set!'
-                      : 'Campaign Launched!';
-            const toastDescription =
-                sendingOption === 'schedule'
-                    ? 'Your campaign has been scheduled.'
-                    : sendingOption === 'recurring'
-                      ? 'Your recurring campaign has been configured.'
-                      : 'Your campaign is being delivered in the background.';
-
             toast({
-                title: toastTitle,
-                description: toastDescription,
+                title:
+                    sendingOption === 'schedule'
+                        ? 'Campaign Scheduled!'
+                        : sendingOption === 'recurring'
+                          ? 'Recurring Campaign Set!'
+                          : 'Campaign Launched!',
+                description:
+                    sendingOption === 'schedule'
+                        ? 'Your campaign has been scheduled.'
+                        : sendingOption === 'recurring'
+                          ? 'Your recurring campaign has been configured.'
+                          : 'Your campaign is being delivered in the background.',
             });
             router.push(campaignsHref);
 
             void (async () => {
+                let campaignId = optimisticId;
                 try {
-                    const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
-                        resolveCampaignMediaUrl(logo.preview, shopDomain),
-                        resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
-                        resolveCampaignMediaUrl(macHero.preview, shopDomain),
-                        resolveCampaignMediaUrl(androidHero.preview, shopDomain),
-                    ]);
-
-                    const createResponse = await fetch('/api/campaigns', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            shopDomain,
-                            title: title || 'Untitled Campaign',
-                            body: message || ' ',
-                            targetUrl: primaryLink || null,
-                            iconUrl,
-                            imageUrl: macosImageUrl,
-                            windowsImageUrl,
-                            macosImageUrl,
-                            androidImageUrl,
-                            actionButtons: actionButtons
-                                .filter((button) => button.title?.trim() && button.link?.trim())
-                                .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
-                            segmentId,
-                            status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
-                            scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                            smartDeliver,
-                            flashSaleEnabled,
-                            flashSaleConfig: flashSaleEnabled ? {
-                                discountPercent: flashSaleDiscountPercent,
-                                originalPrice: flashSaleOriginalPrice,
-                                salePrice: flashSaleSalePrice,
-                                expiresAt: flashSaleExpiresAt?.toISOString(),
-                                urgencyText: flashSaleUrgencyText,
-                            } : undefined,
-                            recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
-                        }),
+                    campaignId = await persistCampaignRecord({
+                        shopDomain,
+                        editingCampaignId,
+                        title,
+                        message,
+                        primaryLink,
+                        segmentId: segmentId || 'all',
+                        actionButtons,
+                        logoPreview: logo.preview,
+                        windowsHeroPreview: windowsHero.preview,
+                        macHeroPreview: macHero.preview,
+                        androidHeroPreview: androidHero.preview,
+                        status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
+                        scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
                     });
 
-                    const createPayload = await parseApiResponse(createResponse);
-                    const createResult = createPayload.json;
-                    if (!createResponse.ok || !createResult?.ok || !createResult?.campaign?.id) {
-                        throw new Error(buildResponseError('Failed to create campaign.', createPayload));
+                    if (!editingCampaignId) {
+                        replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, buildOptimisticRecord(campaignId, launchStatus));
+                    } else {
+                        updateOptimisticCampaign(queryClient, shopDomain, campaignId, buildOptimisticRecord(campaignId, launchStatus));
                     }
 
-                    const campaignId = String(createResult.campaign.id);
-
-                    replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
-                        id: campaignId,
-                        title: title || 'Untitled Campaign',
-                        body: message || '',
-                        image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl,
-                        windows_image_url: windowsImageUrl,
-                        macos_image_url: macosImageUrl,
-                        android_image_url: androidImageUrl,
-                        icon_url: iconUrl,
-                        segment_id: segmentId,
-                        status: launchStatus,
-                        created_at: new Date().toISOString(),
-                        sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
-                        scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                        delivery_count: segmentSubscriberCount,
-                        click_count: 0,
-                        revenue_cents: 0,
-                    });
-
                     if (sendingOption === 'schedule' || sendingOption === 'recurring') {
-                        if (sendingOption === 'schedule') {
-                            if (!scheduledAt) {
-                                throw new Error('Choose a valid scheduled date and time.');
-                            }
-
-                            if (scheduledAt.getTime() <= Date.now()) {
-                                throw new Error('Scheduled time must be in the future.');
-                            }
-                        }
-
                         if (sendingOption === 'recurring' && !recurringPattern) {
                             throw new Error('Choose a recurring pattern.');
                         }
 
                         const scheduleResponse = await fetch('/api/campaigns/schedule', {
                             method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
+                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 campaignId,
                                 shopDomain,
@@ -396,38 +307,38 @@ export default function ScheduleCampaignPage() {
                         });
 
                         const schedulePayload = await parseApiResponse(scheduleResponse);
-                        const scheduleResult = schedulePayload.json;
-                        if (!scheduleResponse.ok || !scheduleResult?.ok) {
+                        if (!scheduleResponse.ok || !schedulePayload.json?.ok) {
                             throw new Error(buildResponseError('Failed to schedule campaign.', schedulePayload));
                         }
+
+                        clearWizardSession(shopDomain);
+                        resetWizard();
+                        refreshCampaignQueries(queryClient, shopDomain);
                         return;
                     }
 
-                    const sendResponse = await fetch('/api/campaigns/send', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            campaignId,
-                            shopDomain,
-                            maxBatches: 2000,
-                        }),
+                    const sendResult = await sendCampaignNow(shopDomain, campaignId);
+                    const deliveredCount = Number(sendResult.recipientCount ?? sendResult.successCount ?? segmentSubscriberCount);
+
+                    updateOptimisticCampaign(queryClient, shopDomain, campaignId, {
+                        status: 'sent',
+                        sent_at: new Date().toISOString(),
+                        delivery_count: deliveredCount,
                     });
 
-                    const sendPayload = await parseApiResponse(sendResponse);
-                    const sendResult = sendPayload.json;
-                    if (!sendResponse.ok || !sendResult?.ok) {
-                        throw new Error(buildResponseError('Failed to send campaign.', sendPayload));
-                    }
+                    clearWizardSession(shopDomain);
+                    resetWizard();
+                    refreshCampaignQueries(queryClient, shopDomain);
                 } catch (backgroundError) {
+                    markOptimisticCampaignAsDraft(queryClient, shopDomain, campaignId);
+                    refreshCampaignQueries(queryClient, shopDomain);
                     toast({
                         variant: 'destructive',
                         title: 'Campaign delivery issue',
                         description:
                             backgroundError instanceof Error
                                 ? backgroundError.message
-                                : 'Background delivery failed. Check campaigns for status.',
+                                : 'Campaign moved back to drafts. Try launching again.',
                     });
                 }
             })();
@@ -440,62 +351,71 @@ export default function ScheduleCampaignPage() {
         }
     };
 
-    const handleSaveDraft = async () => {
-        setIsSaving(true);
+    const handleSaveDraft = () => {
         try {
             if (!shopDomain) {
                 throw new Error('Set your Shopify subdomain in Settings before saving drafts.');
             }
 
-            const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
-                resolveCampaignMediaUrl(logo.preview, shopDomain),
-                resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
-                resolveCampaignMediaUrl(macHero.preview, shopDomain),
-                resolveCampaignMediaUrl(androidHero.preview, shopDomain),
-            ]);
+            const optimisticId = editingCampaignId || crypto.randomUUID();
+            const draftRecord = buildOptimisticRecord(optimisticId, 'draft');
 
-            const response = await fetch('/api/campaigns', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    shopDomain,
-                    title: title || 'Untitled Campaign',
-                    body: message || '',
-                    targetUrl: primaryLink || null,
-                    iconUrl,
-                    imageUrl: macosImageUrl,
-                    windowsImageUrl,
-                    macosImageUrl,
-                    androidImageUrl,
-                    actionButtons: actionButtons
-                        .filter((button) => button.title?.trim() && button.link?.trim())
-                        .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
-                    segmentId,
-                    status: 'draft',
-                }),
-            });
-
-            const payload = await parseApiResponse(response);
-            const result = payload.json;
-            if (!response.ok || !result?.ok) {
-                throw new Error(buildResponseError('Failed to save draft.', payload));
+            if (editingCampaignId) {
+                updateOptimisticCampaign(queryClient, shopDomain, editingCampaignId, draftRecord);
+            } else {
+                prependOptimisticCampaign(queryClient, shopDomain, draftRecord);
             }
 
             toast({
-                title: "Draft Saved!",
-                description: "Your campaign has been saved as a draft.",
+                title: 'Draft Saved!',
+                description: 'Your campaign has been saved as a draft.',
             });
-            router.push(campaignsHref);
+            router.push(`${campaignsHref}${campaignsHref.includes('?') ? '&' : '?'}tab=draft`);
+
+            void (async () => {
+                try {
+                    const savedId = await persistCampaignRecord({
+                        shopDomain,
+                        editingCampaignId,
+                        title,
+                        message,
+                        primaryLink,
+                        segmentId: segmentId || 'all',
+                        actionButtons,
+                        logoPreview: logo.preview,
+                        windowsHeroPreview: windowsHero.preview,
+                        macHeroPreview: macHero.preview,
+                        androidHeroPreview: androidHero.preview,
+                        status: 'draft',
+                        scheduledAt: null,
+                    });
+
+                    if (!editingCampaignId) {
+                        replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, buildOptimisticRecord(savedId, 'draft'));
+                    }
+
+                    setEditingCampaignId(savedId);
+                    refreshCampaignQueries(queryClient, shopDomain);
+                } catch (backgroundError) {
+                    if (!editingCampaignId) {
+                        markOptimisticCampaignAsDraft(queryClient, shopDomain, optimisticId);
+                    }
+                    toast({
+                        variant: 'destructive',
+                        title: 'Draft save failed',
+                        description:
+                            backgroundError instanceof Error
+                                ? backgroundError.message
+                                : 'Could not save draft in the background.',
+                    });
+                }
+            })();
         } catch (error) {
             toast({
                 variant: 'destructive',
                 title: 'Draft save failed',
                 description: error instanceof Error ? error.message : 'Unexpected error while saving draft.',
             });
-        } finally {
-            setIsSaving(false);
         }
     };
 
@@ -604,14 +524,14 @@ export default function ScheduleCampaignPage() {
                 </div>
             </div>
              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={handleSaveDraft} disabled={isSaving}>
-                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                    {isSaving ? 'Saving...' : 'Save as Draft'}
+                <Button variant="outline" onClick={handleSaveDraft} disabled={!title || !primaryLink}>
+                    <Save className="mr-2 h-4 w-4" />
+                    Save as Draft
                 </Button>
                 <Button 
                     size="lg" 
                     onClick={handleLaunchCampaign} 
-                    disabled={isSaving || !title || !primaryLink}
+                    disabled={!title || !primaryLink}
                 >
                     <Send className="mr-2 h-4 w-4" />
                     {sendingOption === 'schedule' ? 'Schedule Campaign' : 'Launch Campaign'}

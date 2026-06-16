@@ -7176,7 +7176,7 @@ export const createCampaign = async (input: CreateCampaignInput) => {
       ${input.macosImageUrl ?? null},
       ${input.androidImageUrl ?? null},
       ${JSON.stringify(input.actionButtons ?? [])}::jsonb,
-      ${input.segmentId ?? null},
+      ${input.segmentId ?? 'all'},
       ${input.status ?? 'draft'},
       ${input.scheduledAt ? new Date(input.scheduledAt) : null}
     )
@@ -7217,6 +7217,108 @@ export const getCampaignById = async (shopDomain: string, campaignId: string) =>
   `;
 
   return rows[0] ?? null;
+};
+
+type UpdateCampaignInput = {
+  shopDomain: string;
+  campaignId: string;
+  title: string;
+  body: string;
+  targetUrl?: string | null;
+  iconUrl?: string | null;
+  imageUrl?: string | null;
+  windowsImageUrl?: string | null;
+  macosImageUrl?: string | null;
+  androidImageUrl?: string | null;
+  actionButtons?: Array<{ title: string; link: string }>;
+  segmentId?: string | null;
+  status?: 'draft' | 'scheduled' | 'sent';
+  scheduledAt?: string | null;
+};
+
+export const updateCampaign = async (input: UpdateCampaignInput) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const existing = await getCampaignById(input.shopDomain, input.campaignId);
+  if (!existing) {
+    throw new Error('Campaign not found for this shop.');
+  }
+
+  const existingStatus = String((existing as { status?: string }).status ?? '').toLowerCase();
+  if (!['draft', 'scheduled'].includes(existingStatus)) {
+    throw new Error('Only draft or scheduled campaigns can be edited.');
+  }
+
+  const listImageUrl =
+    pickCampaignBarImageUrl({
+      imageUrl: input.imageUrl ?? null,
+      windowsImageUrl: input.windowsImageUrl ?? null,
+      macosImageUrl: input.macosImageUrl ?? null,
+      androidImageUrl: input.androidImageUrl ?? null,
+    }) ??
+    input.imageUrl ??
+    input.macosImageUrl ??
+    input.windowsImageUrl ??
+    input.androidImageUrl ??
+    null;
+
+  const campaignRows = await sql`
+    UPDATE campaigns
+    SET
+      title = ${input.title},
+      body = ${input.body},
+      target_url = ${input.targetUrl ?? null},
+      icon_url = ${input.iconUrl ?? null},
+      image_url = ${listImageUrl},
+      windows_image_url = ${input.windowsImageUrl ?? null},
+      macos_image_url = ${input.macosImageUrl ?? null},
+      android_image_url = ${input.androidImageUrl ?? null},
+      action_buttons = ${JSON.stringify(input.actionButtons ?? [])}::jsonb,
+      segment_id = ${input.segmentId ?? 'all'},
+      status = ${input.status ?? existingStatus},
+      scheduled_at = ${input.scheduledAt ? new Date(input.scheduledAt) : null}
+    WHERE id = ${input.campaignId}
+      AND shop_domain = ${input.shopDomain}
+    RETURNING *
+  `;
+
+  const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+  void invalidateShopDashboardCaches(input.shopDomain);
+
+  return campaignRows[0];
+};
+
+export const deleteCampaign = async (shopDomain: string, campaignId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const existing = await getCampaignById(shopDomain, campaignId);
+  if (!existing) {
+    throw new Error('Campaign not found for this shop.');
+  }
+
+  const existingStatus = String((existing as { status?: string }).status ?? '').toLowerCase();
+  if (existingStatus !== 'draft') {
+    throw new Error('Only draft campaigns can be deleted.');
+  }
+
+  await sql`
+    DELETE FROM campaign_deliveries
+    WHERE campaign_id = ${campaignId}
+      AND shop_domain = ${shopDomain}
+  `;
+
+  await sql`
+    DELETE FROM campaigns
+    WHERE id = ${campaignId}
+      AND shop_domain = ${shopDomain}
+  `;
+
+  const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+  void invalidateShopDashboardCaches(shopDomain);
+
+  return { ok: true, campaignId };
 };
 
 export const getCampaignStats = async (shopDomain: string, from?: Date | null, to?: Date | null) => {

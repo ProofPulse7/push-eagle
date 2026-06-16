@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { handleSendLivePreview } from '@/lib/notification-service';
+import { buildWizardPath, readWizardQueryParams } from '@/lib/client/campaign-wizard-bridge';
 
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Save, Eye, Loader2 } from "lucide-react";
@@ -99,11 +100,11 @@ export const ComposerActions = ({
     const handleContinue = () => {
         const isFormValid = onContinueClick();
         if (isFormValid) {
-            const queryShop = new URLSearchParams(window.location.search).get('shop');
-            const scheduleHref = queryShop
-                ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
-                : '/campaigns/new/schedule';
-            router.push(scheduleHref);
+            const { shop, draftId, duplicateId } = readWizardQueryParams();
+            router.push(buildWizardPath('/campaigns/new/schedule', shop, {
+                draft: draftId || undefined,
+                duplicate: duplicateId || undefined,
+            }));
         }
     }
 

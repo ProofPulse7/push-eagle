@@ -8,13 +8,18 @@ import type { DateRange } from "react-day-picker";
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge";
-import { PlusCircle, Rocket, Users, Calendar, Hash, Copy, CheckCircle, Clock, AlertCircle, ChevronDown } from "lucide-react"
+import { PlusCircle, Rocket, Users, Calendar, Hash, Copy, CheckCircle, Clock, AlertCircle, ChevronDown, Pencil, Trash2 } from "lucide-react"
 import { Card, CardContent } from "../ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Skeleton } from "../ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
 import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
+import { buildWizardPath } from '@/lib/client/campaign-wizard-bridge';
+import { removeOptimisticCampaign } from '@/lib/client/optimistic-campaigns';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
+import { useShopDomain } from '@/hooks/use-shop-domain';
+import { useToast } from '@/hooks/use-toast';
+import { useQueryClient } from '@tanstack/react-query';
 
 type Campaign = {
     id: string;
@@ -80,9 +85,18 @@ const mapApiCampaign = (campaign: Record<string, unknown>): Campaign => {
     };
 };
 
-export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined }) {
+export function CampaignsTable({
+    dateRange,
+    initialTab = 'sent',
+}: {
+    dateRange: DateRange | undefined;
+    initialTab?: 'sent' | 'scheduled' | 'draft';
+}) {
+    const shop = useShopDomain();
+    const queryClient = useQueryClient();
+    const { toast } = useToast();
     const { data, isLoading, isError, error: queryError, isFetching } = useCampaigns();
-    const [activeTab, setActiveTab] = useState('sent');
+    const [activeTab, setActiveTab] = useState(initialTab);
     const [visibleCount, setVisibleCount] = useState(CAMPAIGNS_PAGE_SIZE);
 
     const campaigns = useMemo(() => {
@@ -145,6 +159,45 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             draft: campaigns.filter(c => c.status === 'Draft').length,
         }
     }, [campaigns]);
+
+    const handleDuplicateCampaign = (campaignId: string) => {
+        window.location.href = buildWizardPath('/campaigns/new/details', shop, { duplicate: campaignId });
+    };
+
+    const handleEditDraft = (campaignId: string) => {
+        window.location.href = buildWizardPath('/campaigns/new/details', shop, { draft: campaignId });
+    };
+
+    const handleDeleteDraft = async (campaignId: string) => {
+        if (!shop) {
+            return;
+        }
+
+        removeOptimisticCampaign(queryClient, shop, campaignId);
+
+        try {
+            const response = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ shopDomain: shop }),
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload?.ok) {
+                throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to delete draft.');
+            }
+
+            toast({
+                title: 'Draft deleted',
+                description: 'The draft campaign has been removed.',
+            });
+        } catch (error) {
+            toast({
+                variant: 'destructive',
+                title: 'Delete failed',
+                description: error instanceof Error ? error.message : 'Could not delete draft campaign.',
+            });
+        }
+    };
 
 
     const renderEmptyStateForTab = () => {
@@ -275,7 +328,24 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                     <div className="flex items-center gap-1.5"><Calendar className="h-3 w-3" /><span>{campaign.createdAt ? formatDistanceToNow(new Date(campaign.createdAt), { addSuffix: true }) : 'Just now'}</span></div>
                                     <div className="flex items-center gap-1.5"><Hash className="h-3 w-3" /><span>ID: {campaign.id}</span></div>
                                 </div>
-                                <Button variant="outline" size="sm" className="mt-2 sm:mt-0 self-end sm:self-center"><Copy className="mr-2 h-3 w-3"/>Duplicate</Button>
+                                <div className="flex items-center gap-2 mt-2 sm:mt-0 self-end sm:self-center">
+                                    {campaign.status === 'Draft' ? (
+                                        <>
+                                            <Button variant="outline" size="sm" onClick={() => handleEditDraft(campaign.id)}>
+                                                <Pencil className="mr-2 h-3 w-3" />
+                                                Edit
+                                            </Button>
+                                            <Button variant="outline" size="sm" onClick={() => void handleDeleteDraft(campaign.id)}>
+                                                <Trash2 className="mr-2 h-3 w-3" />
+                                                Delete
+                                            </Button>
+                                        </>
+                                    ) : null}
+                                    <Button variant="outline" size="sm" onClick={() => handleDuplicateCampaign(campaign.id)}>
+                                        <Copy className="mr-2 h-3 w-3" />
+                                        Duplicate
+                                    </Button>
+                                </div>
                             </div>
                         </div>
                     </Card>

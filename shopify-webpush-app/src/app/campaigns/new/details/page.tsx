@@ -15,6 +15,7 @@ import { Separator } from '@/components/ui/separator';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
 import { buildAudienceSegmentsFromCache } from '@/lib/client/optimistic-campaigns';
+import { buildWizardPath, readWizardQueryParams } from '@/lib/client/campaign-wizard-bridge';
 import { cn } from '@/lib/utils';
 
 type AudienceSegment = {
@@ -58,6 +59,7 @@ export default function CampaignDetailsPage() {
   const queryClient = useQueryClient();
   const { shopDomain: settingsShopDomain } = useSettings();
   const [queryShop, setQueryShop] = useState('');
+  const [wizardQuery, setWizardQuery] = useState({ draftId: '', duplicateId: '' });
   const shopDomain = queryShop || settingsShopDomain || '';
   const {
     sendingOption,
@@ -68,6 +70,7 @@ export default function CampaignDetailsPage() {
     setSmartDeliver,
     flashSaleEnabled,
     setFlashSaleEnabled,
+    editingCampaignId,
   } = useCampaignState();
 
   const [segments, setSegments] = useState<AudienceSegment[]>(() =>
@@ -76,8 +79,18 @@ export default function CampaignDetailsPage() {
   const [audienceError, setAudienceError] = useState<string | null>(null);
 
   useEffect(() => {
-    setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
+    const params = readWizardQueryParams();
+    setQueryShop(params.shop);
+    setWizardQuery({ draftId: params.draftId, duplicateId: params.duplicateId });
   }, []);
+
+  const wizardOptions = useMemo(
+    () => ({
+      draft: wizardQuery.draftId || undefined,
+      duplicate: wizardQuery.duplicateId || undefined,
+    }),
+    [wizardQuery.draftId, wizardQuery.duplicateId],
+  );
 
   useEffect(() => {
     if (!shopDomain) {
@@ -87,7 +100,7 @@ export default function CampaignDetailsPage() {
     const cached = buildAudienceSegmentsFromCache(queryClient, shopDomain);
     if (cached.length > 0) {
       setSegments(cached);
-      if (!cached.some((item) => item.id === segmentId)) {
+      if (!editingCampaignId && !cached.some((item) => item.id === segmentId) && (segmentId === 'all' || !segmentId)) {
         setSegmentId(cached[0].id);
       }
     }
@@ -115,7 +128,7 @@ export default function CampaignDetailsPage() {
 
         if (nextSegments.length > 0) {
           setSegments(nextSegments);
-          if (!nextSegments.some((item: AudienceSegment) => item.id === segmentId)) {
+          if (!editingCampaignId && !nextSegments.some((item: AudienceSegment) => item.id === segmentId) && (segmentId === 'all' || !segmentId)) {
             setSegmentId(nextSegments[0].id);
           }
         }
@@ -129,7 +142,7 @@ export default function CampaignDetailsPage() {
     return () => {
       active = false;
     };
-  }, [queryClient, shopDomain]);
+  }, [editingCampaignId, queryClient, segmentId, shopDomain]);
 
   const selectedSegment = useMemo(
     () => segments.find((segment) => segment.id === segmentId) ?? segments[0],
@@ -140,9 +153,11 @@ export default function CampaignDetailsPage() {
     ? `/campaigns?shop=${encodeURIComponent(queryShop)}`
     : '/campaigns';
 
-  const editorHref = queryShop
-    ? `/campaigns/new/editor?shop=${encodeURIComponent(queryShop)}`
-    : '/campaigns/new/editor';
+  const editorHref = buildWizardPath('/campaigns/new/editor', shopDomain, wizardOptions);
+
+  useEffect(() => {
+    router.prefetch(editorHref);
+  }, [editorHref, router]);
 
   const campaignType = flashSaleEnabled ? 'flash' : 'regular';
 
@@ -274,9 +289,11 @@ export default function CampaignDetailsPage() {
           <Button
             size="default"
             className="h-10 min-w-[120px] rounded-xl bg-primary px-6 text-sm font-semibold"
-            onClick={() => router.push(editorHref)}
+            asChild
           >
-            Continue
+            <Link href={editorHref} prefetch>
+              Continue
+            </Link>
           </Button>
         </div>
       </div>

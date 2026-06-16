@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     const body = schema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
     const maxBatches = body.maxBatches ?? 2000;
-    const runAsync = body.async !== false;
+    const runAsync = body.async === true;
 
     if (runAsync) {
       deferAfterResponse(async () => {
