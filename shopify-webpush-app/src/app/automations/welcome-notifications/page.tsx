@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useCachedJson } from '@/hooks/use-cached-json';
 import { useSettings } from '@/context/settings-context';
+import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
 
 type NotificationPreviewData = {
   title: string;
@@ -63,9 +64,9 @@ const flowData: {
       notification: {
         title: 'You are subscribed',
         message: 'We will keep you posted with latest updates.',
-        iconUrl: 'https://placehold.co/48x48.png',
+        iconUrl: '',
         heroUrl: null,
-        siteName: 'chrome.zahoorshop.com',
+        siteName: 'Your store',
         actionButtons: [],
       },
     },
@@ -77,10 +78,10 @@ const flowData: {
       notification: {
         title: "We're glad to have you here!",
         message: "As an exclusive subscriber, you'll get our latest offers and products before anyone else!",
-        iconUrl: 'https://placehold.co/48x48.png',
-        heroUrl: 'https://placehold.co/728x360.png',
-        siteName: 'chrome.zahoorshop.com',
-        actionButtons: [{ title: 'Shop Now', link: 'https://example.com/shop' }],
+        iconUrl: '',
+        heroUrl: null,
+        siteName: 'Your store',
+        actionButtons: [{ title: 'Shop Now', link: '/collections/all' }],
       },
     },
     {
@@ -91,12 +92,12 @@ const flowData: {
       notification: {
         title: 'Hey there! Anything specific caught your eye?',
         message: 'Our products are made with care, giving you the best!',
-        iconUrl: 'https://placehold.co/48x48.png',
-        heroUrl: 'https://placehold.co/728x360.png',
-        siteName: 'chrome.zahoorshop.com',
+        iconUrl: '',
+        heroUrl: null,
+        siteName: 'Your store',
         actionButtons: [
-          { title: 'View Products', link: 'https://example.com/products' },
-          { title: 'Special Offers', link: 'https://example.com/offers' },
+          { title: 'View Products', link: '/collections/all' },
+          { title: 'Special Offers', link: '/collections/all' },
         ],
       },
     },
@@ -158,6 +159,7 @@ const buildStepsConfigFromNotifications = (notifications: FlowNotification[]) =>
 
 export default function WelcomeNotificationsPage() {
   const { shopDomain: settingsShop } = useSettings();
+  const displaySiteName = useMerchantDisplaySiteName();
   const [queryShop, setQueryShop] = useState('');
   const shopDomain = queryShop || settingsShop || '';
 
@@ -185,6 +187,22 @@ export default function WelcomeNotificationsPage() {
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
   }, []);
+
+  useEffect(() => {
+    if (displaySiteName === 'Your store') {
+      return;
+    }
+
+    setNotifications((current) =>
+      current.map((item) => ({
+        ...item,
+        notification: {
+          ...item.notification,
+          siteName: displaySiteName,
+        },
+      })),
+    );
+  }, [displaySiteName]);
 
   useEffect(() => {
     if (!overviewPayload?.ok) return;

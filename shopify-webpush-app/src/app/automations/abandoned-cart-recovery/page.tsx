@@ -15,6 +15,7 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
+import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
 import { useCachedJson } from '@/hooks/use-cached-json';
 import {
   applyPendingFlowStepStates,
@@ -73,9 +74,9 @@ const flowData: {
       notification: {
         title: 'You left something behind!',
         message: "We've saved your cart for you. Buy them now before they go out of stock!",
-        iconUrl: 'https://placehold.co/48x48.png',
+        iconUrl: '',
         heroUrl: null,
-        siteName: 'push-eagle-test1.myshopify.com',
+        siteName: 'Your store',
         actionButtons: [{ title: 'Checkout', link: '/cart' }, { title: 'Continue Shopping', link: '/collections/all' }],
       },
       stats: {
@@ -94,9 +95,9 @@ const flowData: {
       notification: {
         title: 'Still thinking it over?',
         message: 'Your cart is waiting for you. Complete your purchase now and get free shipping on all orders!',
-        iconUrl: 'https://placehold.co/48x48.png',
+        iconUrl: '',
         heroUrl: null,
-        siteName: 'push-eagle-test1.myshopify.com',
+        siteName: 'Your store',
         actionButtons: [{ title: 'View Cart', link: '/cart' }],
       },
       stats: {
@@ -115,9 +116,9 @@ const flowData: {
       notification: {
         title: "Don't miss out!",
         message: "The items in your cart are popular and might sell out soon. Grab them before they're gone!",
-        iconUrl: 'https://placehold.co/48x48.png',
+        iconUrl: '',
         heroUrl: null,
-        siteName: 'push-eagle-test1.myshopify.com',
+        siteName: 'Your store',
         actionButtons: [{ title: 'Complete Purchase', link: '/cart' }],
       },
       stats: {
@@ -230,6 +231,7 @@ const ReminderStats = ({ stats }: { stats: FlowNotification['stats'] }) => (
 
 export default function AbandonedCartPage() {
   const { shopDomain: settingsShop } = useSettings();
+  const displaySiteName = useMerchantDisplaySiteName();
   const [queryShop, setQueryShop] = useState('');
   const shopDomain = queryShop || settingsShop || '';
 
@@ -257,6 +259,22 @@ export default function AbandonedCartPage() {
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
   }, []);
+
+  useEffect(() => {
+    if (displaySiteName === 'Your store') {
+      return;
+    }
+
+    setNotifications((current) =>
+      current.map((item) => ({
+        ...item,
+        notification: {
+          ...item.notification,
+          siteName: displaySiteName,
+        },
+      })),
+    );
+  }, [displaySiteName]);
 
   useEffect(() => {
     if (!overviewPayload?.ok) return;

@@ -10,6 +10,7 @@ import {
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useSettings } from '@/context/settings-context';
 import { resolveMerchantWebsiteUrl } from '@/lib/client/merchant-website-url';
+import { setMerchantDisplayFormat } from '@/lib/merchant';
 import { mergePendingSettings } from '@/lib/client/pending-settings';
 
 /** Applies React Query cached merchant settings into SettingsContext (instant UI). */
@@ -47,6 +48,11 @@ export function SettingsCacheSync() {
 
     if (nextStoreUrl) {
       setStoreUrl(nextStoreUrl);
+    }
+
+    const currencyCode = String(overview.currencyCode ?? '').trim();
+    if (currencyCode) {
+      setMerchantDisplayFormat(currencyCode);
     }
   }, [overview, setStoreUrl]);
 

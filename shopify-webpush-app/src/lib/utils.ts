@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import { merchantConfig } from "./merchant";
+import { getMerchantDisplayFormat } from "./merchant";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -8,9 +8,10 @@ export function cn(...inputs: ClassValue[]) {
 
 export function formatCurrency(value: number, compact = false): string {
   try {
+    const { currency, locale } = getMerchantDisplayFormat();
     const options: Intl.NumberFormatOptions = {
       style: 'currency',
-      currency: merchantConfig.currency,
+      currency,
     };
     if (compact) {
         options.notation = 'compact';
@@ -21,7 +22,7 @@ export function formatCurrency(value: number, compact = false): string {
         options.maximumFractionDigits = 2;
     }
 
-    return new Intl.NumberFormat(merchantConfig.locale, options).format(value);
+    return new Intl.NumberFormat(locale, options).format(value);
   } catch (error) {
     console.error("Error formatting currency:", error);
     // Fallback for invalid config
@@ -31,7 +32,8 @@ export function formatCurrency(value: number, compact = false): string {
 
 export function formatNumber(value: number): string {
     try {
-        return new Intl.NumberFormat(merchantConfig.locale).format(value);
+        const { locale } = getMerchantDisplayFormat();
+        return new Intl.NumberFormat(locale).format(value);
     } catch (error) {
         console.error("Error formatting number:", error);
         return value.toString();

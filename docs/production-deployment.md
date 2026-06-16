@@ -11,6 +11,8 @@ Merchants open the app from Shopify Admin at:
 
 **Application URL:** `https://push-eagle-dashboard.vercel.app/dashboard` (`embedded = false`)
 
+**App Review testing guide:** see [`shopify-webpush-app/docs/APP_REVIEW.md`](./shopify-webpush-app/docs/APP_REVIEW.md) for reviewer credentials template and walkthrough.
+
 The Remix app at `push-eagle.vercel.app` is the **backend** — merchants do not bookmark it.
 
 ## How the two apps connect

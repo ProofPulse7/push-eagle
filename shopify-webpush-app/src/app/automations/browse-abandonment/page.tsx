@@ -15,6 +15,7 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
+import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
 import { useCachedJson } from '@/hooks/use-cached-json';
 import {
   applyPendingFlowStepStates,
@@ -73,9 +74,9 @@ const flowData: {
       notification: {
         title: 'Still interested in this?',
         message: 'We noticed you viewed this product. Take another look before it sells out.',
-        iconUrl: 'https://placehold.co/48x48.png',
+        iconUrl: '',
         heroUrl: null,
-        siteName: 'push-eagle-test1.myshopify.com',
+        siteName: 'Your store',
         actionButtons: [{ title: 'View Product', link: '/products' }],
       },
       stats: {
@@ -94,9 +95,9 @@ const flowData: {
       notification: {
         title: 'A special offer for you',
         message: "Here is 10% off the products you viewed. Don't miss out!",
-        iconUrl: 'https://placehold.co/48x48.png',
+        iconUrl: '',
         heroUrl: null,
-        siteName: 'push-eagle-test1.myshopify.com',
+        siteName: 'Your store',
         actionButtons: [{ title: 'Shop Now', link: '/collections/all' }],
       },
       stats: {
@@ -115,9 +116,9 @@ const flowData: {
       notification: {
         title: "Don't let it get away!",
         message: 'The product you viewed is getting a lot of attention. Secure yours before it is gone.',
-        iconUrl: 'https://placehold.co/48x48.png',
+        iconUrl: '',
         heroUrl: null,
-        siteName: 'push-eagle-test1.myshopify.com',
+        siteName: 'Your store',
         actionButtons: [{ title: 'View Product', link: '/products' }],
       },
       stats: {
@@ -230,6 +231,7 @@ const ReminderStats = ({ stats }: { stats: FlowNotification['stats'] }) => (
 
 export default function BrowseAbandonmentPage() {
   const { shopDomain: settingsShop } = useSettings();
+  const displaySiteName = useMerchantDisplaySiteName();
   const [queryShop, setQueryShop] = useState('');
   const shopDomain = queryShop || settingsShop || '';
 
@@ -257,6 +259,22 @@ export default function BrowseAbandonmentPage() {
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
   }, []);
+
+  useEffect(() => {
+    if (displaySiteName === 'Your store') {
+      return;
+    }
+
+    setNotifications((current) =>
+      current.map((item) => ({
+        ...item,
+        notification: {
+          ...item.notification,
+          siteName: displaySiteName,
+        },
+      })),
+    );
+  }, [displaySiteName]);
 
   useEffect(() => {
     if (!overviewPayload?.ok) return;
