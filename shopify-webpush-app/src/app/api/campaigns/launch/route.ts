@@ -2,12 +2,12 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
-import { createCampaign, markCampaignSendFailed, sendCampaign } from '@/lib/server/data/store';
-import { deferAfterResponse } from '@/lib/server/defer-after-response';
+import { startCampaignDelivery } from '@/lib/server/campaigns/campaign-send-queue';
+import { createCampaign } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 const launchSchema = z.object({
   shopDomain: z.string().optional(),
@@ -62,18 +62,7 @@ export async function POST(request: Request) {
       });
     }
 
-    deferAfterResponse(async () => {
-      try {
-        await sendCampaign(shopDomain, campaignId, { maxBatches: 2000 });
-      } catch (error) {
-        console.error('[campaign-launch]', campaignId, error);
-        await markCampaignSendFailed(shopDomain, campaignId);
-      } finally {
-        const { invalidateShopDashboardCaches: invalidate } = await import('@/lib/server/cache/api-kv-cache');
-        void invalidate(shopDomain);
-      }
-    });
-
+    const delivery = await startCampaignDelivery(shopDomain, campaignId);
     void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({
@@ -83,7 +72,8 @@ export async function POST(request: Request) {
       launched: true,
       queued: true,
       status: 'sending',
-      message: 'Campaign delivery started in the background.',
+      delivery,
+      message: 'Campaign queued for scalable background delivery.',
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to launch campaign.';

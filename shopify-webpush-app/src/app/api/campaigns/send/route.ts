@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { deferAfterResponse } from '@/lib/server/defer-after-response';
-import { sendCampaign } from '@/lib/server/data/store';
+import { kickOffCampaignSendContinuation, processCampaignDeliveryJob } from '@/lib/server/campaigns/campaign-send-queue';
+import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -19,18 +19,12 @@ export async function POST(request: Request) {
   try {
     const body = schema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
-    const maxBatches = body.maxBatches ?? 2000;
-    const runAsync = body.async === true;
+    const maxBatches = body.maxBatches ?? 50;
+    const runAsync = body.async !== false;
 
     if (runAsync) {
-      deferAfterResponse(async () => {
-        try {
-          await sendCampaign(shopDomain, body.campaignId, { maxBatches });
-        } finally {
-          const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
-          void invalidateShopDashboardCaches(shopDomain);
-        }
-      });
+      kickOffCampaignSendContinuation(shopDomain, body.campaignId, maxBatches);
+      void invalidateShopDashboardCaches(shopDomain);
 
       return NextResponse.json({
         ok: true,
@@ -41,11 +35,12 @@ export async function POST(request: Request) {
         successCount: 0,
         recipientCount: null,
         remainingRecipients: null,
-        message: 'Campaign delivery started in the background.',
+        message: 'Campaign delivery queued for scalable background processing.',
       });
     }
 
-    const result = await sendCampaign(shopDomain, body.campaignId, { maxBatches });
+    const result = await processCampaignDeliveryJob(shopDomain, body.campaignId, { maxBatches });
+    void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({
       ok: true,

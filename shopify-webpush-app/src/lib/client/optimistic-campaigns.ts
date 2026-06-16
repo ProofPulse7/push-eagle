@@ -110,9 +110,15 @@ const removePinnedCampaign = (shop: string, campaignId: string) => {
 
 const sanitizePersistableMediaUrl = (value: unknown): string | null => {
   const trimmed = String(value ?? '').trim();
-  if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+  if (!trimmed) {
     return null;
   }
+
+  // Keep blob/data URLs for in-session optimistic UI; CDN URLs persist across refresh.
+  if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+    return trimmed;
+  }
+
   return trimmed;
 };
 
@@ -260,6 +266,28 @@ export const replaceOptimisticCampaignId = (
       ok: true,
       campaigns: [normalized, ...withoutOptimistic],
     }, shop);
+  });
+};
+
+export const patchOptimisticCampaign = (
+  queryClient: QueryClient,
+  shop: string,
+  campaignId: string,
+  patch: Partial<OptimisticCampaign>,
+) => {
+  queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
+    const currentList = Array.isArray(current?.campaigns)
+      ? current.campaigns.map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
+      : [];
+
+    const nextList = currentList.map((item) => {
+      if (String(item.id) !== campaignId) {
+        return item;
+      }
+      return normalizeCampaignRecord({ ...item, ...patch });
+    });
+
+    return mergeCampaignListPayload(current, { ok: true, campaigns: nextList }, shop);
   });
 };
 

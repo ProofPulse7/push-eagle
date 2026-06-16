@@ -8,7 +8,7 @@ import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
-import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
+import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
 
 import { ArrowLeft, Users, Clock, Send, Save, Loader2, Edit } from 'lucide-react';
@@ -293,6 +293,14 @@ export default function ScheduleCampaignPage() {
                         resolveCampaignMediaUrl(macHero.preview, shopDomain),
                         resolveCampaignMediaUrl(androidHero.preview, shopDomain),
                     ]);
+
+                    patchOptimisticCampaign(queryClient, shopDomain, optimisticId, {
+                        image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? iconUrl,
+                        windows_image_url: windowsImageUrl,
+                        macos_image_url: macosImageUrl,
+                        android_image_url: androidImageUrl,
+                        icon_url: iconUrl,
+                    });
 
                     const campaignPayload = {
                         shopDomain,

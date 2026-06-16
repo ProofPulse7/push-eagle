@@ -6525,6 +6525,31 @@ export const listQueuedCampaigns = async (limit = 25, shardCount = 1, shardIndex
   return rows as Array<{ id: string; shop_domain: string }>;
 };
 
+export const listInProgressCampaigns = async (limit = 25, shardCount = 1, shardIndex = 0) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
+  const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
+
+  const rows = await sql`
+    SELECT id, shop_domain
+    FROM campaigns
+    WHERE status IN ('queued', 'sending')
+      AND (
+        ${safeShardCount} = 1
+        OR MOD(ABS(hashtext(id)), ${safeShardCount}) = ${safeShardIndex}
+      )
+    ORDER BY
+      CASE WHEN status = 'sending' THEN 0 ELSE 1 END,
+      scheduled_at ASC NULLS LAST,
+      created_at ASC
+    LIMIT ${limit}
+  `;
+
+  return rows as Array<{ id: string; shop_domain: string }>;
+};
+
 export const getCampaignProgress = async (shopDomain: string, campaignId: string) => {
   await ensureSchema();
   const sql = getNeonSql();

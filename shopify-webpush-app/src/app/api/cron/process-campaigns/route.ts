@@ -1,10 +1,16 @@
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
-import { completeCronHeartbeat, listDueScheduledCampaigns, listQueuedCampaigns, sendCampaign, startCronHeartbeat } from '@/lib/server/data/store';
+import { processCampaignDeliveryJob } from '@/lib/server/campaigns/campaign-send-queue';
+import {
+  completeCronHeartbeat,
+  listDueScheduledCampaigns,
+  listInProgressCampaigns,
+  startCronHeartbeat,
+} from '@/lib/server/data/store';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const isAuthorized = (request: Request) => {
   // Vercel cron can arrive with varying header formats depending on platform/runtime.
@@ -43,7 +49,7 @@ export async function GET(request: Request) {
     const shardCount = parsePositiveInt(url.searchParams.get('shardCount'), 1, 1, 128);
     const shardIndex = parsePositiveInt(url.searchParams.get('shardIndex'), 0, 0, shardCount - 1);
     const maxCampaigns = parsePositiveInt(url.searchParams.get('maxCampaigns'), 25, 1, 250);
-    const maxBatches = parsePositiveInt(url.searchParams.get('maxBatches'), 20, 1, 2000);
+    const maxBatches = parsePositiveInt(url.searchParams.get('maxBatches'), 50, 1, 2000);
     const workerId = request.headers.get('x-worker-id') ?? `worker-${shardIndex}`;
 
     heartbeatId = await startCronHeartbeat('process_campaigns', {
@@ -55,8 +61,8 @@ export async function GET(request: Request) {
     });
 
     const dueCampaigns = await listDueScheduledCampaigns(maxCampaigns, shardCount, shardIndex);
-    const queuedCampaigns = await listQueuedCampaigns(maxCampaigns, shardCount, shardIndex);
-    const candidates = [...dueCampaigns, ...queuedCampaigns];
+    const inProgressCampaigns = await listInProgressCampaigns(maxCampaigns, shardCount, shardIndex);
+    const candidates = [...dueCampaigns, ...inProgressCampaigns];
     const uniqueCandidates = Array.from(new Map(candidates.map((item) => [item.id, item])).values());
     const processed: Array<{
       campaignId: string;
@@ -66,12 +72,14 @@ export async function GET(request: Request) {
       recipientCount?: number;
       completed?: boolean;
       remainingRecipients?: number;
+      continuedAsync?: boolean;
+      iterations?: number;
       error?: string;
     }> = [];
 
     for (const campaign of uniqueCandidates) {
       try {
-        const result = await sendCampaign(campaign.shop_domain, campaign.id, { maxBatches });
+        const result = await processCampaignDeliveryJob(campaign.shop_domain, campaign.id, { maxBatches });
         processed.push({
           campaignId: campaign.id,
           shopDomain: campaign.shop_domain,
@@ -94,7 +102,7 @@ export async function GET(request: Request) {
       maxCampaigns,
       maxBatches,
       dueCount: dueCampaigns.length,
-      queuedCount: queuedCampaigns.length,
+      inProgressCount: inProgressCampaigns.length,
       candidateCount: uniqueCandidates.length,
       processedCount: processed.filter((item) => !item.error).length,
       failedCount: processed.filter((item) => Boolean(item.error)).length,
