@@ -17,7 +17,7 @@ import { useImpressionLimit } from '@/hooks/use-impression-limit';
 export default function CampaignsPage() {
   const [date, setDate] = useState<DateRange | undefined>(undefined);
   const { atLimit } = useImpressionLimit();
-  const { data, isLoading, isFetching } = useCampaigns();
+  const { data, isLoading } = useCampaigns();
   const statsPeriodLabel = formatCampaignDateRangeLabel(date);
 
   return (
@@ -25,7 +25,6 @@ export default function CampaignsPage() {
       title="Campaigns"
       isLoading={isLoading}
       hasData={Boolean(data)}
-      isFetching={isFetching}
     >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
       <div className="flex items-center justify-between">

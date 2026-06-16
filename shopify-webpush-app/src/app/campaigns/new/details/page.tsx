@@ -79,6 +79,14 @@ export default function CampaignDetailsPage() {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
   }, []);
 
+  const editorHref = queryShop
+    ? `/campaigns/new/editor?shop=${encodeURIComponent(queryShop)}`
+    : '/campaigns/new/editor';
+
+  useEffect(() => {
+    router.prefetch(editorHref);
+  }, [editorHref, router]);
+
   useEffect(() => {
     if (!shopDomain) {
       return;
@@ -139,10 +147,6 @@ export default function CampaignDetailsPage() {
   const campaignsHref = queryShop
     ? `/campaigns?shop=${encodeURIComponent(queryShop)}`
     : '/campaigns';
-
-  const editorHref = queryShop
-    ? `/campaigns/new/editor?shop=${encodeURIComponent(queryShop)}`
-    : '/campaigns/new/editor';
 
   const campaignType = flashSaleEnabled ? 'flash' : 'regular';
 
@@ -274,9 +278,11 @@ export default function CampaignDetailsPage() {
           <Button
             size="default"
             className="h-10 min-w-[120px] rounded-xl bg-primary px-6 text-sm font-semibold"
-            onClick={() => router.push(editorHref)}
+            asChild
           >
-            Continue
+            <Link href={editorHref} prefetch>
+              Continue
+            </Link>
           </Button>
         </div>
       </div>

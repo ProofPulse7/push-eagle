@@ -3,30 +3,31 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { prefetchAppBootstrap, prefetchDashboardSummary } from '@/lib/client/query-fetchers';
 import { queryKeys } from '@/lib/client/query-keys';
 import { subscribeShopSync } from '@/lib/client/shop-sync-bus';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
-const refetchShopQueries = (
+/** Invalidate only queries that currently have mounted observers (avoids Missing queryFn errors). */
+const invalidateActiveShopQueries = (
   queryClient: ReturnType<typeof useQueryClient>,
   shop: string,
   scopes: Array<'subscribers' | 'dashboard' | 'bootstrap'>,
 ) => {
-  const tasks: Promise<unknown>[] = [];
+  if (scopes.includes('bootstrap')) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.bootstrap(shop), refetchType: 'active' });
+  }
 
-  if (scopes.includes('bootstrap') || scopes.includes('dashboard')) {
-    tasks.push(queryClient.refetchQueries({ queryKey: queryKeys.bootstrap(shop) }));
-    tasks.push(queryClient.refetchQueries({ queryKey: queryKeys.dashboardSummary(shop) }));
+  if (scopes.includes('dashboard')) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary(shop), refetchType: 'active' });
   }
 
   if (scopes.includes('subscribers') || scopes.includes('dashboard')) {
-    tasks.push(queryClient.refetchQueries({ queryKey: queryKeys.subscribersOverview(shop) }));
+    void queryClient.invalidateQueries({ queryKey: queryKeys.subscribersOverview(shop), refetchType: 'active' });
   }
-
-  void Promise.allSettled(tasks);
 };
 
-/** Keeps dashboard data fresh across tabs and after storefront opt-ins. Campaign list polling is handled by useCampaigns(). */
+/** Keeps dashboard data fresh across tabs. Uses prefetch (with queryFn) instead of blind refetch. */
 export function LiveShopSync() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
@@ -36,24 +37,26 @@ export function LiveShopSync() {
       return;
     }
 
-    refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
+    void prefetchAppBootstrap(queryClient, shop);
+    void prefetchDashboardSummary(queryClient, shop);
 
     const unsubscribe = subscribeShopSync(shop, (event) => {
       if (event.type === 'all') {
-        refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
+        invalidateActiveShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
         return;
       }
 
       if (event.type === 'subscribers') {
-        refetchShopQueries(queryClient, shop, ['subscribers', 'dashboard']);
+        invalidateActiveShopQueries(queryClient, shop, ['subscribers', 'dashboard']);
         return;
       }
 
       if (event.type === 'campaigns') {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shop), refetchType: 'active' });
         return;
       }
 
-      refetchShopQueries(queryClient, shop, ['dashboard']);
+      invalidateActiveShopQueries(queryClient, shop, ['dashboard']);
     });
 
     const poll = window.setInterval(() => {
@@ -61,11 +64,24 @@ export function LiveShopSync() {
         return;
       }
 
-      refetchShopQueries(queryClient, shop, ['subscribers', 'dashboard']);
+      invalidateActiveShopQueries(queryClient, shop, ['subscribers', 'dashboard']);
+
+      const campaignsPayload = queryClient.getQueryData<{ campaigns?: Array<Record<string, unknown>> }>(
+        queryKeys.campaigns(shop),
+      );
+      const campaigns = Array.isArray(campaignsPayload?.campaigns) ? campaignsPayload.campaigns : [];
+      const hasActiveSend = campaigns.some((campaign) => {
+        const status = String(campaign.status ?? '').toLowerCase();
+        return status === 'sending' || status === 'queued';
+      });
+
+      if (hasActiveSend) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shop), refetchType: 'active' });
+      }
     }, 30_000);
 
     const onFocus = () => {
-      refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
+      invalidateActiveShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
     };
 
     window.addEventListener('focus', onFocus);

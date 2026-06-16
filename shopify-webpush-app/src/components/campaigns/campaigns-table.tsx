@@ -296,7 +296,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                             <div className="pt-4 border-t flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                                 <div className="text-xs text-muted-foreground flex items-center gap-4 flex-wrap">
                                     <div className="flex items-center gap-1.5"><Users className="h-3 w-3" /><span>{campaign.segment}</span></div>
-                                    <div className="flex items-center gap-1.5"><Calendar className="h-3 w-3" /><span>{campaign.createdAt ? formatDistanceToNow(new Date(campaign.createdAt), { addSuffix: true }) : 'Just now'}</span></div>
+                                    <div className="flex items-center gap-1.5"><Calendar className="h-3 w-3" /><span>{campaign.createdAt ? (Date.now() - new Date(campaign.createdAt).getTime() < 60_000 ? 'Just now' : formatDistanceToNow(new Date(campaign.createdAt), { addSuffix: true })) : 'Just now'}</span></div>
                                     <div className="flex items-center gap-1.5"><Hash className="h-3 w-3" /><span>ID: {campaign.id}</span></div>
                                 </div>
                                 <Button variant="outline" size="sm" className="mt-2 sm:mt-0 self-end sm:self-center"><Copy className="mr-2 h-3 w-3"/>Duplicate</Button>

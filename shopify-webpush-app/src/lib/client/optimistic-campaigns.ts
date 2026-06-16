@@ -328,7 +328,11 @@ export const mergeCampaignListPayload = (
 
     const leftTime = Date.parse(String(left.created_at ?? left.sent_at ?? 0));
     const rightTime = Date.parse(String(right.created_at ?? right.sent_at ?? 0));
-    return rightTime - leftTime;
+    if (leftTime !== rightTime) {
+      return rightTime - leftTime;
+    }
+
+    return String(right.id).localeCompare(String(left.id));
   });
 
   return {

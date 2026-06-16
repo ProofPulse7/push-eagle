@@ -78,7 +78,7 @@ export function DashboardView() {
         </Alert>
       ) : null}
 
-      {isError ? (
+      {isError && !data ? (
         <Alert variant="destructive">
           <AlertTitle>Error loading dashboard</AlertTitle>
           <AlertDescription>

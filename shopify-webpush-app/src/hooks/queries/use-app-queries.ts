@@ -15,12 +15,9 @@ import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
 import { mergeAutomationsFromCache } from '@/lib/client/optimistic-automations';
 import { mergeSegmentsFromCache } from '@/lib/client/optimistic-segments';
-import { mergeCampaignsFromCache } from '@/lib/client/optimistic-campaigns';
+import { fetchAppBootstrap, fetchCampaignsList, fetchDashboardSummary } from '@/lib/client/query-fetchers';
 import { clearPendingSettings } from '@/lib/client/pending-settings';
-import {
-  hydrateAppCache,
-  type AppBootstrapPayload,
-} from '@/lib/client/hydrate-app-cache';
+import { type AppBootstrapPayload } from '@/lib/client/hydrate-app-cache';
 import { queryKeys } from '@/lib/client/query-keys';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
@@ -30,11 +27,7 @@ export function useAppBootstrap() {
 
   return useQuery({
     queryKey: queryKeys.bootstrap(shop),
-    queryFn: async () => {
-      const payload = await fetchJsonWithShop<AppBootstrapPayload>('/api/app/bootstrap', shop);
-      hydrateAppCache(queryClient, shop, payload);
-      return payload;
-    },
+    queryFn: () => fetchAppBootstrap(queryClient, shop),
     enabled: Boolean(shop),
     staleTime: 60_000,
     refetchOnMount: true,
@@ -62,10 +55,7 @@ export function useCampaigns() {
 
   return useQuery({
     queryKey: queryKeys.campaigns(shop),
-    queryFn: async () => {
-      const fresh = await fetchJsonWithShop<{ campaigns: unknown[] }>('/api/campaigns', shop);
-      return mergeCampaignsFromCache(queryClient, shop, fresh);
-    },
+    queryFn: () => fetchCampaignsList(queryClient, shop),
     enabled: Boolean(shop),
     staleTime: 60_000,
     refetchOnMount: false,
@@ -81,7 +71,7 @@ export function useCampaigns() {
         return status === 'sending' || status === 'queued';
       });
 
-      return hasActiveSend ? 10_000 : false;
+      return hasActiveSend ? 15_000 : false;
     },
     refetchIntervalInBackground: false,
     placeholderData: (previous) => previous,
@@ -169,8 +159,9 @@ export function useSubscribersOverview() {
       fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
     enabled: Boolean(shop),
     staleTime: 15_000,
-    refetchOnMount: true,
-    refetchInterval: 10_000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: false,
     initialData: () => {
       const bootstrap = queryClient.getQueryData<AppBootstrapPayload>(queryKeys.bootstrap(shop));
       if (bootstrap?.subscriberOverview) {
@@ -289,24 +280,11 @@ export function useDashboardSummary() {
 
   return useQuery({
     queryKey: queryKeys.dashboardSummary(shop),
-    queryFn: async () => {
-      const [overview, campaignStats, subscriberKpis, billingPayload] = await Promise.all([
-        fetchJsonWithShop<Record<string, unknown>>('/api/settings/overview', shop),
-        fetchJsonWithShop<Record<string, unknown>>('/api/campaigns/stats', shop),
-        fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
-        fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status', shop),
-      ]);
-
-      return {
-        overview,
-        campaignStats,
-        subscriberKpis,
-        billing: billingPayload.billing ?? {},
-      };
-    },
+    queryFn: () => fetchDashboardSummary(shop),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
     refetchOnMount: false,
+    refetchOnWindowFocus: false,
     placeholderData: (previous) =>
       previous ?? readDashboardSummaryFromCache(queryClient, shop),
   });
@@ -539,11 +517,7 @@ export function prefetchShopQueries(queryClient: QueryClient, shop: string) {
 
   void queryClient.prefetchQuery({
     queryKey: queryKeys.bootstrap(shop),
-    queryFn: async () => {
-      const payload = await fetchJsonWithShop<AppBootstrapPayload>('/api/app/bootstrap', shop);
-      hydrateAppCache(queryClient, shop, payload);
-      return payload;
-    },
+    queryFn: () => fetchAppBootstrap(queryClient, shop),
     staleTime: 5 * 60 * 1000,
   });
 }
@@ -575,32 +549,11 @@ export async function prefetchAppPages(queryClient: QueryClient, shop: string) {
 
   const steps: Array<() => Promise<unknown>> = [
     () =>
-      prefetchIfMissing(queryClient, queryKeys.bootstrap(shop), async () => {
-        const payload = await fetchJsonWithShop<AppBootstrapPayload>('/api/app/bootstrap', shop);
-        hydrateAppCache(queryClient, shop, payload);
-        return payload;
-      }),
+      prefetchIfMissing(queryClient, queryKeys.bootstrap(shop), () => fetchAppBootstrap(queryClient, shop)),
     () =>
-      prefetchIfMissing(queryClient, queryKeys.dashboardSummary(shop), async () => {
-        const [overview, campaignStats, subscriberKpis, billingPayload] = await Promise.all([
-          fetchJsonWithShop<Record<string, unknown>>('/api/settings/overview', shop),
-          fetchJsonWithShop<Record<string, unknown>>('/api/campaigns/stats', shop),
-          fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
-          fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=0', shop),
-        ]);
-
-        return {
-          overview,
-          campaignStats,
-          subscriberKpis,
-          billing: billingPayload.billing ?? {},
-        };
-      }),
+      prefetchIfMissing(queryClient, queryKeys.dashboardSummary(shop), () => fetchDashboardSummary(shop)),
     () =>
-      prefetchIfMissing(queryClient, queryKeys.campaigns(shop), async () => {
-        const fresh = await fetchJsonWithShop<{ campaigns: unknown[] }>('/api/campaigns', shop);
-        return mergeCampaignsFromCache(queryClient, shop, fresh);
-      }),
+      prefetchIfMissing(queryClient, queryKeys.campaigns(shop), () => fetchCampaignsList(queryClient, shop)),
     () =>
       prefetchIfMissing(queryClient, queryKeys.subscribersOverview(shop), () =>
         fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
