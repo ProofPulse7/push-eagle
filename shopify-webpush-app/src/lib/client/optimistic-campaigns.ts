@@ -1,6 +1,5 @@
 'use client';
 
-import { broadcastShopSync } from '@/lib/client/shop-sync-bus';
 import {
   applyLaunchMediaToCampaign,
   migrateLaunchMedia,
@@ -134,6 +133,83 @@ const normalizeCampaignRecord = (shop: string, campaign: Record<string, unknown>
   };
 };
 
+const CAMPAIGN_STATUS_RANK: Record<string, number> = {
+  draft: 10,
+  scheduled: 20,
+  queued: 30,
+  sending: 40,
+  sent: 50,
+  archived: 0,
+  paused: 0,
+};
+
+const readCampaignStatus = (campaign: Record<string, unknown>) =>
+  String(campaign.status ?? 'draft').toLowerCase();
+
+const mergeCampaignStatus = (
+  existing: Record<string, unknown>,
+  fresh: Record<string, unknown>,
+) => {
+  const existingStatus = readCampaignStatus(existing);
+  const freshStatus = readCampaignStatus(fresh);
+  const existingRank = CAMPAIGN_STATUS_RANK[existingStatus] ?? 0;
+  const freshRank = CAMPAIGN_STATUS_RANK[freshStatus] ?? 0;
+  return existingRank >= freshRank ? existingStatus : freshStatus;
+};
+
+const mergeCampaignRecord = (
+  shop: string,
+  existing: Record<string, unknown> | undefined,
+  fresh: Record<string, unknown>,
+) => {
+  if (!existing) {
+    return normalizeCampaignRecord(shop, fresh);
+  }
+
+  const mergedStatus = mergeCampaignStatus(existing, fresh);
+
+  return normalizeCampaignRecord(shop, {
+    ...existing,
+    ...fresh,
+    status: mergedStatus,
+    title: fresh.title ?? existing.title,
+    body: fresh.body ?? existing.body,
+    target_recipient_count:
+      Number(fresh.target_recipient_count ?? fresh.targetRecipientCount ?? 0) > 0
+        ? Number(fresh.target_recipient_count ?? fresh.targetRecipientCount ?? 0)
+        : Number(existing.target_recipient_count ?? existing.targetRecipientCount ?? 0),
+    delivery_count:
+      mergedStatus === 'sent'
+        ? Number(fresh.delivery_count ?? fresh.deliveryCount ?? 0)
+        : Math.max(
+            Number(existing.delivery_count ?? existing.deliveryCount ?? 0),
+            Number(fresh.delivery_count ?? fresh.deliveryCount ?? 0),
+          ),
+    sent_at: fresh.sent_at ?? fresh.sentAt ?? existing.sent_at ?? existing.sentAt,
+    created_at: fresh.created_at ?? fresh.createdAt ?? existing.created_at ?? existing.createdAt,
+    image_url:
+      fresh.image_url ??
+      fresh.imageUrl ??
+      existing.image_url ??
+      existing.imageUrl ??
+      existing.macos_image_url ??
+      existing.windows_image_url ??
+      existing.android_image_url,
+    windows_image_url:
+      fresh.windows_image_url ?? fresh.windowsImageUrl ?? existing.windows_image_url ?? existing.windowsImageUrl,
+    macos_image_url:
+      fresh.macos_image_url ?? fresh.macosImageUrl ?? existing.macos_image_url ?? existing.macosImageUrl,
+    android_image_url:
+      fresh.android_image_url ?? fresh.androidImageUrl ?? existing.android_image_url ?? existing.androidImageUrl,
+    icon_url: fresh.icon_url ?? fresh.iconUrl ?? existing.icon_url ?? existing.iconUrl,
+  });
+};
+
+const shouldUnpinCampaign = (campaign: Record<string, unknown>) => {
+  const status = readCampaignStatus(campaign);
+  return status === 'sent' || status === 'sending';
+};
+
 export const mergeCampaignListPayload = (
   previous: { ok?: boolean; campaigns?: unknown[] } | undefined,
   fresh: { ok?: boolean; campaigns?: unknown[] },
@@ -159,7 +235,7 @@ export const mergeCampaignListPayload = (
 
   for (const campaign of freshList) {
     const id = String(campaign.id);
-    if (pinnedIds.includes(id)) {
+    if (pinnedIds.includes(id) && shouldUnpinCampaign(campaign)) {
       removePinnedCampaign(shop, id);
     }
   }
@@ -177,31 +253,25 @@ export const mergeCampaignListPayload = (
   for (const campaign of freshList) {
     const id = String(campaign.id);
     const existing = byId.get(id);
-    byId.set(
-      id,
-      existing
-        ? normalizeCampaignRecord(shop, {
-            ...existing,
-            ...campaign,
-            target_recipient_count:
-              Number(campaign.target_recipient_count ?? campaign.targetRecipientCount ?? 0) > 0
-                ? Number(campaign.target_recipient_count ?? campaign.targetRecipientCount ?? 0)
-                : Number(existing.target_recipient_count ?? existing.targetRecipientCount ?? 0),
-            image_url:
-              campaign.image_url ??
-              existing.image_url ??
-              existing.macos_image_url ??
-              existing.windows_image_url ??
-              existing.android_image_url,
-            windows_image_url: campaign.windows_image_url ?? existing.windows_image_url,
-            macos_image_url: campaign.macos_image_url ?? existing.macos_image_url,
-            android_image_url: campaign.android_image_url ?? existing.android_image_url,
-          })
-        : campaign,
-    );
+    byId.set(id, mergeCampaignRecord(shop, existing, campaign));
   }
 
   for (const optimisticId of supersededOptimisticIds) {
+    const realId = replacements[optimisticId];
+    const optimistic = byId.get(optimisticId);
+    const realCampaign = realId ? byId.get(String(realId)) : undefined;
+
+    if (realId && optimistic) {
+      byId.set(
+        String(realId),
+        mergeCampaignRecord(
+          shop,
+          optimistic,
+          realCampaign ?? { ...optimistic, id: realId },
+        ),
+      );
+    }
+
     byId.delete(optimisticId);
   }
 
@@ -229,19 +299,11 @@ export const mergeCampaignListPayload = (
     byId.delete(optimisticId);
     byId.set(
       realId,
-      normalizeCampaignRecord(shop, {
-        ...(optimisticCampaign ?? {}),
-        ...realCampaign,
-        image_url:
-          realCampaign.image_url ??
-          optimisticCampaign?.image_url ??
-          optimisticCampaign?.macos_image_url ??
-          optimisticCampaign?.windows_image_url ??
-          optimisticCampaign?.android_image_url,
-        windows_image_url: realCampaign.windows_image_url ?? optimisticCampaign?.windows_image_url,
-        macos_image_url: realCampaign.macos_image_url ?? optimisticCampaign?.macos_image_url,
-        android_image_url: realCampaign.android_image_url ?? optimisticCampaign?.android_image_url,
-      }),
+      mergeCampaignRecord(
+        shop,
+        optimisticCampaign ?? undefined,
+        realCampaign,
+      ),
     );
   }
 
@@ -296,8 +358,6 @@ export const prependOptimisticCampaign = (
       campaigns: [normalized, ...withoutDuplicate],
     };
   });
-
-  broadcastShopSync(shop, { type: 'campaigns' });
 };
 
 export const replaceOptimisticCampaignId = (
@@ -326,7 +386,7 @@ export const replaceOptimisticCampaignId = (
     if (existingIndex >= 0) {
       nextList = withoutOptimistic.map((item, index) =>
         index === existingIndex
-          ? normalizeCampaignRecord(shop, { ...item, ...normalized })
+          ? mergeCampaignRecord(shop, item, normalized)
           : item,
       );
     } else {
@@ -342,8 +402,6 @@ export const replaceOptimisticCampaignId = (
       }),
     };
   });
-
-  broadcastShopSync(shop, { type: 'campaigns' });
 };
 
 export const patchOptimisticCampaign = (
@@ -357,13 +415,20 @@ export const patchOptimisticCampaign = (
       ? current.campaigns.map((item) => normalizeCampaignRecord(shop, item as Record<string, unknown>))
       : [];
 
+    const nextList = currentList.map((item) =>
+      String(item.id) === campaignId
+        ? mergeCampaignRecord(shop, item, patch as Record<string, unknown>)
+        : item,
+    );
+
+    const updated = nextList.find((item) => String(item.id) === campaignId);
+    if (updated && readPinnedCampaignIds(shop).includes(campaignId)) {
+      savePinnedSnapshot(shop, updated);
+    }
+
     return {
       ok: true,
-      campaigns: currentList.map((item) =>
-        String(item.id) === campaignId
-          ? normalizeCampaignRecord(shop, { ...item, ...patch })
-          : item,
-      ),
+      campaigns: nextList,
     };
   });
 };

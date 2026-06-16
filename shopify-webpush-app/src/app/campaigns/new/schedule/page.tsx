@@ -297,6 +297,7 @@ export default function ScheduleCampaignPage() {
             router.push(campaignsHref);
 
             void (async () => {
+                let campaignId: string | null = null;
                 try {
                     const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
                         resolveCampaignMediaUrl(logo.preview, shopDomain),
@@ -347,7 +348,7 @@ export default function ScheduleCampaignPage() {
                         throw new Error(buildResponseError('Failed to create campaign.', createPayload));
                     }
 
-                    const campaignId = String(createResult.campaign.id);
+                    campaignId = String(createResult.campaign.id);
 
                     replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
                         id: campaignId,
@@ -425,19 +426,21 @@ export default function ScheduleCampaignPage() {
                         return;
                     }
 
-                    const sendResponse = await runWithBackgroundRetries(() =>
-                        fetch('/api/campaigns/send', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify({
-                                campaignId,
-                                shopDomain,
-                                maxBatches: 2000,
-                                async: true,
+                    const sendResponse = await runWithBackgroundRetries(
+                        () =>
+                            fetch('/api/campaigns/send', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    campaignId,
+                                    shopDomain,
+                                    maxBatches: 2000,
+                                    async: true,
+                                }),
                             }),
-                        }),
+                        5,
                     );
 
                     const sendPayload = await parseApiResponse(sendResponse);
@@ -455,13 +458,18 @@ export default function ScheduleCampaignPage() {
                         });
                     }
                 } catch (backgroundError) {
+                    if (campaignId) {
+                        patchOptimisticCampaign(queryClient, shopDomain, campaignId, {
+                            status: 'sending',
+                        });
+                    }
                     toast({
                         variant: 'destructive',
                         title: 'Campaign delivery issue',
                         description:
                             backgroundError instanceof Error
                                 ? backgroundError.message
-                                : 'Background delivery failed. Check campaigns for status.',
+                                : 'Background delivery failed. Retrying automatically — check campaigns for status.',
                     });
                 }
             })();

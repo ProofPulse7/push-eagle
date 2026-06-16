@@ -67,8 +67,9 @@ export function useCampaigns() {
       return mergeCampaignsFromCache(queryClient, shop, fresh);
     },
     enabled: Boolean(shop),
-    staleTime: 15_000,
-    refetchOnMount: true,
+    staleTime: 60_000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
     refetchInterval: (query) => {
       const campaigns = (query.state.data as { campaigns?: Array<Record<string, unknown>> } | undefined)?.campaigns;
       if (!Array.isArray(campaigns)) {
@@ -80,7 +81,7 @@ export function useCampaigns() {
         return status === 'sending' || status === 'queued';
       });
 
-      return hasActiveSend ? 5000 : false;
+      return hasActiveSend ? 10_000 : false;
     },
     refetchIntervalInBackground: false,
     placeholderData: (previous) => previous,

@@ -10,17 +10,13 @@ import { useShopDomain } from '@/hooks/use-shop-domain';
 const refetchShopQueries = (
   queryClient: ReturnType<typeof useQueryClient>,
   shop: string,
-  scopes: Array<'campaigns' | 'subscribers' | 'dashboard' | 'bootstrap'>,
+  scopes: Array<'subscribers' | 'dashboard' | 'bootstrap'>,
 ) => {
   const tasks: Promise<unknown>[] = [];
 
   if (scopes.includes('bootstrap') || scopes.includes('dashboard')) {
     tasks.push(queryClient.refetchQueries({ queryKey: queryKeys.bootstrap(shop) }));
     tasks.push(queryClient.refetchQueries({ queryKey: queryKeys.dashboardSummary(shop) }));
-  }
-
-  if (scopes.includes('campaigns') || scopes.includes('dashboard')) {
-    tasks.push(queryClient.refetchQueries({ queryKey: queryKeys.campaigns(shop) }));
   }
 
   if (scopes.includes('subscribers') || scopes.includes('dashboard')) {
@@ -30,7 +26,7 @@ const refetchShopQueries = (
   void Promise.allSettled(tasks);
 };
 
-/** Keeps dashboard data fresh across tabs and after storefront opt-ins / campaign sends. */
+/** Keeps dashboard data fresh across tabs and after storefront opt-ins. Campaign list polling is handled by useCampaigns(). */
 export function LiveShopSync() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
@@ -40,21 +36,20 @@ export function LiveShopSync() {
       return;
     }
 
-    refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'campaigns', 'subscribers']);
+    refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
 
     const unsubscribe = subscribeShopSync(shop, (event) => {
       if (event.type === 'all') {
-        refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'campaigns', 'subscribers']);
-        return;
-      }
-
-      if (event.type === 'campaigns') {
-        refetchShopQueries(queryClient, shop, ['campaigns', 'dashboard']);
+        refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
         return;
       }
 
       if (event.type === 'subscribers') {
         refetchShopQueries(queryClient, shop, ['subscribers', 'dashboard']);
+        return;
+      }
+
+      if (event.type === 'campaigns') {
         return;
       }
 
@@ -67,26 +62,10 @@ export function LiveShopSync() {
       }
 
       refetchShopQueries(queryClient, shop, ['subscribers', 'dashboard']);
-
-      const campaignsPayload = queryClient.getQueryData<{ campaigns?: Array<Record<string, unknown>> }>(
-        queryKeys.campaigns(shop),
-      );
-      const campaigns = Array.isArray(campaignsPayload?.campaigns) ? campaignsPayload.campaigns : [];
-      const hasActiveSend = campaigns.some((campaign) => {
-        const status = String(campaign.status ?? '').toLowerCase();
-        return status === 'sending' || status === 'queued';
-      });
-
-      if (hasActiveSend) {
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.campaigns(shop),
-          refetchType: 'active',
-        });
-      }
-    }, 8000);
+    }, 30_000);
 
     const onFocus = () => {
-      refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'campaigns', 'subscribers']);
+      refetchShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
     };
 
     window.addEventListener('focus', onFocus);

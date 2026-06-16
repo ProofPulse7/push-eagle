@@ -51,7 +51,7 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
     const statusMap: Record<string, Campaign['status']> = {
         draft: 'Draft',
         scheduled: 'Scheduled',
-        queued: 'Scheduled',
+        queued: 'Sending',
         sending: 'Sending',
         sent: 'Sent',
         archived: 'Archived',
@@ -66,7 +66,7 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
     const mappedStatus = statusMap[String(enriched.status ?? '').toLowerCase()] ?? 'Draft';
     const impressions =
         mappedStatus === 'Sending'
-            ? Math.max(targetRecipientCount, 0)
+            ? Math.max(targetRecipientCount, deliveryCount, 0)
             : deliveryCount;
     const ctr =
         mappedStatus === 'Sent' && deliveryCount > 0

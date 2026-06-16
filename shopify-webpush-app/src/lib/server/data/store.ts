@@ -7773,9 +7773,12 @@ export const sendCampaign = async (
 
     await sql`
       UPDATE campaigns
-      SET status = ${previousStatus}, sent_at = NULL, delivery_count = 0
+      SET status = 'queued', sent_at = NULL, delivery_count = 0
       WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
     `;
+
+    const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+    void bumpCronWakeNow();
 
     throw new Error('No active browser notification tokens found for this audience. Ask visitors to allow notifications first.');
   }
@@ -8057,9 +8060,12 @@ export const sendCampaign = async (
     if (deliveredCount === 0 && recipients.length > 0) {
       await sql`
         UPDATE campaigns
-        SET status = ${previousStatus}, sent_at = NULL, delivery_count = 0
+        SET status = 'queued', sent_at = NULL, delivery_count = 0
         WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
       `;
+
+      const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+      void bumpCronWakeNow();
 
       throw new Error('Failed to deliver campaign notifications to the selected audience. Check subscriber tokens and try again.');
     }
@@ -8115,12 +8121,31 @@ export const sendCampaign = async (
 
     await sql`
       UPDATE campaigns
-      SET status = ${previousStatus}
+      SET status = 'queued'
       WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
     `;
 
+    const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+    void bumpCronWakeNow();
+
     throw error;
   }
+};
+
+export const requeueCampaignForDelivery = async (shopDomain: string, campaignId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  await sql`
+    UPDATE campaigns
+    SET status = 'queued'
+    WHERE id = ${campaignId}
+      AND shop_domain = ${shopDomain}
+      AND status IN ('draft', 'sending')
+  `;
+
+  const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+  void bumpCronWakeNow();
 };
 
 export const cleanupMerchantData = async (shopDomain: string) => {

@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { deferAfterResponse } from '@/lib/server/defer-after-response';
-import { countCampaignAudienceTokens, getCampaignById, sendCampaign } from '@/lib/server/data/store';
+import {
+  countCampaignAudienceTokens,
+  getCampaignById,
+  requeueCampaignForDelivery,
+  sendCampaign,
+} from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -14,6 +19,30 @@ const schema = z.object({
   maxBatches: z.number().int().min(1).max(2000).optional(),
   async: z.boolean().optional(),
 });
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const deliverCampaignWithRetry = async (
+  shopDomain: string,
+  campaignId: string,
+  maxBatches: number,
+) => {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await sendCampaign(shopDomain, campaignId, { maxBatches });
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await sleep(1500 * attempt);
+      }
+    }
+  }
+
+  await requeueCampaignForDelivery(shopDomain, campaignId);
+  throw lastError instanceof Error ? lastError : new Error('Campaign delivery failed after retries.');
+};
 
 export async function POST(request: Request) {
   try {
@@ -31,11 +60,19 @@ export async function POST(request: Request) {
           )
         : null;
 
+      const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+      void invalidateShopDashboardCaches(shopDomain);
+
       deferAfterResponse(async () => {
         try {
-          await sendCampaign(shopDomain, body.campaignId, { maxBatches });
+          await deliverCampaignWithRetry(shopDomain, body.campaignId, maxBatches);
+        } catch (error) {
+          console.error('[campaigns/send] background delivery failed', {
+            shopDomain,
+            campaignId: body.campaignId,
+            error: error instanceof Error ? error.message : String(error),
+          });
         } finally {
-          const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
           void invalidateShopDashboardCaches(shopDomain);
         }
       });
@@ -54,7 +91,9 @@ export async function POST(request: Request) {
       });
     }
 
-    const result = await sendCampaign(shopDomain, body.campaignId, { maxBatches });
+    const result = await deliverCampaignWithRetry(shopDomain, body.campaignId, maxBatches);
+    const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+    void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({
       ok: true,
