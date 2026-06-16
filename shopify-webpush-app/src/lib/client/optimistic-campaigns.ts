@@ -108,41 +108,20 @@ const removePinnedCampaign = (shop: string, campaignId: string) => {
   }
 };
 
-const sanitizePersistableMediaUrl = (value: unknown): string | null => {
-  const trimmed = String(value ?? '').trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  // Keep blob/data URLs for in-session optimistic UI; CDN URLs persist across refresh.
-  if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
-    return trimmed;
-  }
-
-  return trimmed;
-};
-
 const normalizeCampaignRecord = (campaign: Record<string, unknown>) => {
-  const windowsImageUrl = sanitizePersistableMediaUrl(campaign.windows_image_url ?? campaign.windowsImageUrl);
-  const macosImageUrl = sanitizePersistableMediaUrl(campaign.macos_image_url ?? campaign.macosImageUrl);
-  const androidImageUrl = sanitizePersistableMediaUrl(campaign.android_image_url ?? campaign.androidImageUrl);
-  const imageUrl = sanitizePersistableMediaUrl(campaign.image_url ?? campaign.imageUrl);
-  const iconUrl = sanitizePersistableMediaUrl(campaign.icon_url ?? campaign.iconUrl);
-
   const listImage = pickCampaignBarImageUrl({
-    imageUrl,
-    windowsImageUrl,
-    macosImageUrl,
-    androidImageUrl,
+    imageUrl: (campaign.image_url ?? campaign.imageUrl) as string | null | undefined,
+    windowsImageUrl: (campaign.windows_image_url ?? campaign.windowsImageUrl) as string | null | undefined,
+    macosImageUrl: (campaign.macos_image_url ?? campaign.macosImageUrl) as string | null | undefined,
+    androidImageUrl: (campaign.android_image_url ?? campaign.androidImageUrl) as string | null | undefined,
   });
 
   return {
     ...campaign,
-    icon_url: iconUrl,
-    image_url: listImage ?? imageUrl ?? iconUrl,
-    windows_image_url: windowsImageUrl,
-    macos_image_url: macosImageUrl,
-    android_image_url: androidImageUrl,
+    image_url: listImage ?? campaign.image_url ?? campaign.imageUrl ?? null,
+    windows_image_url: campaign.windows_image_url ?? campaign.windowsImageUrl ?? null,
+    macos_image_url: campaign.macos_image_url ?? campaign.macosImageUrl ?? null,
+    android_image_url: campaign.android_image_url ?? campaign.androidImageUrl ?? null,
   };
 };
 
@@ -266,28 +245,6 @@ export const replaceOptimisticCampaignId = (
       ok: true,
       campaigns: [normalized, ...withoutOptimistic],
     }, shop);
-  });
-};
-
-export const patchOptimisticCampaign = (
-  queryClient: QueryClient,
-  shop: string,
-  campaignId: string,
-  patch: Partial<OptimisticCampaign>,
-) => {
-  queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
-    const currentList = Array.isArray(current?.campaigns)
-      ? current.campaigns.map((item) => normalizeCampaignRecord(item as Record<string, unknown>))
-      : [];
-
-    const nextList = currentList.map((item) => {
-      if (String(item.id) !== campaignId) {
-        return item;
-      }
-      return normalizeCampaignRecord({ ...item, ...patch });
-    });
-
-    return mergeCampaignListPayload(current, { ok: true, campaigns: nextList }, shop);
   });
 };
 

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { API_KV_TTL, withShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
-import { countCampaignAudienceTokens, listSegments } from '@/lib/server/data/store';
+import { getSubscriberKpis, listSegments } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -15,8 +15,8 @@ export async function GET(request: Request) {
       'campaign-audience',
       API_KV_TTL.segments,
       async () => {
-        const [allAudienceCount, dynamicSegments] = await Promise.all([
-          countCampaignAudienceTokens(shopDomain, 'all'),
+        const [subscriberKpis, dynamicSegments] = await Promise.all([
+          getSubscriberKpis(shopDomain),
           listSegments(shopDomain, { preferCache: true }),
         ]);
 
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
             {
               id: 'all',
               name: 'All Subscribers',
-              count: allAudienceCount,
+              count: Number(subscriberKpis.totalSubscribers ?? 0),
             },
             ...dynamicSegments.map((segment) => ({
               id: segment.id,

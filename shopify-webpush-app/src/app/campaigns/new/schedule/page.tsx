@@ -154,7 +154,6 @@ export default function ScheduleCampaignPage() {
         setRecurringPattern,
     } = useCampaignState();
     const [isSaving, setIsSaving] = useState(false);
-    const [isLaunching, setIsLaunching] = useState(false);
     const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('windows');
     const [segmentDisplayName, setSegmentDisplayName] = useState('All Subscribers');
     const [segmentSubscriberCount, setSegmentSubscriberCount] = useState(0);
@@ -216,7 +215,7 @@ export default function ScheduleCampaignPage() {
         };
     }, [queryClient, shopDomain, segmentId]);
     
-    const handleLaunchCampaign = async () => {
+    const handleLaunchCampaign = () => {
         try {
             if (!shopDomain) {
                 throw new Error('Set your Shopify subdomain in Settings before launching campaigns.');
@@ -240,16 +239,6 @@ export default function ScheduleCampaignPage() {
                 }
             }
 
-            setIsLaunching(true);
-
-            const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
-                resolveCampaignMediaUrl(logo.preview, shopDomain),
-                resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
-                resolveCampaignMediaUrl(macHero.preview, shopDomain),
-                resolveCampaignMediaUrl(androidHero.preview, shopDomain),
-            ]);
-
-            const listImageUrl = macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? iconUrl;
             const optimisticId = crypto.randomUUID();
             const launchStatus =
                 sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
@@ -258,11 +247,11 @@ export default function ScheduleCampaignPage() {
                 id: optimisticId,
                 title: title || 'Untitled Campaign',
                 body: message || '',
-                image_url: listImageUrl,
-                windows_image_url: windowsImageUrl,
-                macos_image_url: macosImageUrl,
-                android_image_url: androidImageUrl,
-                icon_url: iconUrl,
+                image_url: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
+                windows_image_url: windowsHero.preview,
+                macos_image_url: macHero.preview,
+                android_image_url: androidHero.preview,
+                icon_url: logo.preview,
                 segment_id: segmentId,
                 status: launchStatus,
                 created_at: new Date().toISOString(),
@@ -298,71 +287,44 @@ export default function ScheduleCampaignPage() {
 
             void (async () => {
                 try {
-                    const campaignPayload = {
-                        shopDomain,
-                        title: title || 'Untitled Campaign',
-                        body: message || ' ',
-                        targetUrl: primaryLink || null,
-                        iconUrl,
-                        imageUrl: macosImageUrl,
-                        windowsImageUrl,
-                        macosImageUrl,
-                        androidImageUrl,
-                        actionButtons: actionButtons
-                            .filter((button) => button.title?.trim() && button.link?.trim())
-                            .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
-                        segmentId,
-                        scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                        sendingOption: sendingOption === 'recurring' ? 'recurring' : sendingOption === 'schedule' ? 'schedule' : 'now',
-                    } as const;
-
-                    if (sendingOption === 'now') {
-                        const launchResponse = await fetch('/api/campaigns/launch', {
-                            method: 'POST',
-                            keepalive: true,
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(campaignPayload),
-                        });
-
-                        const launchPayload = await parseApiResponse(launchResponse);
-                        const launchResult = launchPayload.json;
-                        if (!launchResponse.ok || !launchResult?.ok || !launchResult?.campaignId) {
-                            throw new Error(buildResponseError('Failed to launch campaign.', launchPayload));
-                        }
-
-                        const campaignId = String(launchResult.campaignId);
-                        replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
-                            id: campaignId,
-                            title: title || 'Untitled Campaign',
-                            body: message || '',
-                            image_url: listImageUrl,
-                            windows_image_url: windowsImageUrl,
-                            macos_image_url: macosImageUrl,
-                            android_image_url: androidImageUrl,
-                            icon_url: iconUrl,
-                            segment_id: segmentId,
-                            status: 'sending',
-                            created_at: new Date().toISOString(),
-                            sent_at: new Date().toISOString(),
-                            scheduled_at: null,
-                            delivery_count: segmentSubscriberCount,
-                            click_count: 0,
-                            revenue_cents: 0,
-                        });
-                        return;
-                    }
+                    const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
+                        resolveCampaignMediaUrl(logo.preview, shopDomain),
+                        resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
+                        resolveCampaignMediaUrl(macHero.preview, shopDomain),
+                        resolveCampaignMediaUrl(androidHero.preview, shopDomain),
+                    ]);
 
                     const createResponse = await fetch('/api/campaigns', {
                         method: 'POST',
-                        keepalive: true,
                         headers: {
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
-                            ...campaignPayload,
+                            shopDomain,
+                            title: title || 'Untitled Campaign',
+                            body: message || ' ',
+                            targetUrl: primaryLink || null,
+                            iconUrl,
+                            imageUrl: macosImageUrl,
+                            windowsImageUrl,
+                            macosImageUrl,
+                            androidImageUrl,
+                            actionButtons: actionButtons
+                                .filter((button) => button.title?.trim() && button.link?.trim())
+                                .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
+                            segmentId,
                             status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
+                            scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
+                            smartDeliver,
+                            flashSaleEnabled,
+                            flashSaleConfig: flashSaleEnabled ? {
+                                discountPercent: flashSaleDiscountPercent,
+                                originalPrice: flashSaleOriginalPrice,
+                                salePrice: flashSaleSalePrice,
+                                expiresAt: flashSaleExpiresAt?.toISOString(),
+                                urgencyText: flashSaleUrgencyText,
+                            } : undefined,
+                            recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
                         }),
                     });
 
@@ -378,7 +340,7 @@ export default function ScheduleCampaignPage() {
                         id: campaignId,
                         title: title || 'Untitled Campaign',
                         body: message || '',
-                        image_url: listImageUrl,
+                        image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl,
                         windows_image_url: windowsImageUrl,
                         macos_image_url: macosImageUrl,
                         android_image_url: androidImageUrl,
@@ -440,6 +402,24 @@ export default function ScheduleCampaignPage() {
                         }
                         return;
                     }
+
+                    const sendResponse = await fetch('/api/campaigns/send', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            campaignId,
+                            shopDomain,
+                            maxBatches: 2000,
+                        }),
+                    });
+
+                    const sendPayload = await parseApiResponse(sendResponse);
+                    const sendResult = sendPayload.json;
+                    if (!sendResponse.ok || !sendResult?.ok) {
+                        throw new Error(buildResponseError('Failed to send campaign.', sendPayload));
+                    }
                 } catch (backgroundError) {
                     toast({
                         variant: 'destructive',
@@ -457,8 +437,6 @@ export default function ScheduleCampaignPage() {
                 title: 'Campaign launch failed',
                 description: error instanceof Error ? error.message : 'Unexpected error while launching campaign.',
             });
-        } finally {
-            setIsLaunching(false);
         }
     };
 
@@ -632,15 +610,11 @@ export default function ScheduleCampaignPage() {
                 </Button>
                 <Button 
                     size="lg" 
-                    onClick={() => void handleLaunchCampaign()} 
-                    disabled={isSaving || isLaunching || !title || !primaryLink}
+                    onClick={handleLaunchCampaign} 
+                    disabled={isSaving || !title || !primaryLink}
                 >
-                    {isLaunching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                    {isLaunching
-                        ? 'Preparing launch...'
-                        : sendingOption === 'schedule'
-                          ? 'Schedule Campaign'
-                          : 'Launch Campaign'}
+                    <Send className="mr-2 h-4 w-4" />
+                    {sendingOption === 'schedule' ? 'Schedule Campaign' : 'Launch Campaign'}
                 </Button>
             </div>
         </div>
