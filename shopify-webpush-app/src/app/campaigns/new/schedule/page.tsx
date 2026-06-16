@@ -157,6 +157,7 @@ export default function ScheduleCampaignPage() {
         setRecurringPattern,
     } = useCampaignState();
     const [isSaving, setIsSaving] = useState(false);
+    const [isLaunching, setIsLaunching] = useState(false);
     const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('windows');
     const [segmentDisplayName, setSegmentDisplayName] = useState('All Subscribers');
     const [segmentSubscriberCount, setSegmentSubscriberCount] = useState(0);
@@ -219,6 +220,7 @@ export default function ScheduleCampaignPage() {
     }, [queryClient, shopDomain, segmentId]);
     
     const handleLaunchCampaign = async () => {
+        setIsLaunching(true);
         try {
             if (!shopDomain) {
                 throw new Error('Set your Shopify subdomain in Settings before launching campaigns.');
@@ -276,6 +278,58 @@ export default function ScheduleCampaignPage() {
 
             if (launchStatus === 'sending') {
                 bumpDashboardCampaignSent(queryClient, shopDomain);
+
+                const launchResponse = await fetch('/api/campaigns/launch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        shopDomain,
+                        title: title || 'Untitled Campaign',
+                        body: message || ' ',
+                        targetUrl: primaryLink || '',
+                        segmentId,
+                        media: cachedMedia,
+                        actionButtons: actionButtons
+                            .filter((button) => button.title?.trim() && button.link?.trim())
+                            .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
+                        maxBatches: 2000,
+                    }),
+                });
+
+                const launchResultPayload = await parseApiResponse(launchResponse);
+                const launchResult = launchResultPayload.json;
+                if (!launchResponse.ok || !launchResult?.ok || !launchResult?.campaignId) {
+                    throw new Error(buildResponseError('Failed to launch campaign.', launchResultPayload));
+                }
+
+                const campaignId = String(launchResult.campaignId);
+                const resolvedTargetCount = Number(
+                    launchResult.recipientCount
+                        ?? launchResult.targetRecipientCount
+                        ?? segmentSubscriberCount
+                        ?? 0,
+                );
+
+                replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
+                    id: campaignId,
+                    title: title || 'Untitled Campaign',
+                    body: message || '',
+                    image_url: cachedMedia.imageUrl,
+                    windows_image_url: cachedMedia.windowsImageUrl,
+                    macos_image_url: cachedMedia.macosImageUrl,
+                    android_image_url: cachedMedia.androidImageUrl,
+                    icon_url: cachedMedia.iconUrl,
+                    segment_id: segmentId,
+                    status: 'sending',
+                    created_at: new Date().toISOString(),
+                    sent_at: new Date().toISOString(),
+                    delivery_count: 0,
+                    target_recipient_count: resolvedTargetCount,
+                    click_count: 0,
+                    revenue_cents: 0,
+                });
+
+                void cacheLaunchMedia(shopDomain, campaignId, cachedMedia);
             }
 
             const toastTitle =
@@ -297,6 +351,11 @@ export default function ScheduleCampaignPage() {
             });
             router.push(campaignsHref);
 
+            if (launchStatus === 'sending') {
+                void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
+                return;
+            }
+
             void (async () => {
                 let campaignId: string | null = null;
                 try {
@@ -313,6 +372,7 @@ export default function ScheduleCampaignPage() {
                             headers: {
                                 'Content-Type': 'application/json',
                             },
+                            keepalive: true,
                             body: JSON.stringify({
                                 shopDomain,
                                 title: title || 'Untitled Campaign',
@@ -418,54 +478,6 @@ export default function ScheduleCampaignPage() {
                         }
                         return;
                     }
-
-                    const sendResponse = await runWithBackgroundRetries(
-                        () =>
-                            fetch('/api/campaigns/send', {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                },
-                                body: JSON.stringify({
-                                    campaignId,
-                                    shopDomain,
-                                    maxBatches: 2000,
-                                    async: false,
-                                }),
-                            }),
-                        3,
-                    );
-
-                    const sendPayload = await parseApiResponse(sendResponse);
-                    const sendResult = sendPayload.json;
-                    if (!sendResponse.ok || !sendResult?.ok) {
-                        throw new Error(buildResponseError('Failed to send campaign.', sendPayload));
-                    }
-
-                    const resolvedTargetCount = Number(
-                        sendResult.recipientCount
-                            ?? sendResult.targetRecipientCount
-                            ?? segmentSubscriberCount
-                            ?? 0,
-                    );
-                    const deliveredCount = Number(sendResult.successCount ?? sendResult.delivery_count ?? 0);
-                    const completed = Boolean(sendResult.completed);
-
-                    patchOptimisticCampaign(queryClient, shopDomain, campaignId, {
-                        status: completed ? 'sent' : 'sending',
-                        delivery_count: deliveredCount,
-                        target_recipient_count: resolvedTargetCount,
-                    });
-
-                    void cacheLaunchMedia(shopDomain, campaignId, {
-                        imageUrl: macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? cachedMedia.imageUrl,
-                        windowsImageUrl: windowsImageUrl ?? cachedMedia.windowsImageUrl,
-                        macosImageUrl: macosImageUrl ?? cachedMedia.macosImageUrl,
-                        androidImageUrl: androidImageUrl ?? cachedMedia.androidImageUrl,
-                        iconUrl: iconUrl ?? cachedMedia.iconUrl,
-                    });
-
-                    void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
                 } catch (backgroundError) {
                     if (campaignId) {
                         patchOptimisticCampaign(queryClient, shopDomain, campaignId, {
@@ -488,6 +500,8 @@ export default function ScheduleCampaignPage() {
                 title: 'Campaign launch failed',
                 description: error instanceof Error ? error.message : 'Unexpected error while launching campaign.',
             });
+        } finally {
+            setIsLaunching(false);
         }
     };
 
@@ -662,10 +676,14 @@ export default function ScheduleCampaignPage() {
                 <Button 
                     size="lg" 
                     onClick={handleLaunchCampaign} 
-                    disabled={isSaving || !title || !primaryLink}
+                    disabled={isSaving || isLaunching || !title || !primaryLink}
                 >
-                    <Send className="mr-2 h-4 w-4" />
-                    {sendingOption === 'schedule' ? 'Schedule Campaign' : 'Launch Campaign'}
+                    {isLaunching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                    {isLaunching
+                        ? 'Launching...'
+                        : sendingOption === 'schedule'
+                          ? 'Schedule Campaign'
+                          : 'Launch Campaign'}
                 </Button>
             </div>
         </div>

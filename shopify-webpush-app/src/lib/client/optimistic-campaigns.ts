@@ -39,7 +39,7 @@ const readPinnedCampaignIds = (shop: string): string[] => {
   }
 
   try {
-    const raw = sessionStorage.getItem(pinnedCampaignIdsKey(shop));
+    const raw = localStorage.getItem(pinnedCampaignIdsKey(shop));
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed.map(String) : [];
   } catch {
@@ -53,7 +53,7 @@ const writePinnedCampaignIds = (shop: string, ids: string[]) => {
   }
 
   try {
-    sessionStorage.setItem(pinnedCampaignIdsKey(shop), JSON.stringify(ids.slice(0, 50)));
+    localStorage.setItem(pinnedCampaignIdsKey(shop), JSON.stringify(ids.slice(0, 50)));
   } catch {
     // Ignore storage quota errors.
   }
@@ -65,7 +65,7 @@ const readPinnedSnapshots = (shop: string): Record<string, Record<string, unknow
   }
 
   try {
-    const raw = sessionStorage.getItem(pinnedCampaignSnapshotsKey(shop));
+    const raw = localStorage.getItem(pinnedCampaignSnapshotsKey(shop));
     const parsed = raw ? JSON.parse(raw) : {};
     return parsed && typeof parsed === 'object' ? (parsed as Record<string, Record<string, unknown>>) : {};
   } catch {
@@ -80,7 +80,7 @@ const writePinnedSnapshots = (shop: string, snapshots: Record<string, Record<str
 
   try {
     const entries = Object.entries(snapshots).slice(0, 50);
-    sessionStorage.setItem(pinnedCampaignSnapshotsKey(shop), JSON.stringify(Object.fromEntries(entries)));
+    localStorage.setItem(pinnedCampaignSnapshotsKey(shop), JSON.stringify(Object.fromEntries(entries)));
   } catch {
     // Ignore storage quota errors.
   }

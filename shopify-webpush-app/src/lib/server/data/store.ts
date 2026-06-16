@@ -6323,6 +6323,7 @@ export const resolveCampaignAudience = async (
             FROM campaign_deliveries cd
             WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
               AND cd.subscriber_id = s.id
+              AND cd.fcm_message_id IS NOT NULL
           )
         ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
       `
@@ -6422,6 +6423,7 @@ export const resolveCampaignAudience = async (
           FROM campaign_deliveries cd
           WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
             AND cd.subscriber_id = s.id
+            AND cd.fcm_message_id IS NOT NULL
         )
       ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
     `
@@ -7724,6 +7726,7 @@ export const sendCampaign = async (
     FROM campaign_deliveries
     WHERE campaign_id = ${campaignId}
       AND shop_domain = ${shopDomain}
+      AND fcm_message_id IS NOT NULL
   `;
 
   const deliveredSubscriberIds = new Set(
@@ -7735,6 +7738,13 @@ export const sendCampaign = async (
   recipients = recipients.filter(
     (recipient) => !deliveredSubscriberIds.has(Number(recipient.subscriber_id)),
   );
+
+  await sql`
+    DELETE FROM campaign_deliveries
+    WHERE campaign_id = ${campaignId}
+      AND shop_domain = ${shopDomain}
+      AND fcm_message_id IS NULL
+  `;
 
   await sql`
     UPDATE campaigns
