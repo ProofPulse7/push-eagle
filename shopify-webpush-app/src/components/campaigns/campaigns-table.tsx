@@ -252,7 +252,11 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm sm:text-right w-full sm:max-w-md">
                                         <div>
                                             <p className="text-muted-foreground">Impressions</p>
-                                            <p className="font-medium">{campaign.reached?.toLocaleString() ?? 'N/A'}</p>
+                                            <p className="font-medium">
+                                                {campaign.status === 'Sending' && campaign.reached === 0
+                                                    ? 'Sending…'
+                                                    : (campaign.reached?.toLocaleString() ?? '0')}
+                                            </p>
                                         </div>
                                         <div>
                                             <p className="text-muted-foreground">Clicks</p>

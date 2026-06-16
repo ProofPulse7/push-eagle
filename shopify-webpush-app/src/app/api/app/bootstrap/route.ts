@@ -3,11 +3,13 @@ import { NextResponse } from 'next/server';
 import {
   getAttributionSettings,
   getAutomationOverview,
+  getAnalyticsStats,
   getBrandingSettings,
   getCampaignStats,
   getMerchantOverview,
   getOptInSettings,
   getPrivacySettings,
+  getSubscriberGrowth,
   getSubscriberKpis,
   listCampaigns,
   listSegments,
@@ -48,6 +50,10 @@ export async function GET(request: Request) {
       return NextResponse.json(cached, { headers: CACHE_HEADERS });
     }
 
+    const analyticsFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const chartFrom = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const analyticsTo = new Date();
+
     const [
       merchantOverview,
       campaignStats,
@@ -60,6 +66,8 @@ export async function GET(request: Request) {
       optIn,
       billing,
       automationsOverview,
+      subscriberGrowth,
+      analyticsStats,
     ] = await Promise.all([
       getMerchantOverview(shopDomain),
       getCampaignStats(shopDomain),
@@ -72,6 +80,8 @@ export async function GET(request: Request) {
       getOptInSettings(shopDomain),
       getMerchantBillingFast(shopDomain),
       getAutomationOverview(shopDomain),
+      getSubscriberGrowth(shopDomain, chartFrom, analyticsTo),
+      getAnalyticsStats(shopDomain, analyticsFrom, analyticsTo),
     ]);
 
     const payload = {
@@ -92,6 +102,16 @@ export async function GET(request: Request) {
       optIn,
       billing,
       automationsOverview,
+      subscriberGrowth: {
+        ok: true,
+        shopDomain,
+        from: chartFrom.toISOString(),
+        to: analyticsTo.toISOString(),
+        ...subscriberGrowth,
+      },
+      analyticsStats,
+      analyticsFrom: analyticsFrom.toISOString(),
+      analyticsTo: analyticsTo.toISOString(),
     };
 
     writeBootstrapCache(shopDomain, payload);

@@ -257,7 +257,7 @@ export default function ScheduleCampaignPage() {
                 created_at: new Date().toISOString(),
                 sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
                 scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                delivery_count: segmentSubscriberCount,
+                delivery_count: 0,
                 click_count: 0,
                 revenue_cents: 0,
             });
@@ -335,22 +335,30 @@ export default function ScheduleCampaignPage() {
                     }
 
                     const campaignId = String(createResult.campaign.id);
+                    const savedCampaign = createResult.campaign as Record<string, unknown>;
 
                     replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
                         id: campaignId,
                         title: title || 'Untitled Campaign',
                         body: message || '',
-                        image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl,
-                        windows_image_url: windowsImageUrl,
-                        macos_image_url: macosImageUrl,
-                        android_image_url: androidImageUrl,
-                        icon_url: iconUrl,
+                        image_url:
+                            macosImageUrl
+                            ?? windowsImageUrl
+                            ?? androidImageUrl
+                            ?? savedCampaign.image_url
+                            ?? macHero.preview
+                            ?? windowsHero.preview
+                            ?? androidHero.preview,
+                        windows_image_url: windowsImageUrl ?? savedCampaign.windows_image_url ?? windowsHero.preview,
+                        macos_image_url: macosImageUrl ?? savedCampaign.macos_image_url ?? macHero.preview,
+                        android_image_url: androidImageUrl ?? savedCampaign.android_image_url ?? androidHero.preview,
+                        icon_url: iconUrl ?? savedCampaign.icon_url ?? logo.preview,
                         segment_id: segmentId,
                         status: launchStatus,
-                        created_at: new Date().toISOString(),
+                        created_at: String(savedCampaign.created_at ?? new Date().toISOString()),
                         sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
                         scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                        delivery_count: segmentSubscriberCount,
+                        delivery_count: 0,
                         click_count: 0,
                         revenue_cents: 0,
                     });

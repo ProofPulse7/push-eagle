@@ -36,8 +36,9 @@ export function useAppBootstrap() {
       return payload;
     },
     enabled: Boolean(shop),
-    staleTime: 30 * 60 * 1000,
-    refetchOnMount: false,
+    staleTime: 60_000,
+    refetchOnMount: true,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -66,8 +67,21 @@ export function useCampaigns() {
       return mergeCampaignsFromCache(queryClient, shop, fresh);
     },
     enabled: Boolean(shop),
-    staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: false,
+    staleTime: 15_000,
+    refetchOnMount: true,
+    refetchInterval: (query) => {
+      const campaigns = (query.state.data as { campaigns?: Array<Record<string, unknown>> } | undefined)?.campaigns;
+      if (!Array.isArray(campaigns)) {
+        return false;
+      }
+
+      const hasActiveSend = campaigns.some((campaign) => {
+        const status = String(campaign.status ?? '').toLowerCase();
+        return status === 'sending' || status === 'queued';
+      });
+
+      return hasActiveSend ? 2500 : false;
+    },
     placeholderData: (previous) => previous,
   });
 }
@@ -145,13 +159,26 @@ export function useSegments() {
 
 export function useSubscribersOverview() {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
+
   return useQuery({
     queryKey: queryKeys.subscribersOverview(shop),
     queryFn: () =>
       fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
     enabled: Boolean(shop),
-    staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: false,
+    staleTime: 15_000,
+    refetchOnMount: true,
+    refetchInterval: 10_000,
+    initialData: () => {
+      const bootstrap = queryClient.getQueryData<AppBootstrapPayload>(queryKeys.bootstrap(shop));
+      if (bootstrap?.subscriberOverview) {
+        return { ok: true, shopDomain: shop, ...bootstrap.subscriberOverview };
+      }
+      if (bootstrap?.subscriberKpis) {
+        return { ok: true, shopDomain: shop, ...bootstrap.subscriberKpis };
+      }
+      return undefined;
+    },
     placeholderData: (previous) => previous,
   });
 }
@@ -323,6 +350,7 @@ export function useAnalyticsStats(from: Date, to: Date, enabled = true) {
 
 export function useSubscriberGrowth(from?: Date, to?: Date) {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
   const isAllTime = !from && !to;
   const { fromIso, toIso } = useMemo(() => {
     if (isAllTime) {
@@ -346,8 +374,12 @@ export function useSubscriberGrowth(from?: Date, to?: Date) {
       return fetchJson<Record<string, unknown>>(`/api/subscribers/growth?${params.toString()}`);
     },
     enabled: Boolean(shop),
-    staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: false,
+    staleTime: 60_000,
+    refetchOnMount: true,
+    initialData: () => {
+      const bootstrap = queryClient.getQueryData<AppBootstrapPayload>(queryKeys.bootstrap(shop));
+      return bootstrap?.subscriberGrowth as Record<string, unknown> | undefined;
+    },
     placeholderData: (previous) => previous,
   });
 }

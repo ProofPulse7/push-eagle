@@ -66,6 +66,7 @@ export const invalidateShopDashboardCaches = async (shopDomain: string) => {
     deleteKvKey(bootstrapKvKey(shopDomain)),
     invalidateShopApiKvCache(shopDomain, 'segments'),
     invalidateShopApiKvCache(shopDomain, 'campaigns'),
+    invalidateShopApiKvCache(shopDomain, 'campaign-audience'),
     invalidateShopApiKvCache(shopDomain, 'subscribers-overview'),
     invalidateShopApiKvCache(shopDomain, 'automations-overview'),
   ]);

@@ -6541,6 +6541,7 @@ export const getCampaignProgress = async (shopDomain: string, campaignId: string
     FROM campaign_deliveries
     WHERE campaign_id = ${campaignId}
       AND shop_domain = ${shopDomain}
+      AND fcm_message_id IS NOT NULL
   `;
 
   const totalAudience = await countCampaignAudienceTokens(shopDomain, (campaign as { segment_id?: string | null }).segment_id ?? null);
@@ -6584,9 +6585,23 @@ export const getMerchantOverview = async (shopDomain: string) => {
   `;
 
   const subscriberCountRows = await sql`
-    SELECT COUNT(*)::INT AS count
-    FROM subscribers
-    WHERE shop_domain = ${shopDomain}
+    SELECT COUNT(DISTINCT s.id)::INT AS count
+    FROM subscribers s
+    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+    WHERE s.shop_domain = ${shopDomain}
+      AND t.status = 'active'
+      AND (
+        (
+          COALESCE(t.token_type, 'fcm') = 'vapid'
+          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+        )
+        OR (
+          COALESCE(t.token_type, 'fcm') <> 'vapid'
+          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+        )
+      )
   `;
 
   const customerCountRows = await sql`
@@ -6833,10 +6848,40 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     }
   }
 
+  const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+  void invalidateShopDashboardCaches(input.shopDomain);
+
   return {
     subscriberId,
     tokenId,
   };
+};
+
+export const countActiveDeliverableSubscribers = async (shopDomain: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT COUNT(DISTINCT s.id)::BIGINT AS count
+    FROM subscribers s
+    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+    WHERE s.shop_domain = ${shopDomain}
+      AND t.status = 'active'
+      AND (
+        (
+          COALESCE(t.token_type, 'fcm') = 'vapid'
+          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+        )
+        OR (
+          COALESCE(t.token_type, 'fcm') <> 'vapid'
+          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+        )
+      )
+  `;
+
+  return Number(rows[0]?.count ?? 0);
 };
 
 export const recordIosHomeScreenConfirmed = async (input: RecordIosHomeScreenInput) => {
@@ -6904,22 +6949,71 @@ export const getSubscriberKpis = async (shopDomain: string) => {
     WHERE shop_domain = ${shopDomain}
   `;
 
+  const activeRows = await sql`
+    SELECT COUNT(DISTINCT s.id)::BIGINT AS count
+    FROM subscribers s
+    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+    WHERE s.shop_domain = ${shopDomain}
+      AND t.status = 'active'
+      AND (
+        (
+          COALESCE(t.token_type, 'fcm') = 'vapid'
+          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+        )
+        OR (
+          COALESCE(t.token_type, 'fcm') <> 'vapid'
+          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+        )
+      )
+  `;
+
   const newLast7Rows = await sql`
-    SELECT COUNT(*)::BIGINT AS count
-    FROM subscribers
-    WHERE shop_domain = ${shopDomain}
-      AND created_at >= NOW() - INTERVAL '7 days'
+    SELECT COUNT(DISTINCT s.id)::BIGINT AS count
+    FROM subscribers s
+    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+    WHERE s.shop_domain = ${shopDomain}
+      AND s.created_at >= NOW() - INTERVAL '7 days'
+      AND t.status = 'active'
+      AND (
+        (
+          COALESCE(t.token_type, 'fcm') = 'vapid'
+          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+        )
+        OR (
+          COALESCE(t.token_type, 'fcm') <> 'vapid'
+          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+        )
+      )
   `;
 
   const prev7Rows = await sql`
-    SELECT COUNT(*)::BIGINT AS count
-    FROM subscribers
-    WHERE shop_domain = ${shopDomain}
-      AND created_at >= NOW() - INTERVAL '14 days'
-      AND created_at < NOW() - INTERVAL '7 days'
+    SELECT COUNT(DISTINCT s.id)::BIGINT AS count
+    FROM subscribers s
+    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+    WHERE s.shop_domain = ${shopDomain}
+      AND s.created_at >= NOW() - INTERVAL '14 days'
+      AND s.created_at < NOW() - INTERVAL '7 days'
+      AND t.status = 'active'
+      AND (
+        (
+          COALESCE(t.token_type, 'fcm') = 'vapid'
+          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+        )
+        OR (
+          COALESCE(t.token_type, 'fcm') <> 'vapid'
+          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+        )
+      )
   `;
 
-  const totalSubscribers = Number(totalRows[0]?.count ?? 0);
+  const totalSubscriberRecords = Number(totalRows[0]?.count ?? 0);
+  const totalSubscribers = Number(activeRows[0]?.count ?? 0);
   const newSubscribersLast7Days = Number(newLast7Rows[0]?.count ?? 0);
   const previousPeriodCount = Number(prev7Rows[0]?.count ?? 0);
   const growthPercent = previousPeriodCount > 0
@@ -6928,6 +7022,8 @@ export const getSubscriberKpis = async (shopDomain: string) => {
 
   return {
     totalSubscribers,
+    totalSubscriberRecords,
+    activeSubscribers: totalSubscribers,
     newSubscribersLast7Days,
     growthPercent,
   };
@@ -7906,6 +8002,17 @@ export const sendCampaign = async (
 
       processedRecipients += chunk.length;
       processedBatches += 1;
+
+      await sql`
+        UPDATE campaigns
+        SET delivery_count = (
+          SELECT COUNT(*)::INT
+          FROM campaign_deliveries
+          WHERE campaign_id = ${campaignId}
+            AND fcm_message_id IS NOT NULL
+        )
+        WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+      `;
     }
 
     const remainingRecipients = Math.max(recipients.length - processedRecipients, 0);

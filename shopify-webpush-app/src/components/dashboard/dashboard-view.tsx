@@ -54,7 +54,7 @@ export function DashboardView() {
     {
       title: 'Subscribers',
       value: totalSubscribers.toLocaleString(),
-      hint: `${growthPercent > 0 ? '+' : ''}${growthPercent.toFixed(1)}% vs last 7 days`,
+      hint: `${growthPercent > 0 ? '+' : ''}${growthPercent.toFixed(1)}% vs last 7 days · active notification tokens`,
       icon: Users,
       accent: 'text-violet-600',
     },
