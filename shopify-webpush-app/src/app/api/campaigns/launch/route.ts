@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
-import { createCampaign, sendCampaign } from '@/lib/server/data/store';
+import { createCampaign, markCampaignSendFailed, sendCampaign } from '@/lib/server/data/store';
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -61,7 +62,18 @@ export async function POST(request: Request) {
       });
     }
 
-    const sendResult = await sendCampaign(shopDomain, campaignId, { maxBatches: 2000 });
+    deferAfterResponse(async () => {
+      try {
+        await sendCampaign(shopDomain, campaignId, { maxBatches: 2000 });
+      } catch (error) {
+        console.error('[campaign-launch]', campaignId, error);
+        await markCampaignSendFailed(shopDomain, campaignId);
+      } finally {
+        const { invalidateShopDashboardCaches: invalidate } = await import('@/lib/server/cache/api-kv-cache');
+        void invalidate(shopDomain);
+      }
+    });
+
     void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({
@@ -69,7 +81,9 @@ export async function POST(request: Request) {
       campaign,
       campaignId,
       launched: true,
-      send: sendResult,
+      queued: true,
+      status: 'sending',
+      message: 'Campaign delivery started in the background.',
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to launch campaign.';
