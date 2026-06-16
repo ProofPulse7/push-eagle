@@ -63,7 +63,16 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
     const targetRecipientCount = Number(
         enriched.target_recipient_count ?? enriched.targetRecipientCount ?? 0,
     );
-    const mappedStatus = statusMap[String(enriched.status ?? '').toLowerCase()] ?? 'Draft';
+    let rawStatus = String(enriched.status ?? '').toLowerCase();
+    const sentAt = enriched.sent_at ?? enriched.sentAt;
+    if (
+        rawStatus === 'draft'
+        && (sentAt || targetRecipientCount > 0)
+        && deliveryCount === 0
+    ) {
+        rawStatus = 'sending';
+    }
+    const mappedStatus = statusMap[rawStatus] ?? 'Draft';
     const impressions =
         mappedStatus === 'Sending'
             ? Math.max(targetRecipientCount, deliveryCount, 0)

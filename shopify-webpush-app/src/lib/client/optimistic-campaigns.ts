@@ -154,6 +154,25 @@ const mergeCampaignStatus = (
   const freshStatus = readCampaignStatus(fresh);
   const existingRank = CAMPAIGN_STATUS_RANK[existingStatus] ?? 0;
   const freshRank = CAMPAIGN_STATUS_RANK[freshStatus] ?? 0;
+
+  if (existingStatus === 'sending' && freshStatus === 'draft') {
+    const sentAt = fresh.sent_at ?? fresh.sentAt ?? existing.sent_at ?? existing.sentAt;
+    const targetCount = Number(
+      existing.target_recipient_count
+        ?? existing.targetRecipientCount
+        ?? fresh.target_recipient_count
+        ?? fresh.targetRecipientCount
+        ?? 0,
+    );
+    if (sentAt || targetCount > 0) {
+      return 'sending';
+    }
+  }
+
+  if (existingStatus === 'queued' && freshStatus === 'draft') {
+    return 'queued';
+  }
+
   return existingRank >= freshRank ? existingStatus : freshStatus;
 };
 
@@ -205,10 +224,8 @@ const mergeCampaignRecord = (
   });
 };
 
-const shouldUnpinCampaign = (campaign: Record<string, unknown>) => {
-  const status = readCampaignStatus(campaign);
-  return status === 'sent' || status === 'sending';
-};
+const shouldUnpinCampaign = (campaign: Record<string, unknown>) =>
+  readCampaignStatus(campaign) === 'sent';
 
 export const mergeCampaignListPayload = (
   previous: { ok?: boolean; campaigns?: unknown[] } | undefined,

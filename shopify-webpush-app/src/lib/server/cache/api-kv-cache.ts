@@ -8,7 +8,7 @@ export const API_KV_TTL = {
   bootstrap: 600,
   analytics: 600,
   segments: 300,
-  campaigns: 180,
+  campaigns: 30,
   subscribersOverview: 300,
   automationsOverview: 300,
 } as const;

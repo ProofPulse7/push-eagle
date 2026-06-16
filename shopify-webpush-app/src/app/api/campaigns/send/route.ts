@@ -49,7 +49,9 @@ export async function POST(request: Request) {
     const body = schema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
     const maxBatches = body.maxBatches ?? 2000;
-    const runAsync = body.async !== false;
+    const runAsync = body.async === true;
+
+    const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
 
     if (runAsync) {
       const campaign = await getCampaignById(shopDomain, body.campaignId);
@@ -60,7 +62,6 @@ export async function POST(request: Request) {
           )
         : null;
 
-      const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
       void invalidateShopDashboardCaches(shopDomain);
 
       deferAfterResponse(async () => {
@@ -92,7 +93,6 @@ export async function POST(request: Request) {
     }
 
     const result = await deliverCampaignWithRetry(shopDomain, body.campaignId, maxBatches);
-    const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
     void invalidateShopDashboardCaches(shopDomain);
 
     return NextResponse.json({

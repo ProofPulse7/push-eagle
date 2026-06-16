@@ -11,6 +11,7 @@ import { useSettings } from '@/context/settings-context';
 import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
 import { runWithBackgroundRetries } from '@/lib/client/background-save';
 import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
+import { queryKeys } from '@/lib/client/query-keys';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
 
 import { ArrowLeft, Users, Clock, Send, Save, Loader2, Edit } from 'lucide-react';
@@ -370,14 +371,6 @@ export default function ScheduleCampaignPage() {
                         revenue_cents: 0,
                     });
 
-                    void cacheLaunchMedia(shopDomain, campaignId, {
-                        imageUrl: macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? cachedMedia.imageUrl,
-                        windowsImageUrl: windowsImageUrl ?? cachedMedia.windowsImageUrl,
-                        macosImageUrl: macosImageUrl ?? cachedMedia.macosImageUrl,
-                        androidImageUrl: androidImageUrl ?? cachedMedia.androidImageUrl,
-                        iconUrl: iconUrl ?? cachedMedia.iconUrl,
-                    });
-
                     if (sendingOption === 'schedule' || sendingOption === 'recurring') {
                         if (sendingOption === 'schedule') {
                             if (!scheduledAt) {
@@ -437,10 +430,10 @@ export default function ScheduleCampaignPage() {
                                     campaignId,
                                     shopDomain,
                                     maxBatches: 2000,
-                                    async: true,
+                                    async: false,
                                 }),
                             }),
-                        5,
+                        3,
                     );
 
                     const sendPayload = await parseApiResponse(sendResponse);
@@ -450,13 +443,29 @@ export default function ScheduleCampaignPage() {
                     }
 
                     const resolvedTargetCount = Number(
-                        sendResult.targetRecipientCount ?? sendResult.recipientCount ?? segmentSubscriberCount ?? 0,
+                        sendResult.recipientCount
+                            ?? sendResult.targetRecipientCount
+                            ?? segmentSubscriberCount
+                            ?? 0,
                     );
-                    if (resolvedTargetCount > 0) {
-                        patchOptimisticCampaign(queryClient, shopDomain, campaignId, {
-                            target_recipient_count: resolvedTargetCount,
-                        });
-                    }
+                    const deliveredCount = Number(sendResult.successCount ?? sendResult.delivery_count ?? 0);
+                    const completed = Boolean(sendResult.completed);
+
+                    patchOptimisticCampaign(queryClient, shopDomain, campaignId, {
+                        status: completed ? 'sent' : 'sending',
+                        delivery_count: deliveredCount,
+                        target_recipient_count: resolvedTargetCount,
+                    });
+
+                    void cacheLaunchMedia(shopDomain, campaignId, {
+                        imageUrl: macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? cachedMedia.imageUrl,
+                        windowsImageUrl: windowsImageUrl ?? cachedMedia.windowsImageUrl,
+                        macosImageUrl: macosImageUrl ?? cachedMedia.macosImageUrl,
+                        androidImageUrl: androidImageUrl ?? cachedMedia.androidImageUrl,
+                        iconUrl: iconUrl ?? cachedMedia.iconUrl,
+                    });
+
+                    void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
                 } catch (backgroundError) {
                     if (campaignId) {
                         patchOptimisticCampaign(queryClient, shopDomain, campaignId, {

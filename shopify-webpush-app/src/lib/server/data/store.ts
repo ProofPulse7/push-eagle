@@ -7281,9 +7281,7 @@ export const createCampaign = async (input: CreateCampaignInput) => {
   `;
 
   const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
-  if (input.status === 'scheduled' || input.status === 'queued' || input.scheduledAt) {
-    void bumpCronWakeNow();
-  }
+  void bumpCronWakeNow();
 
   return campaignRows[0];
 };
