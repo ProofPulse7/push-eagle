@@ -1,9 +1,7 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
-import { useState } from "react";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, redirect, useActionData, useLoaderData } from "react-router";
+import type { LoaderFunctionArgs } from "react-router";
+import { redirect, useLoaderData } from "react-router";
 
-import { LoginErrorType } from "@shopify/shopify-app-react-router/server";
 import { hasShopifyConfig, missingShopifyConfig } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
@@ -42,54 +40,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return { errors: loginErrorMessage({}) };
 };
 
-export const action = async ({ request }: ActionFunctionArgs) => {
-  if (!hasShopifyConfig) {
-    return {
-      errors: loginErrorMessage({
-        form: `Missing Shopify env vars: ${missingShopifyConfig.join(", ")}. Add them in the root Vercel project and redeploy.`,
-      }),
-    };
-  }
-
-  const formData = await request.formData();
-  const shop = formData.get("shop");
-  if (typeof shop === "string" && shop.trim()) {
-    const requestUrl = new URL(request.url);
-    const authUrl = new URL("/auth", requestUrl.origin);
-    authUrl.searchParams.set("shop", shop.trim());
-    throw redirect(authUrl.toString());
-  }
-
-  return {
-    errors: loginErrorMessage({ shop: LoginErrorType.MissingShop }),
-  };
-};
-
 export default function Auth() {
   const loaderData = useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
-  const [shop, setShop] = useState("");
-  const { errors } = actionData || loaderData;
+  const { errors } = loaderData;
 
   return (
     <AppProvider embedded={false}>
       <s-page>
-        <Form method="post">
-        <s-section heading="Log in">
-          {errors.form && <s-banner tone="critical">{errors.form}</s-banner>}
-          <s-text-field
-            name="shop"
-            label="Shop domain"
-            details="example.myshopify.com"
-            value={shop}
-            onChange={(e) => setShop(e.currentTarget.value)}
-            autocomplete="on"
-            error={errors.shop}
-          ></s-text-field>
-          <s-button type="submit">Log in</s-button>
+        <s-section heading="Install Push Eagle from Shopify">
+          {errors.form ? <s-banner tone="critical">{errors.form}</s-banner> : null}
+          <s-paragraph>
+            Push Eagle must be installed from the Shopify App Store or opened from Apps in your Shopify
+            Admin. Shopify provides your store identity during install — manual shop URL entry is not
+            required.
+          </s-paragraph>
+          <s-paragraph>
+            If you already installed the app, open it from your Shopify Admin under Apps.
+          </s-paragraph>
         </s-section>
-        </Form>
       </s-page>
     </AppProvider>
   );
-}
+};

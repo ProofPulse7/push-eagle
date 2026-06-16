@@ -314,7 +314,7 @@ export default function SettingsPage() {
             toast({
                 variant: 'destructive',
                 title: 'Shop domain required',
-                description: 'Please enter your Shopify subdomain before saving attribution settings.',
+                description: 'Open Push Eagle from Shopify Admin before saving attribution settings.',
             });
             return;
         }

@@ -22,6 +22,7 @@ import {
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
 import { mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
+import { ThemeSetupCard } from '@/components/opt-ins/theme-setup-card';
 
 const StatBlock = ({ label, value }: { label: string, value: string | number }) => (
     <div className="flex flex-col gap-1">
@@ -180,6 +181,8 @@ export default function OptInsPage() {
         </Card>
       </div>
       
+      {shopDomain ? <ThemeSetupCard shopDomain={shopDomain} /> : null}
+
       <div className="space-y-8">
         <Card>
           <CardHeader>

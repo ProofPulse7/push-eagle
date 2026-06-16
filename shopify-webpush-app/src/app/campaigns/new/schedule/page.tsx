@@ -223,7 +223,7 @@ export default function ScheduleCampaignPage() {
         setIsLaunching(true);
         try {
             if (!shopDomain) {
-                throw new Error('Set your Shopify subdomain in Settings before launching campaigns.');
+                throw new Error('Open Push Eagle from Shopify Admin before launching campaigns.');
             }
 
             if (!title?.trim()) {
@@ -509,7 +509,7 @@ export default function ScheduleCampaignPage() {
         setIsSaving(true);
         try {
             if (!shopDomain) {
-                throw new Error('Set your Shopify subdomain in Settings before saving drafts.');
+                throw new Error('Open Push Eagle from Shopify Admin before saving drafts.');
             }
 
             const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
