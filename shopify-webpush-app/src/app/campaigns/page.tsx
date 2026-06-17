@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { DateRange } from 'react-day-picker';
 import Link from 'next/link';
 import { PlusCircle, RefreshCw } from 'lucide-react';
@@ -21,7 +21,7 @@ export default function CampaignsPage() {
   const [date, setDate] = useState<DateRange | undefined>(undefined);
   const { atLimit } = useImpressionLimit();
   const shopDomain = useShopDomain();
-  const { data, isLoading, isError, error, refetch, isFetching } = useCampaigns();
+  const { data, isLoading, isError, error, refetch } = useCampaigns();
   const statsPeriodLabel = formatCampaignDateRangeLabel(date);
 
   const errorMessage = isError
@@ -32,23 +32,11 @@ export default function CampaignsPage() {
         : 'Failed to load campaigns.'
     : null;
 
-  useEffect(() => {
-    const refreshCampaigns = () => {
-      if (document.visibilityState === 'visible') {
-        void refetch();
-      }
-    };
-
-    document.addEventListener('visibilitychange', refreshCampaigns);
-    return () => document.removeEventListener('visibilitychange', refreshCampaigns);
-  }, [refetch]);
-
   return (
     <PageLoadingShell
       title="Campaigns"
       isLoading={isLoading && !data}
       hasData={Boolean(data) || isError}
-      isFetching={isFetching && Boolean(data)}
       error={errorMessage}
     >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">

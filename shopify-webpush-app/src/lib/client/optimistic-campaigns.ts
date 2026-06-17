@@ -227,6 +227,19 @@ const mergeCampaignRecord = (
 const shouldUnpinCampaign = (campaign: Record<string, unknown>) =>
   readCampaignStatus(campaign) === 'sent';
 
+const campaignVisualFingerprint = (campaign: Record<string, unknown>) =>
+  [
+    String(campaign.id),
+    readCampaignStatus(campaign),
+    Number(campaign.delivery_count ?? campaign.deliveryCount ?? 0),
+    Number(campaign.target_recipient_count ?? campaign.targetRecipientCount ?? 0),
+    String(campaign.title ?? ''),
+    String(campaign.image_url ?? campaign.imageUrl ?? ''),
+  ].join(':');
+
+const listVisualFingerprint = (campaigns: Record<string, unknown>[]) =>
+  campaigns.map(campaignVisualFingerprint).join('|');
+
 export const mergeCampaignListPayload = (
   previous: { ok?: boolean; campaigns?: unknown[] } | undefined,
   fresh: { ok?: boolean; campaigns?: unknown[] },
@@ -351,6 +364,15 @@ export const mergeCampaignListPayload = (
 
     return String(right.id).localeCompare(String(left.id));
   });
+
+  if (previous && Array.isArray(previous.campaigns)) {
+    const previousNormalized = previous.campaigns.map((item) =>
+      normalizeCampaignRecord(shop, item as Record<string, unknown>),
+    );
+    if (listVisualFingerprint(merged) === listVisualFingerprint(previousNormalized)) {
+      return previous;
+    }
+  }
 
   return {
     ok: true,

@@ -59,7 +59,7 @@ export function useCampaigns() {
     enabled: Boolean(shop),
     staleTime: 60_000,
     refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
     retry: (failureCount, error) => {
       if (error instanceof ApiError && error.status === 401) {
         return false;
@@ -77,7 +77,7 @@ export function useCampaigns() {
         return status === 'sending' || status === 'queued';
       });
 
-      return hasActiveSend ? 15_000 : false;
+      return hasActiveSend ? 60_000 : false;
     },
     refetchIntervalInBackground: false,
     placeholderData: (previous) => previous,

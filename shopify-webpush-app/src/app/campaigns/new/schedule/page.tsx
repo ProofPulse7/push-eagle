@@ -293,80 +293,79 @@ export default function ScheduleCampaignPage() {
             if (launchStatus === 'sending') {
                 bumpDashboardCampaignSent(queryClient, shopDomain);
 
+                const launchResponse = await runWithBackgroundRetries(() =>
+                    fetch('/api/campaigns/launch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                            shopDomain,
+                            title: title || 'Untitled Campaign',
+                            body: message || ' ',
+                            targetUrl: primaryLink || '',
+                            segmentId,
+                            media: cachedMedia,
+                            actionButtons: actionButtons
+                                .filter((button) => button.title?.trim() && button.link?.trim())
+                                .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
+                            maxBatches: 2000,
+                        }),
+                    }),
+                );
+
+                const launchResultPayload = await parseApiResponse(launchResponse);
+                const launchResult = launchResultPayload.json;
+                if (!launchResponse.ok || !launchResult?.ok || !launchResult?.campaignId) {
+                    queryClient.setQueryData(queryKeys.campaigns(shopDomain), (current) => {
+                        if (!current || !Array.isArray(current.campaigns)) {
+                            return current;
+                        }
+
+                        return {
+                            ...current,
+                            campaigns: current.campaigns.filter(
+                                (campaign) => String((campaign as { id?: string }).id) !== optimisticId,
+                            ),
+                        };
+                    });
+                    throw new Error(buildResponseError('Failed to launch campaign.', launchResultPayload));
+                }
+
+                const campaignId = String(launchResult.campaignId);
+                const resolvedTargetCount = Number(
+                    launchResult.recipientCount
+                        ?? launchResult.targetRecipientCount
+                        ?? segmentSubscriberCount
+                        ?? 0,
+                );
+
+                replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
+                    id: campaignId,
+                    title: title || 'Untitled Campaign',
+                    body: message || '',
+                    image_url: cachedMedia.imageUrl,
+                    windows_image_url: cachedMedia.windowsImageUrl,
+                    macos_image_url: cachedMedia.macosImageUrl,
+                    android_image_url: cachedMedia.androidImageUrl,
+                    icon_url: cachedMedia.iconUrl,
+                    segment_id: segmentId,
+                    status: 'sending',
+                    created_at: new Date().toISOString(),
+                    sent_at: new Date().toISOString(),
+                    delivery_count: 0,
+                    target_recipient_count: resolvedTargetCount,
+                    click_count: 0,
+                    revenue_cents: 0,
+                });
+
+                void cacheLaunchMedia(shopDomain, campaignId, cachedMedia);
+                clearCampaignDraft(shopDomain);
+
                 toast({
                     title: toastTitle,
                     description: toastDescription,
                 });
                 router.push(campaignsHref);
-                setIsLaunching(false);
-
-                void (async () => {
-                    try {
-                        const launchResponse = await fetch('/api/campaigns/launch', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                shopDomain,
-                                title: title || 'Untitled Campaign',
-                                body: message || ' ',
-                                targetUrl: primaryLink || '',
-                                segmentId,
-                                media: cachedMedia,
-                                actionButtons: actionButtons
-                                    .filter((button) => button.title?.trim() && button.link?.trim())
-                                    .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
-                                maxBatches: 2000,
-                            }),
-                        });
-
-                        const launchResultPayload = await parseApiResponse(launchResponse);
-                        const launchResult = launchResultPayload.json;
-                        if (!launchResponse.ok || !launchResult?.ok || !launchResult?.campaignId) {
-                            throw new Error(buildResponseError('Failed to launch campaign.', launchResultPayload));
-                        }
-
-                        const campaignId = String(launchResult.campaignId);
-                        const resolvedTargetCount = Number(
-                            launchResult.recipientCount
-                                ?? launchResult.targetRecipientCount
-                                ?? segmentSubscriberCount
-                                ?? 0,
-                        );
-
-                        replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
-                            id: campaignId,
-                            title: title || 'Untitled Campaign',
-                            body: message || '',
-                            image_url: cachedMedia.imageUrl,
-                            windows_image_url: cachedMedia.windowsImageUrl,
-                            macos_image_url: cachedMedia.macosImageUrl,
-                            android_image_url: cachedMedia.androidImageUrl,
-                            icon_url: cachedMedia.iconUrl,
-                            segment_id: segmentId,
-                            status: 'sending',
-                            created_at: new Date().toISOString(),
-                            sent_at: new Date().toISOString(),
-                            delivery_count: 0,
-                            target_recipient_count: resolvedTargetCount,
-                            click_count: 0,
-                            revenue_cents: 0,
-                        });
-
-                        void cacheLaunchMedia(shopDomain, campaignId, cachedMedia);
-                        clearCampaignDraft(shopDomain);
-                        void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
-                    } catch (backgroundError) {
-                        toast({
-                            variant: 'destructive',
-                            title: 'Campaign delivery issue',
-                            description:
-                                backgroundError instanceof Error
-                                    ? backgroundError.message
-                                    : 'Background delivery failed. Check campaigns for status.',
-                        });
-                    }
-                })();
-
                 return;
             }
 
@@ -376,10 +375,6 @@ export default function ScheduleCampaignPage() {
             });
             router.push(campaignsHref);
             clearCampaignDraft(shopDomain);
-
-            if (launchStatus === 'sending') {
-                return;
-            }
 
             void (async () => {
                 let campaignId: string | null = null;
