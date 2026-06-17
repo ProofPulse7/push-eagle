@@ -19,6 +19,7 @@ import { LogoUploaderEditor } from './editor-parts/logo-uploader-editor';
 import { ImageEditorSheet } from './editor-parts/image-editor-sheet';
 import { ScrollArea } from '../ui/scroll-area';
 import { ComposerActions } from './editor-parts/composer-actions';
+import { fileToDataUrl } from '@/lib/client/campaign-wizard-media';
 
 // Basic URL validation
 const isValidUrl = (url: string) => {
@@ -102,11 +103,12 @@ export function Composer() {
     const handleImageUpload = (file: File | undefined, imageType: 'windows' | 'mac' | 'android' | 'logo') => {
         if (!file) return;
 
-        const previewUrl = URL.createObjectURL(file);
+        void fileToDataUrl(file).then((previewUrl) => {
+            if (imageType === 'logo') {
+                setLogo({ file, preview: previewUrl, originalPreview: previewUrl });
+                return;
+            }
 
-        if (imageType === 'logo') {
-            setLogo({ file, preview: previewUrl });
-        } else {
             const newImageValue = { file, preview: previewUrl, originalPreview: previewUrl };
             const hasExistingHero = Boolean(windowsHero.preview || macHero.preview || androidHero.preview);
 
@@ -134,7 +136,7 @@ export function Composer() {
                 setAndroidHero(newImageValue);
                 checkImageDimensions(file, 'android');
             }
-        }
+        }).catch(() => undefined);
     };
     
     const handleSaveCrop = (croppedDataUrl: string, type: string) => {
@@ -145,16 +147,16 @@ export function Composer() {
         };
 
         if (type === 'logo') {
-            setLogo({ ...logo, preview: croppedDataUrl, file: null });
+            setLogo({ ...logo, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
             return;
         }
 
         if (type === 'windows') {
-            setWindowsHero({ ...windowsHero, preview: croppedDataUrl });
+            setWindowsHero({ ...windowsHero, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
         } else if (type === 'mac') {
-            setMacHero({ ...macHero, preview: croppedDataUrl });
+            setMacHero({ ...macHero, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
         } else if (type === 'android') {
-            setAndroidHero({ ...androidHero, preview: croppedDataUrl });
+            setAndroidHero({ ...androidHero, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
         }
 
         const warningSetter = warningSetters[type as keyof typeof warningSetters];

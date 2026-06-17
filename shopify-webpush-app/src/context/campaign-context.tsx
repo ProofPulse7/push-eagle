@@ -18,6 +18,11 @@ import {
   type CampaignDraftSnapshot,
 } from '@/lib/client/campaign-draft-storage';
 import {
+  clearWizardLaunchMediaCache,
+  prepareWizardLaunchMedia,
+  readPersistableImageSource,
+} from '@/lib/client/campaign-wizard-media';
+import {
   isMyshopifyHost,
   normalizeMerchantWebsiteUrl,
   resolveMerchantWebsiteUrl,
@@ -266,6 +271,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     if (wasInWizard && !inWizard) {
       if (shop) {
         clearCampaignDraft(shop);
+        clearWizardLaunchMediaCache(shop);
       }
       resetCampaignState();
     }
@@ -294,35 +300,67 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      writeCampaignDraft(
-        shop,
-        buildDraftSnapshot({
-          title,
-          message,
-          primaryLink,
-          actionButtons,
-          windowsHero,
-          macHero,
-          androidHero,
-          logo,
-          sendingOption,
-          scheduledDate,
-          scheduledTime,
-          segmentId,
-          smartDeliver,
-          flashSaleEnabled,
-          flashSaleDiscountPercent,
-          flashSaleOriginalPrice,
-          flashSaleSalePrice,
-          flashSaleExpiresAt,
-          flashSaleUrgencyText,
-          recurringPattern,
-        }),
-      );
-    }, 250);
+    let cancelled = false;
 
-    return () => window.clearTimeout(timer);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const persistImage = async (image: ImageValue) => ({
+          file: null as File | null,
+          preview: await readPersistableImageSource(image.preview),
+          originalPreview: await readPersistableImageSource(image.originalPreview ?? image.preview),
+        });
+
+        const [persistedWindowsHero, persistedMacHero, persistedAndroidHero, persistedLogo] = await Promise.all([
+          persistImage(windowsHero),
+          persistImage(macHero),
+          persistImage(androidHero),
+          persistImage(logo),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        writeCampaignDraft(
+          shop,
+          buildDraftSnapshot({
+            title,
+            message,
+            primaryLink,
+            actionButtons,
+            windowsHero: persistedWindowsHero,
+            macHero: persistedMacHero,
+            androidHero: persistedAndroidHero,
+            logo: persistedLogo,
+            sendingOption,
+            scheduledDate,
+            scheduledTime,
+            segmentId,
+            smartDeliver,
+            flashSaleEnabled,
+            flashSaleDiscountPercent,
+            flashSaleOriginalPrice,
+            flashSaleSalePrice,
+            flashSaleExpiresAt,
+            flashSaleUrgencyText,
+            recurringPattern,
+          }),
+        );
+
+        void prepareWizardLaunchMedia(shop, {
+          imageUrl: persistedMacHero.preview ?? persistedWindowsHero.preview ?? persistedAndroidHero.preview,
+          windowsImageUrl: persistedWindowsHero.preview,
+          macosImageUrl: persistedMacHero.preview,
+          androidImageUrl: persistedAndroidHero.preview,
+          iconUrl: persistedLogo.preview,
+        }).catch(() => undefined);
+      })();
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [
     shop,
     pathname,

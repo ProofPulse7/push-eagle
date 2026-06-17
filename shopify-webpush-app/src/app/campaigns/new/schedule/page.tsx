@@ -11,6 +11,11 @@ import { useSettings } from '@/context/settings-context';
 import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
 import { runWithBackgroundRetries } from '@/lib/client/background-save';
 import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
+import {
+  clearWizardLaunchMediaCache,
+  prepareWizardLaunchMedia,
+  readWizardLaunchMediaCache,
+} from '@/lib/client/campaign-wizard-media';
 import { queryKeys } from '@/lib/client/query-keys';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
 
@@ -218,6 +223,26 @@ export default function ScheduleCampaignPage() {
             active = false;
         };
     }, [queryClient, shopDomain, segmentId]);
+
+    useEffect(() => {
+        if (!shopDomain) {
+            return;
+        }
+
+        void prepareWizardLaunchMedia(shopDomain, {
+            imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
+            windowsImageUrl: windowsHero.preview,
+            macosImageUrl: macHero.preview,
+            androidImageUrl: androidHero.preview,
+            iconUrl: logo.preview,
+        }).catch(() => undefined);
+    }, [
+        shopDomain,
+        logo.preview,
+        windowsHero.preview,
+        macHero.preview,
+        androidHero.preview,
+    ]);
     
     const handleLaunchCampaign = async () => {
         setIsLaunching(true);
@@ -248,13 +273,15 @@ export default function ScheduleCampaignPage() {
             const launchStatus =
                 sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
 
-            const cachedMedia = await cacheLaunchMedia(shopDomain, optimisticId, {
-                imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
-                windowsImageUrl: windowsHero.preview,
-                macosImageUrl: macHero.preview,
-                androidImageUrl: androidHero.preview,
-                iconUrl: logo.preview,
-            });
+            const cachedMedia =
+                readWizardLaunchMediaCache(shopDomain)
+                ?? (await prepareWizardLaunchMedia(shopDomain, {
+                    imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
+                    windowsImageUrl: windowsHero.preview,
+                    macosImageUrl: macHero.preview,
+                    androidImageUrl: androidHero.preview,
+                    iconUrl: logo.preview,
+                }));
 
             prependOptimisticCampaign(queryClient, shopDomain, {
                 id: optimisticId,
@@ -309,6 +336,7 @@ export default function ScheduleCampaignPage() {
                         ?? segmentSubscriberCount
                         ?? 0,
                 );
+                const resolvedStatus = launchResult.completed ? 'sent' : 'sending';
 
                 replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
                     id: campaignId,
@@ -320,10 +348,10 @@ export default function ScheduleCampaignPage() {
                     android_image_url: cachedMedia.androidImageUrl,
                     icon_url: cachedMedia.iconUrl,
                     segment_id: segmentId,
-                    status: 'sending',
+                    status: resolvedStatus,
                     created_at: new Date().toISOString(),
                     sent_at: new Date().toISOString(),
-                    delivery_count: 0,
+                    delivery_count: Number(launchResult.successCount ?? launchResult.delivery_count ?? 0),
                     target_recipient_count: resolvedTargetCount,
                     click_count: 0,
                     revenue_cents: 0,
@@ -351,6 +379,7 @@ export default function ScheduleCampaignPage() {
             });
             if (shopDomain) {
                 clearCampaignDraft(shopDomain);
+                clearWizardLaunchMediaCache(shopDomain);
             }
             router.push(campaignsHref);
 
@@ -557,6 +586,7 @@ export default function ScheduleCampaignPage() {
             });
             if (shopDomain) {
                 clearCampaignDraft(shopDomain);
+                clearWizardLaunchMediaCache(shopDomain);
             }
             router.push(campaignsHref);
         } catch (error) {
