@@ -9,7 +9,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 
-import { ApiError, fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
+import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { fetchJsonWithRetry, fetchJsonWithShopRetry } from '@/lib/client/background-save';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
@@ -59,13 +59,7 @@ export function useCampaigns() {
     enabled: Boolean(shop),
     staleTime: 60_000,
     refetchOnMount: true,
-    refetchOnWindowFocus: false,
-    retry: (failureCount, error) => {
-      if (error instanceof ApiError && error.status === 401) {
-        return false;
-      }
-      return failureCount < 2;
-    },
+    refetchOnWindowFocus: true,
     refetchInterval: (query) => {
       const campaigns = (query.state.data as { campaigns?: Array<Record<string, unknown>> } | undefined)?.campaigns;
       if (!Array.isArray(campaigns)) {
@@ -77,7 +71,7 @@ export function useCampaigns() {
         return status === 'sending' || status === 'queued';
       });
 
-      return hasActiveSend ? 60_000 : false;
+      return hasActiveSend ? 15_000 : false;
     },
     refetchIntervalInBackground: false,
     placeholderData: (previous) => previous,

@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { fetchCampaignsList, prefetchAppBootstrap, prefetchDashboardSummary } from '@/lib/client/query-fetchers';
+import { prefetchAppBootstrap, prefetchDashboardSummary } from '@/lib/client/query-fetchers';
 import { queryKeys } from '@/lib/client/query-keys';
 import { subscribeShopSync } from '@/lib/client/shop-sync-bus';
 import { useShopDomain } from '@/hooks/use-shop-domain';
@@ -52,10 +52,7 @@ export function LiveShopSync() {
       }
 
       if (event.type === 'campaigns') {
-        void queryClient.fetchQuery({
-          queryKey: queryKeys.campaigns(shop),
-          queryFn: () => fetchCampaignsList(queryClient, shop),
-        });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shop), refetchType: 'active' });
         return;
       }
 
@@ -68,7 +65,20 @@ export function LiveShopSync() {
       }
 
       invalidateActiveShopQueries(queryClient, shop, ['subscribers', 'dashboard']);
-    }, 60_000);
+
+      const campaignsPayload = queryClient.getQueryData<{ campaigns?: Array<Record<string, unknown>> }>(
+        queryKeys.campaigns(shop),
+      );
+      const campaigns = Array.isArray(campaignsPayload?.campaigns) ? campaignsPayload.campaigns : [];
+      const hasActiveSend = campaigns.some((campaign) => {
+        const status = String(campaign.status ?? '').toLowerCase();
+        return status === 'sending' || status === 'queued';
+      });
+
+      if (hasActiveSend) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shop), refetchType: 'active' });
+      }
+    }, 30_000);
 
     const onFocus = () => {
       invalidateActiveShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);

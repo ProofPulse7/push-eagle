@@ -122,6 +122,14 @@ export function PageLoadingShell({
     return <PageLoadingView title={title} description={description} />;
   }
 
+  if (!hasData && !isLoading && !error) {
+    return (
+      <div className="px-4 py-6 sm:px-6 md:px-8 md:py-8">
+        <PageLoadingView title={title} description={description} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {hasData && isFetching ? <DataRefreshingBar label={`Refreshing ${title.toLowerCase()}…`} /> : null}

@@ -1,5 +1,3 @@
-import { triggerSessionRecovery } from '@/lib/client/session-recovery';
-
 export class ApiError extends Error {
   status: number;
   reauthorizeUrl?: string;
@@ -33,11 +31,6 @@ export async function fetchJson<T extends Record<string, unknown>>(
       `Request failed (${response.status})`;
     const reauthorizeUrl =
       typeof payload?.reauthorizeUrl === 'string' ? payload.reauthorizeUrl : undefined;
-
-    if (response.status === 401 && typeof window !== 'undefined') {
-      triggerSessionRecovery(reauthorizeUrl);
-    }
-
     throw new ApiError(message, response.status, reauthorizeUrl);
   }
 

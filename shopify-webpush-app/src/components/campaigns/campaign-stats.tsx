@@ -32,8 +32,6 @@ export function CampaignStats({ date }: { date: DateRange | undefined }) {
           ? { impressions: 0, clicks: 0, avgCtrPercent: 0, revenueCents: 0 }
           : null;
 
-    const showSkeleton = isLoading && !data;
-
     const statsData = stats
         ? [
               { label: 'Impressions', value: stats.impressions.toLocaleString() },
@@ -41,14 +39,9 @@ export function CampaignStats({ date }: { date: DateRange | undefined }) {
               { label: 'Avg. CTR', value: `${stats.avgCtrPercent.toFixed(1)}%` },
               { label: 'Revenue generated', value: formatCurrency(stats.revenueCents / 100) },
           ]
-        : !showSkeleton
-          ? [
-                { label: 'Impressions', value: '0' },
-                { label: 'Clicks', value: '0' },
-                { label: 'Avg. CTR', value: '0.0%' },
-                { label: 'Revenue generated', value: formatCurrency(0) },
-            ]
-          : null;
+        : null;
+
+    const showSkeleton = isLoading && !data;
 
     return (
         <Card>

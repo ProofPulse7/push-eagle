@@ -1,21 +1,24 @@
-'use client';
-
-type StoredImage = {
+export type CampaignDraftImage = {
   preview: string | null;
   originalPreview?: string | null;
+};
+
+export type CampaignDraftActionButton = {
+  title: string;
+  link: string;
 };
 
 export type CampaignDraftSnapshot = {
   title: string;
   message: string;
   primaryLink: string;
-  actionButtons: Array<{ title: string; link: string }>;
-  windowsHero: StoredImage;
-  macHero: StoredImage;
-  androidHero: StoredImage;
-  logo: StoredImage;
+  actionButtons: CampaignDraftActionButton[];
+  windowsHero: CampaignDraftImage;
+  macHero: CampaignDraftImage;
+  androidHero: CampaignDraftImage;
+  logo: CampaignDraftImage;
   sendingOption: string;
-  scheduledDateIso: string | null;
+  scheduledDate: string | null;
   scheduledTime: string;
   segmentId: string;
   smartDeliver: boolean;
@@ -23,56 +26,14 @@ export type CampaignDraftSnapshot = {
   flashSaleDiscountPercent: number;
   flashSaleOriginalPrice: number;
   flashSaleSalePrice: number;
-  flashSaleExpiresAtIso: string | null;
+  flashSaleExpiresAt: string | null;
   flashSaleUrgencyText: string;
   recurringPattern: string;
   updatedAt: number;
 };
 
 const draftKey = (shop: string) => `pe:campaign-draft:${shop.trim().toLowerCase()}`;
-
-const blobToDataUrl = (blob: Blob) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ''));
-    reader.onerror = () => reject(new Error('Failed to read image.'));
-    reader.readAsDataURL(blob);
-  });
-
-const normalizePreviewForStorage = async (value: string | null | undefined): Promise<string | null> => {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  if (trimmed.startsWith('data:') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    return trimmed;
-  }
-
-  if (trimmed.startsWith('blob:')) {
-    try {
-      const response = await fetch(trimmed);
-      const blob = await response.blob();
-      return blobToDataUrl(blob);
-    } catch {
-      return null;
-    }
-  }
-
-  return trimmed;
-};
-
-const normalizeStoredImage = async (image: StoredImage): Promise<StoredImage> => {
-  const [preview, originalPreview] = await Promise.all([
-    normalizePreviewForStorage(image.preview),
-    normalizePreviewForStorage(image.originalPreview),
-  ]);
-
-  return {
-    preview,
-    originalPreview: originalPreview ?? preview,
-  };
-};
+export const CAMPAIGN_WIZARD_ACTIVE_KEY = 'pe:campaign-wizard-active';
 
 export const readCampaignDraft = (shop: string): CampaignDraftSnapshot | null => {
   if (typeof window === 'undefined' || !shop.trim()) {
@@ -86,44 +47,25 @@ export const readCampaignDraft = (shop: string): CampaignDraftSnapshot | null =>
     }
 
     const parsed = JSON.parse(raw) as CampaignDraftSnapshot;
-    if (!parsed || typeof parsed !== 'object') {
-      return null;
-    }
-
-    return parsed;
+    return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
   }
 };
 
-export const persistCampaignDraft = async (
-  shop: string,
-  snapshot: Omit<CampaignDraftSnapshot, 'updatedAt'>,
-): Promise<void> => {
+export const writeCampaignDraft = (shop: string, draft: CampaignDraftSnapshot) => {
   if (typeof window === 'undefined' || !shop.trim()) {
     return;
   }
 
-  const [windowsHero, macHero, androidHero, logo] = await Promise.all([
-    normalizeStoredImage(snapshot.windowsHero),
-    normalizeStoredImage(snapshot.macHero),
-    normalizeStoredImage(snapshot.androidHero),
-    normalizeStoredImage(snapshot.logo),
-  ]);
-
-  const payload: CampaignDraftSnapshot = {
-    ...snapshot,
-    windowsHero,
-    macHero,
-    androidHero,
-    logo,
-    updatedAt: Date.now(),
-  };
-
   try {
-    sessionStorage.setItem(draftKey(shop), JSON.stringify(payload));
+    sessionStorage.setItem(
+      draftKey(shop),
+      JSON.stringify({ ...draft, updatedAt: Date.now() }),
+    );
+    sessionStorage.setItem(CAMPAIGN_WIZARD_ACTIVE_KEY, '1');
   } catch {
-    // Ignore storage quota errors.
+    // Ignore quota errors.
   }
 };
 
@@ -134,13 +76,16 @@ export const clearCampaignDraft = (shop: string) => {
 
   try {
     sessionStorage.removeItem(draftKey(shop));
+    sessionStorage.removeItem(CAMPAIGN_WIZARD_ACTIVE_KEY);
   } catch {
     // Ignore storage errors.
   }
 };
 
-export const draftImageToImageValue = (image: StoredImage) => ({
-  file: null as File | null,
-  preview: image.preview,
-  originalPreview: image.originalPreview ?? image.preview,
-});
+export const isCampaignWizardActive = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return sessionStorage.getItem(CAMPAIGN_WIZARD_ACTIVE_KEY) === '1';
+};

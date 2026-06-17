@@ -6,10 +6,9 @@ import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
-import { useCampaignState } from '@/context/campaign-context';
+import { useCampaignState, clearCampaignDraft } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
 import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
-import { clearCampaignDraft } from '@/lib/client/campaign-draft-storage';
 import { runWithBackgroundRetries } from '@/lib/client/background-save';
 import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
 import { queryKeys } from '@/lib/client/query-keys';
@@ -277,57 +276,29 @@ export default function ScheduleCampaignPage() {
                 revenue_cents: 0,
             });
 
-            const toastTitle =
-                sendingOption === 'schedule'
-                    ? 'Campaign Scheduled!'
-                    : sendingOption === 'recurring'
-                      ? 'Recurring Campaign Set!'
-                      : 'Campaign Launched!';
-            const toastDescription =
-                sendingOption === 'schedule'
-                    ? 'Your campaign has been scheduled.'
-                    : sendingOption === 'recurring'
-                      ? 'Your recurring campaign has been configured.'
-                      : 'Your campaign is being delivered in the background.';
-
             if (launchStatus === 'sending') {
                 bumpDashboardCampaignSent(queryClient, shopDomain);
 
-                const launchResponse = await runWithBackgroundRetries(() =>
-                    fetch('/api/campaigns/launch', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include',
-                        body: JSON.stringify({
-                            shopDomain,
-                            title: title || 'Untitled Campaign',
-                            body: message || ' ',
-                            targetUrl: primaryLink || '',
-                            segmentId,
-                            media: cachedMedia,
-                            actionButtons: actionButtons
-                                .filter((button) => button.title?.trim() && button.link?.trim())
-                                .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
-                            maxBatches: 2000,
-                        }),
+                const launchResponse = await fetch('/api/campaigns/launch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        shopDomain,
+                        title: title || 'Untitled Campaign',
+                        body: message || ' ',
+                        targetUrl: primaryLink || '',
+                        segmentId,
+                        media: cachedMedia,
+                        actionButtons: actionButtons
+                            .filter((button) => button.title?.trim() && button.link?.trim())
+                            .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
+                        maxBatches: 2000,
                     }),
-                );
+                });
 
                 const launchResultPayload = await parseApiResponse(launchResponse);
                 const launchResult = launchResultPayload.json;
                 if (!launchResponse.ok || !launchResult?.ok || !launchResult?.campaignId) {
-                    queryClient.setQueryData(queryKeys.campaigns(shopDomain), (current) => {
-                        if (!current || !Array.isArray(current.campaigns)) {
-                            return current;
-                        }
-
-                        return {
-                            ...current,
-                            campaigns: current.campaigns.filter(
-                                (campaign) => String((campaign as { id?: string }).id) !== optimisticId,
-                            ),
-                        };
-                    });
                     throw new Error(buildResponseError('Failed to launch campaign.', launchResultPayload));
                 }
 
@@ -359,22 +330,34 @@ export default function ScheduleCampaignPage() {
                 });
 
                 void cacheLaunchMedia(shopDomain, campaignId, cachedMedia);
-                clearCampaignDraft(shopDomain);
-
-                toast({
-                    title: toastTitle,
-                    description: toastDescription,
-                });
-                router.push(campaignsHref);
-                return;
             }
+
+            const toastTitle =
+                sendingOption === 'schedule'
+                    ? 'Campaign Scheduled!'
+                    : sendingOption === 'recurring'
+                      ? 'Recurring Campaign Set!'
+                      : 'Campaign Launched!';
+            const toastDescription =
+                sendingOption === 'schedule'
+                    ? 'Your campaign has been scheduled.'
+                    : sendingOption === 'recurring'
+                      ? 'Your recurring campaign has been configured.'
+                      : 'Your campaign is being delivered in the background.';
 
             toast({
                 title: toastTitle,
                 description: toastDescription,
             });
+            if (shopDomain) {
+                clearCampaignDraft(shopDomain);
+            }
             router.push(campaignsHref);
-            clearCampaignDraft(shopDomain);
+
+            if (launchStatus === 'sending') {
+                void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
+                return;
+            }
 
             void (async () => {
                 let campaignId: string | null = null;
@@ -572,6 +555,9 @@ export default function ScheduleCampaignPage() {
                 title: "Draft Saved!",
                 description: "Your campaign has been saved as a draft.",
             });
+            if (shopDomain) {
+                clearCampaignDraft(shopDomain);
+            }
             router.push(campaignsHref);
         } catch (error) {
             toast({

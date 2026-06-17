@@ -26,9 +26,7 @@ const shouldSkipSetup = (pathname: string) => {
   }
   if (
     pathname.startsWith('/campaigns/new/editor') ||
-    pathname.startsWith('/campaigns/new/schedule') ||
-    pathname.startsWith('/campaigns/new/details') ||
-    pathname === '/campaigns'
+    pathname.startsWith('/campaigns/new/schedule')
   ) {
     return true;
   }

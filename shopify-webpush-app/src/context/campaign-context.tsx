@@ -1,315 +1,465 @@
 'use client';
-import { createContext, useState, useContext, ReactNode, useEffect, useRef } from 'react';
+import {
+  createContext,
+  useState,
+  useContext,
+  ReactNode,
+  useEffect,
+  useRef,
+  useCallback,
+} from 'react';
+import { usePathname } from 'next/navigation';
 import { useSettings } from '@/context/settings-context';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import {
-    clearCampaignDraft,
-    draftImageToImageValue,
-    persistCampaignDraft,
-    readCampaignDraft,
+  readCampaignDraft,
+  writeCampaignDraft,
+  clearCampaignDraft,
+  type CampaignDraftSnapshot,
 } from '@/lib/client/campaign-draft-storage';
-import { isMyshopifyHost, normalizeMerchantWebsiteUrl, resolveMerchantWebsiteUrl } from '@/lib/client/merchant-website-url';
+import {
+  isMyshopifyHost,
+  normalizeMerchantWebsiteUrl,
+  resolveMerchantWebsiteUrl,
+} from '@/lib/client/merchant-website-url';
 
 type ActionButton = { title: string; link: string };
 type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
 
 export interface CampaignContextType {
-    title: string;
-    setTitle: (title: string) => void;
-    message: string;
-    setMessage: (message: string) => void;
-    primaryLink: string;
-    setPrimaryLink: (link: string) => void;
-    actionButtons: ActionButton[];
-    setActionButtons: (buttons: ActionButton[]) => void;
-    windowsHero: ImageValue;
-    setWindowsHero: (image: ImageValue) => void;
-    macHero: ImageValue;
-    setMacHero: (image: ImageValue) => void;
-    androidHero: ImageValue;
-    setAndroidHero: (image: ImageValue) => void;
-    logo: ImageValue;
-    setLogo: (image: ImageValue) => void;
-    sendingOption: string;
-    setSendingOption: (option: string) => void;
-    scheduledDate: Date | undefined;
-    setScheduledDate: (value: Date | undefined) => void;
-    scheduledTime: string;
-    setScheduledTime: (value: string) => void;
-    segmentId: string;
-    setSegmentId: (value: string) => void;
-    // Smart Delivery
-    smartDeliver: boolean;
-    setSmartDeliver: (enabled: boolean) => void;
-    // Flash Sale
-    flashSaleEnabled: boolean;
-    setFlashSaleEnabled: (enabled: boolean) => void;
-    flashSaleDiscountPercent: number;
-    setFlashSaleDiscountPercent: (percent: number) => void;
-    flashSaleOriginalPrice: number;
-    setFlashSaleOriginalPrice: (price: number) => void;
-    flashSaleSalePrice: number;
-    setFlashSaleSalePrice: (price: number) => void;
-    flashSaleExpiresAt: Date | undefined;
-    setFlashSaleExpiresAt: (date: Date | undefined) => void;
-    flashSaleUrgencyText: string;
-    setFlashSaleUrgencyText: (text: string) => void;
-    // Recurring campaigns
-    recurringPattern: string;
-    setRecurringPattern: (pattern: string) => void;
+  title: string;
+  setTitle: (title: string) => void;
+  message: string;
+  setMessage: (message: string) => void;
+  primaryLink: string;
+  setPrimaryLink: (link: string) => void;
+  actionButtons: ActionButton[];
+  setActionButtons: (buttons: ActionButton[]) => void;
+  windowsHero: ImageValue;
+  setWindowsHero: (image: ImageValue) => void;
+  macHero: ImageValue;
+  setMacHero: (image: ImageValue) => void;
+  androidHero: ImageValue;
+  setAndroidHero: (image: ImageValue) => void;
+  logo: ImageValue;
+  setLogo: (image: ImageValue) => void;
+  sendingOption: string;
+  setSendingOption: (option: string) => void;
+  scheduledDate: Date | undefined;
+  setScheduledDate: (value: Date | undefined) => void;
+  scheduledTime: string;
+  setScheduledTime: (value: string) => void;
+  segmentId: string;
+  setSegmentId: (value: string) => void;
+  smartDeliver: boolean;
+  setSmartDeliver: (enabled: boolean) => void;
+  flashSaleEnabled: boolean;
+  setFlashSaleEnabled: (enabled: boolean) => void;
+  flashSaleDiscountPercent: number;
+  setFlashSaleDiscountPercent: (percent: number) => void;
+  flashSaleOriginalPrice: number;
+  setFlashSaleOriginalPrice: (price: number) => void;
+  flashSaleSalePrice: number;
+  setFlashSaleSalePrice: (price: number) => void;
+  flashSaleExpiresAt: Date | undefined;
+  setFlashSaleExpiresAt: (date: Date | undefined) => void;
+  flashSaleUrgencyText: string;
+  setFlashSaleUrgencyText: (text: string) => void;
+  recurringPattern: string;
+  setRecurringPattern: (pattern: string) => void;
 }
 
 export const CampaignContext = createContext<CampaignContextType | undefined>(undefined);
 
+const emptyImage = (): ImageValue => ({ file: null, preview: null, originalPreview: null });
+
 const normalizeTrackedLink = (value: string | null | undefined) => {
-    const raw = String(value ?? '').trim();
-    if (!raw) {
-        return '';
-    }
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return '';
+  }
 
-    try {
-        const parsed = new URL(raw);
-        if (parsed.pathname === '/api/track/click' || parsed.pathname === '/api/track/automation-click') {
-            return parsed.searchParams.get('u') || raw;
-        }
-    } catch {
-        return raw;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.pathname === '/api/track/click' || parsed.pathname === '/api/track/automation-click') {
+      return parsed.searchParams.get('u') || raw;
     }
-
+  } catch {
     return raw;
+  }
+
+  return raw;
 };
 
+const imageFromDraft = (value: CampaignDraftSnapshot['windowsHero']): ImageValue => ({
+  file: null,
+  preview: value.preview,
+  originalPreview: value.originalPreview ?? null,
+});
+
+const buildDraftSnapshot = (state: {
+  title: string;
+  message: string;
+  primaryLink: string;
+  actionButtons: ActionButton[];
+  windowsHero: ImageValue;
+  macHero: ImageValue;
+  androidHero: ImageValue;
+  logo: ImageValue;
+  sendingOption: string;
+  scheduledDate: Date | undefined;
+  scheduledTime: string;
+  segmentId: string;
+  smartDeliver: boolean;
+  flashSaleEnabled: boolean;
+  flashSaleDiscountPercent: number;
+  flashSaleOriginalPrice: number;
+  flashSaleSalePrice: number;
+  flashSaleExpiresAt: Date | undefined;
+  flashSaleUrgencyText: string;
+  recurringPattern: string;
+}): CampaignDraftSnapshot => ({
+  title: state.title,
+  message: state.message,
+  primaryLink: state.primaryLink,
+  actionButtons: state.actionButtons,
+  windowsHero: {
+    preview: state.windowsHero.preview,
+    originalPreview: state.windowsHero.originalPreview ?? null,
+  },
+  macHero: {
+    preview: state.macHero.preview,
+    originalPreview: state.macHero.originalPreview ?? null,
+  },
+  androidHero: {
+    preview: state.androidHero.preview,
+    originalPreview: state.androidHero.originalPreview ?? null,
+  },
+  logo: {
+    preview: state.logo.preview,
+    originalPreview: state.logo.originalPreview ?? null,
+  },
+  sendingOption: state.sendingOption,
+  scheduledDate: state.scheduledDate ? state.scheduledDate.toISOString() : null,
+  scheduledTime: state.scheduledTime,
+  segmentId: state.segmentId,
+  smartDeliver: state.smartDeliver,
+  flashSaleEnabled: state.flashSaleEnabled,
+  flashSaleDiscountPercent: state.flashSaleDiscountPercent,
+  flashSaleOriginalPrice: state.flashSaleOriginalPrice,
+  flashSaleSalePrice: state.flashSaleSalePrice,
+  flashSaleExpiresAt: state.flashSaleExpiresAt ? state.flashSaleExpiresAt.toISOString() : null,
+  flashSaleUrgencyText: state.flashSaleUrgencyText,
+  recurringPattern: state.recurringPattern,
+  updatedAt: Date.now(),
+});
+
 export function useCampaignState() {
-    const context = useContext(CampaignContext);
-    if (!context) {
-        throw new Error('useCampaignState must be used within NewCampaignLayout');
-    }
-    return context;
+  const context = useContext(CampaignContext);
+  if (!context) {
+    throw new Error('useCampaignState must be used within NewCampaignLayout');
+  }
+  return context;
 }
 
 export function CampaignStateProvider({ children }: { children: ReactNode }) {
-    const shopDomain = useShopDomain();
-    const hydratedRef = useRef(false);
-    const blobUrlsRef = useRef<Set<string>>(new Set());
-    const [title, setTitle] = useState('');
-    const [message, setMessage] = useState('');
-    const [primaryLink, setPrimaryLink] = useState('');
-    const [actionButtons, setActionButtons] = useState<ActionButton[]>([]);
-    const [windowsHero, setWindowsHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
-    const [macHero, setMacHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
-    const [androidHero, setAndroidHero] = useState<ImageValue>({ file: null, preview: null, originalPreview: null });
-    const { storeUrl, logo, setLogo } = useSettings();
-    const [sendingOption, setSendingOption] = useState('now');
-    const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
-    const [scheduledTime, setScheduledTime] = useState('10:00 AM');
-    const [segmentId, setSegmentId] = useState('all');
-    // Smart Delivery
-    const [smartDeliver, setSmartDeliver] = useState(false);
-    // Flash Sale
-    const [flashSaleEnabled, setFlashSaleEnabled] = useState(false);
-    const [flashSaleDiscountPercent, setFlashSaleDiscountPercent] = useState(20);
-    const [flashSaleOriginalPrice, setFlashSaleOriginalPrice] = useState(0);
-    const [flashSaleSalePrice, setFlashSaleSalePrice] = useState(0);
-    const [flashSaleExpiresAt, setFlashSaleExpiresAt] = useState<Date | undefined>(new Date(Date.now() + 24 * 60 * 60 * 1000)); // 24 hours from now
-    const [flashSaleUrgencyText, setFlashSaleUrgencyText] = useState('⏰ Limited time offer!');
-    // Recurring
-    const [recurringPattern, setRecurringPattern] = useState('');
+  const shop = useShopDomain();
+  const pathname = usePathname();
+  const prevPathRef = useRef(pathname);
+  const blobUrlsRef = useRef<Set<string>>(new Set());
+  const primaryLinkInitializedRef = useRef(false);
+  const skipPrimaryLinkDefaultRef = useRef(false);
+  const didHydrateDraftRef = useRef(false);
 
-    useEffect(() => {
-        if (!shopDomain || hydratedRef.current) {
-            return;
-        }
+  const [title, setTitle] = useState('');
+  const [message, setMessage] = useState('');
+  const [primaryLink, setPrimaryLink] = useState('');
+  const [actionButtons, setActionButtons] = useState<ActionButton[]>([]);
+  const [windowsHero, setWindowsHero] = useState<ImageValue>(emptyImage);
+  const [macHero, setMacHero] = useState<ImageValue>(emptyImage);
+  const [androidHero, setAndroidHero] = useState<ImageValue>(emptyImage);
+  const [logo, setLogo] = useState<ImageValue>(emptyImage);
+  const { storeUrl, logo: settingsLogo } = useSettings();
+  const [sendingOption, setSendingOption] = useState('now');
+  const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
+  const [scheduledTime, setScheduledTime] = useState('10:00 AM');
+  const [segmentId, setSegmentId] = useState('all');
+  const [smartDeliver, setSmartDeliver] = useState(false);
+  const [flashSaleEnabled, setFlashSaleEnabled] = useState(false);
+  const [flashSaleDiscountPercent, setFlashSaleDiscountPercent] = useState(20);
+  const [flashSaleOriginalPrice, setFlashSaleOriginalPrice] = useState(0);
+  const [flashSaleSalePrice, setFlashSaleSalePrice] = useState(0);
+  const [flashSaleExpiresAt, setFlashSaleExpiresAt] = useState<Date | undefined>(
+    new Date(Date.now() + 24 * 60 * 60 * 1000),
+  );
+  const [flashSaleUrgencyText, setFlashSaleUrgencyText] = useState('⏰ Limited time offer!');
+  const [recurringPattern, setRecurringPattern] = useState('');
 
-        const draft = readCampaignDraft(shopDomain);
-        if (draft) {
-            setTitle(draft.title ?? '');
-            setMessage(draft.message ?? '');
-            setPrimaryLink(draft.primaryLink ?? '');
-            setActionButtons(Array.isArray(draft.actionButtons) ? draft.actionButtons : []);
-            setWindowsHero(draftImageToImageValue(draft.windowsHero));
-            setMacHero(draftImageToImageValue(draft.macHero));
-            setAndroidHero(draftImageToImageValue(draft.androidHero));
-            if (draft.logo?.preview) {
-                setLogo(draftImageToImageValue(draft.logo));
-            }
-            setSendingOption(draft.sendingOption || 'now');
-            setScheduledDate(draft.scheduledDateIso ? new Date(draft.scheduledDateIso) : new Date());
-            setScheduledTime(draft.scheduledTime || '10:00 AM');
-            setSegmentId(draft.segmentId || 'all');
-            setSmartDeliver(Boolean(draft.smartDeliver));
-            setFlashSaleEnabled(Boolean(draft.flashSaleEnabled));
-            setFlashSaleDiscountPercent(Number(draft.flashSaleDiscountPercent ?? 20));
-            setFlashSaleOriginalPrice(Number(draft.flashSaleOriginalPrice ?? 0));
-            setFlashSaleSalePrice(Number(draft.flashSaleSalePrice ?? 0));
-            setFlashSaleExpiresAt(
-                draft.flashSaleExpiresAtIso ? new Date(draft.flashSaleExpiresAtIso) : new Date(Date.now() + 24 * 60 * 60 * 1000),
-            );
-            setFlashSaleUrgencyText(draft.flashSaleUrgencyText || '⏰ Limited time offer!');
-            setRecurringPattern(draft.recurringPattern || '');
-        }
+  const resetCampaignState = useCallback(() => {
+    setTitle('');
+    setMessage('');
+    setPrimaryLink('');
+    setActionButtons([]);
+    setWindowsHero(emptyImage());
+    setMacHero(emptyImage());
+    setAndroidHero(emptyImage());
+    setLogo(emptyImage());
+    setSendingOption('now');
+    setScheduledDate(new Date());
+    setScheduledTime('10:00 AM');
+    setSegmentId('all');
+    setSmartDeliver(false);
+    setFlashSaleEnabled(false);
+    setFlashSaleDiscountPercent(20);
+    setFlashSaleOriginalPrice(0);
+    setFlashSaleSalePrice(0);
+    setFlashSaleExpiresAt(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    setFlashSaleUrgencyText('⏰ Limited time offer!');
+    setRecurringPattern('');
+    primaryLinkInitializedRef.current = false;
+    skipPrimaryLinkDefaultRef.current = false;
+  }, []);
 
-        hydratedRef.current = true;
-    }, [shopDomain, setLogo]);
-
-    useEffect(() => {
-        if (!shopDomain || !hydratedRef.current) {
-            return;
-        }
-
-        const timer = window.setTimeout(() => {
-            void persistCampaignDraft(shopDomain, {
-                title,
-                message,
-                primaryLink,
-                actionButtons,
-                windowsHero: {
-                    preview: windowsHero.preview,
-                    originalPreview: windowsHero.originalPreview ?? windowsHero.preview,
-                },
-                macHero: {
-                    preview: macHero.preview,
-                    originalPreview: macHero.originalPreview ?? macHero.preview,
-                },
-                androidHero: {
-                    preview: androidHero.preview,
-                    originalPreview: androidHero.originalPreview ?? androidHero.preview,
-                },
-                logo: {
-                    preview: logo.preview,
-                    originalPreview: logo.preview,
-                },
-                sendingOption,
-                scheduledDateIso: scheduledDate?.toISOString() ?? null,
-                scheduledTime,
-                segmentId,
-                smartDeliver,
-                flashSaleEnabled,
-                flashSaleDiscountPercent,
-                flashSaleOriginalPrice,
-                flashSaleSalePrice,
-                flashSaleExpiresAtIso: flashSaleExpiresAt?.toISOString() ?? null,
-                flashSaleUrgencyText,
-                recurringPattern,
-            });
-        }, 350);
-
-        return () => window.clearTimeout(timer);
-    }, [
-        shopDomain,
-        title,
-        message,
-        primaryLink,
-        actionButtons,
-        windowsHero.preview,
-        windowsHero.originalPreview,
-        macHero.preview,
-        macHero.originalPreview,
-        androidHero.preview,
-        androidHero.originalPreview,
-        logo.preview,
-        sendingOption,
-        scheduledDate,
-        scheduledTime,
-        segmentId,
-        smartDeliver,
-        flashSaleEnabled,
-        flashSaleDiscountPercent,
-        flashSaleOriginalPrice,
-        flashSaleSalePrice,
-        flashSaleExpiresAt,
-        flashSaleUrgencyText,
-        recurringPattern,
-    ]);
-
-    useEffect(() => {
-        if (!hydratedRef.current) {
-            return;
-        }
-
-        const merchantWebsiteUrl = resolveMerchantWebsiteUrl({ storeUrl });
-        const normalizedLink = normalizeTrackedLink(primaryLink);
-        if (normalizedLink !== primaryLink) {
-            setPrimaryLink(normalizedLink);
-            return;
-        }
-
-        if (!merchantWebsiteUrl) {
-            return;
-        }
-
-        if (!primaryLink || isMyshopifyHost(primaryLink)) {
-            setPrimaryLink(merchantWebsiteUrl);
-            return;
-        }
-
-        const normalizedPrimary = normalizeMerchantWebsiteUrl(primaryLink);
-        if (normalizedPrimary && isMyshopifyHost(normalizedPrimary)) {
-            setPrimaryLink(merchantWebsiteUrl);
-        }
-    }, [primaryLink, storeUrl]);
-
-    const value: CampaignContextType = {
-        title, setTitle,
-        message, setMessage,
-        primaryLink, setPrimaryLink,
-        actionButtons, setActionButtons,
-        windowsHero, setWindowsHero,
-        macHero, setMacHero,
-        androidHero, setAndroidHero,
-        logo, setLogo,
-        sendingOption, setSendingOption,
-        scheduledDate, setScheduledDate,
-        scheduledTime, setScheduledTime,
-        segmentId, setSegmentId,
-        // Smart Delivery
-        smartDeliver, setSmartDeliver,
-        // Flash Sale
-        flashSaleEnabled, setFlashSaleEnabled,
-        flashSaleDiscountPercent, setFlashSaleDiscountPercent,
-        flashSaleOriginalPrice, setFlashSaleOriginalPrice,
-        flashSaleSalePrice, setFlashSaleSalePrice,
-        flashSaleExpiresAt, setFlashSaleExpiresAt,
-        flashSaleUrgencyText, setFlashSaleUrgencyText,
-        // Recurring
-        recurringPattern, setRecurringPattern,
-    };
-
-    useEffect(() => {
-        const candidates = [
-            windowsHero.preview,
-            windowsHero.originalPreview,
-            macHero.preview,
-            macHero.originalPreview,
-            androidHero.preview,
-            androidHero.originalPreview,
-            logo.preview,
-        ];
-
-        candidates.forEach((url) => {
-            if (url && url.startsWith('blob:')) {
-                blobUrlsRef.current.add(url);
-            }
-        });
-    }, [
-        windowsHero.preview,
-        windowsHero.originalPreview,
-        macHero.preview,
-        macHero.originalPreview,
-        androidHero.preview,
-        androidHero.originalPreview,
-        logo.preview,
-    ]);
-
-    useEffect(() => {
-        return () => {
-            blobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-            blobUrlsRef.current.clear();
-        };
-    }, []);
-
-    return (
-        <CampaignContext.Provider value={value}>
-            {children}
-        </CampaignContext.Provider>
+  const applyDraft = useCallback((draft: CampaignDraftSnapshot) => {
+    setTitle(draft.title);
+    setMessage(draft.message);
+    setPrimaryLink(draft.primaryLink);
+    setActionButtons(draft.actionButtons);
+    setWindowsHero(imageFromDraft(draft.windowsHero));
+    setMacHero(imageFromDraft(draft.macHero));
+    setAndroidHero(imageFromDraft(draft.androidHero));
+    setLogo(imageFromDraft(draft.logo));
+    setSendingOption(draft.sendingOption);
+    setScheduledDate(draft.scheduledDate ? new Date(draft.scheduledDate) : new Date());
+    setScheduledTime(draft.scheduledTime);
+    setSegmentId(draft.segmentId);
+    setSmartDeliver(draft.smartDeliver);
+    setFlashSaleEnabled(draft.flashSaleEnabled);
+    setFlashSaleDiscountPercent(draft.flashSaleDiscountPercent);
+    setFlashSaleOriginalPrice(draft.flashSaleOriginalPrice);
+    setFlashSaleSalePrice(draft.flashSaleSalePrice);
+    setFlashSaleExpiresAt(
+      draft.flashSaleExpiresAt ? new Date(draft.flashSaleExpiresAt) : new Date(Date.now() + 24 * 60 * 60 * 1000),
     );
+    setFlashSaleUrgencyText(draft.flashSaleUrgencyText);
+    setRecurringPattern(draft.recurringPattern);
+    primaryLinkInitializedRef.current = Boolean(draft.primaryLink.trim());
+    skipPrimaryLinkDefaultRef.current = Boolean(draft.primaryLink.trim());
+  }, []);
+
+  useEffect(() => {
+    if (!shop || didHydrateDraftRef.current || !pathname.startsWith('/campaigns/new')) {
+      return;
+    }
+
+    didHydrateDraftRef.current = true;
+    const draft = readCampaignDraft(shop);
+    if (draft) {
+      applyDraft(draft);
+    }
+  }, [shop, pathname, applyDraft]);
+
+  useEffect(() => {
+    const wasInWizard = prevPathRef.current.startsWith('/campaigns/new');
+    const inWizard = pathname.startsWith('/campaigns/new');
+
+    if (wasInWizard && !inWizard) {
+      if (shop) {
+        clearCampaignDraft(shop);
+      }
+      resetCampaignState();
+    }
+
+    if (inWizard && !wasInWizard) {
+      const draft = shop ? readCampaignDraft(shop) : null;
+      if (draft) {
+        applyDraft(draft);
+      } else {
+        resetCampaignState();
+        if (settingsLogo.preview) {
+          setLogo({
+            file: null,
+            preview: settingsLogo.preview,
+            originalPreview: settingsLogo.originalPreview ?? null,
+          });
+        }
+      }
+    }
+
+    prevPathRef.current = pathname;
+  }, [pathname, shop, applyDraft, resetCampaignState, settingsLogo.preview, settingsLogo.originalPreview]);
+
+  useEffect(() => {
+    if (!shop || !pathname.startsWith('/campaigns/new')) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      writeCampaignDraft(
+        shop,
+        buildDraftSnapshot({
+          title,
+          message,
+          primaryLink,
+          actionButtons,
+          windowsHero,
+          macHero,
+          androidHero,
+          logo,
+          sendingOption,
+          scheduledDate,
+          scheduledTime,
+          segmentId,
+          smartDeliver,
+          flashSaleEnabled,
+          flashSaleDiscountPercent,
+          flashSaleOriginalPrice,
+          flashSaleSalePrice,
+          flashSaleExpiresAt,
+          flashSaleUrgencyText,
+          recurringPattern,
+        }),
+      );
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    shop,
+    pathname,
+    title,
+    message,
+    primaryLink,
+    actionButtons,
+    windowsHero,
+    macHero,
+    androidHero,
+    logo,
+    sendingOption,
+    scheduledDate,
+    scheduledTime,
+    segmentId,
+    smartDeliver,
+    flashSaleEnabled,
+    flashSaleDiscountPercent,
+    flashSaleOriginalPrice,
+    flashSaleSalePrice,
+    flashSaleExpiresAt,
+    flashSaleUrgencyText,
+    recurringPattern,
+  ]);
+
+  useEffect(() => {
+    const normalizedLink = normalizeTrackedLink(primaryLink);
+    if (normalizedLink !== primaryLink) {
+      setPrimaryLink(normalizedLink);
+      return;
+    }
+
+    if (skipPrimaryLinkDefaultRef.current || primaryLinkInitializedRef.current) {
+      return;
+    }
+
+    const merchantWebsiteUrl = resolveMerchantWebsiteUrl({ storeUrl });
+    if (!merchantWebsiteUrl) {
+      return;
+    }
+
+    if (!primaryLink || isMyshopifyHost(primaryLink)) {
+      setPrimaryLink(merchantWebsiteUrl);
+      primaryLinkInitializedRef.current = true;
+      return;
+    }
+
+    const normalizedPrimary = normalizeMerchantWebsiteUrl(primaryLink);
+    if (normalizedPrimary && isMyshopifyHost(normalizedPrimary)) {
+      setPrimaryLink(merchantWebsiteUrl);
+      primaryLinkInitializedRef.current = true;
+    }
+  }, [primaryLink, storeUrl]);
+
+  const setPrimaryLinkSafe = useCallback((link: string) => {
+    skipPrimaryLinkDefaultRef.current = Boolean(link.trim());
+    primaryLinkInitializedRef.current = Boolean(link.trim());
+    setPrimaryLink(link);
+  }, []);
+
+  const value: CampaignContextType = {
+    title,
+    setTitle,
+    message,
+    setMessage,
+    primaryLink,
+    setPrimaryLink: setPrimaryLinkSafe,
+    actionButtons,
+    setActionButtons,
+    windowsHero,
+    setWindowsHero,
+    macHero,
+    setMacHero,
+    androidHero,
+    setAndroidHero,
+    logo,
+    setLogo,
+    sendingOption,
+    setSendingOption,
+    scheduledDate,
+    setScheduledDate,
+    scheduledTime,
+    setScheduledTime,
+    segmentId,
+    setSegmentId,
+    smartDeliver,
+    setSmartDeliver,
+    flashSaleEnabled,
+    setFlashSaleEnabled,
+    flashSaleDiscountPercent,
+    setFlashSaleDiscountPercent,
+    flashSaleOriginalPrice,
+    setFlashSaleOriginalPrice,
+    flashSaleSalePrice,
+    setFlashSaleSalePrice,
+    flashSaleExpiresAt,
+    setFlashSaleExpiresAt,
+    flashSaleUrgencyText,
+    setFlashSaleUrgencyText,
+    recurringPattern,
+    setRecurringPattern,
+  };
+
+  useEffect(() => {
+    const candidates = [
+      windowsHero.preview,
+      windowsHero.originalPreview,
+      macHero.preview,
+      macHero.originalPreview,
+      androidHero.preview,
+      androidHero.originalPreview,
+      logo.preview,
+    ];
+
+    candidates.forEach((url) => {
+      if (url && url.startsWith('blob:')) {
+        blobUrlsRef.current.add(url);
+      }
+    });
+  }, [
+    windowsHero.preview,
+    windowsHero.originalPreview,
+    macHero.preview,
+    macHero.originalPreview,
+    androidHero.preview,
+    androidHero.originalPreview,
+    logo.preview,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      blobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      blobUrlsRef.current.clear();
+    };
+  }, []);
+
+  return <CampaignContext.Provider value={value}>{children}</CampaignContext.Provider>;
 }
+
+export { clearCampaignDraft };
