@@ -14,6 +14,7 @@ import {
   type CampaignDeliveryOptions,
 } from '@/lib/server/campaigns/delivery-options';
 import { deleteImageFromR2 } from '@/lib/server/media/r2';
+import { pickCampaignBarImageUrl } from '@/lib/campaign-bar-image';
 
 type CreateCampaignInput = {
   shopDomain: string;
@@ -7828,7 +7829,11 @@ export const sendCampaign = async (
       }
     }
 
-    campaign.body = buildFlashSaleNotificationBody(campaign.body, scheduleMeta.flash_sale_config);
+    campaign.body = buildFlashSaleNotificationBody(
+      campaign.body,
+      scheduleMeta.flash_sale_config,
+      scheduleMeta.flash_sale_enabled,
+    );
     await sql`
       UPDATE campaigns
       SET body = ${campaign.body}

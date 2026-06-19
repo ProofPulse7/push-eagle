@@ -18,14 +18,27 @@ export type CampaignDeliveryOptions = {
   flashSaleConfig?: FlashSaleConfig | null;
 };
 
-export const buildFlashSaleNotificationBody = (body: string, config?: FlashSaleConfig | null) => {
-  const urgency = config?.urgencyText?.trim() || '⏰ Limited time offer!';
+export const buildFlashSaleNotificationBody = (
+  body: string,
+  config?: FlashSaleConfig | null,
+  flashSaleEnabled = true,
+) => {
   const trimmedBody = body.trim() || ' ';
+  if (!flashSaleEnabled) {
+    return trimmedBody;
+  }
+
+  const urgency = config?.urgencyText?.trim() || '⏰ Limited time offer!';
   if (trimmedBody.includes(urgency)) {
     return trimmedBody;
   }
   return `${trimmedBody}\n\n${urgency}`.trim();
 };
+
+export const resolveCampaignNotificationBody = (
+  body: string,
+  options: Pick<CampaignDeliveryOptions, 'flashSaleEnabled' | 'flashSaleConfig'>,
+) => buildFlashSaleNotificationBody(body, options.flashSaleConfig, Boolean(options.flashSaleEnabled));
 
 export const upsertCampaignDeliveryOptions = async (
   sql: ReturnType<typeof getNeonSql>,

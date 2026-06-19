@@ -18,7 +18,7 @@ type CampaignDateTimeFieldsProps = {
   onDateChange: (value: Date | undefined) => void;
   onTimeChange: (value: string) => void;
   minDate?: Date;
-  variant?: 'boxed' | 'inline' | 'stacked';
+  variant?: 'boxed' | 'inline' | 'stacked' | 'compact';
   className?: string;
 };
 
@@ -37,6 +37,8 @@ export function CampaignDateTimeFields({
       className={cn(
         variant === 'stacked'
           ? 'flex flex-col gap-2 sm:max-w-[280px]'
+          : variant === 'compact'
+            ? 'flex items-center gap-2'
           : cn('flex flex-wrap items-center gap-2', variant === 'inline' ? 'flex-1' : 'grid gap-3 sm:grid-cols-2'),
       )}
     >
@@ -46,7 +48,7 @@ export function CampaignDateTimeFields({
             variant="outline"
             className={cn(
               'h-10 justify-start rounded-xl border-slate-200 bg-white text-left font-normal',
-              variant === 'inline' ? 'min-w-[180px] flex-1' : 'w-full',
+              variant === 'inline' ? 'min-w-[180px] flex-1' : variant === 'compact' ? 'w-[170px]' : 'w-full',
               variant !== 'inline' && variant !== 'stacked' && 'h-11',
               !date && 'text-muted-foreground',
             )}
@@ -70,7 +72,7 @@ export function CampaignDateTimeFields({
         <SelectTrigger
           className={cn(
             'h-10 rounded-xl border-slate-200 bg-white text-sm font-medium',
-            variant === 'inline' ? 'w-[130px] shrink-0' : 'w-full',
+            variant === 'inline' ? 'w-[130px] shrink-0' : variant === 'compact' ? 'w-[110px] shrink-0' : 'w-full',
             variant !== 'inline' && variant !== 'stacked' && 'h-11',
           )}
         >
@@ -87,7 +89,7 @@ export function CampaignDateTimeFields({
     </div>
   );
 
-  if (variant === 'inline' || variant === 'stacked') {
+  if (variant === 'inline' || variant === 'stacked' || variant === 'compact') {
     return <div className={cn('min-w-0', className)}>{pickers}</div>;
   }
 

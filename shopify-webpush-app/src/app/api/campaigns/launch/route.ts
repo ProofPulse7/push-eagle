@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
 import {
-  buildFlashSaleNotificationBody,
+  resolveCampaignNotificationBody,
   upsertCampaignDeliveryOptions,
   type CampaignDeliveryOptions,
 } from '@/lib/server/campaigns/delivery-options';
@@ -111,7 +111,7 @@ export async function POST(request: Request) {
 
     const segmentId = body.segmentId && body.segmentId !== '' ? body.segmentId : 'all';
     const recipientCount = await countCampaignAudienceTokens(shopDomain, segmentId);
-    const notificationBody = buildFlashSaleNotificationBody(body.body || ' ', delivery.flashSaleConfig);
+    const notificationBody = resolveCampaignNotificationBody(body.body || ' ', delivery);
 
     const campaignId = randomUUID();
     const sql = getNeonSql();

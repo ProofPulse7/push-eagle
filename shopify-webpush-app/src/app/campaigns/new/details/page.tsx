@@ -28,30 +28,30 @@ const OptionCard = ({
   title,
   description,
   id,
-  footer,
+  trailing,
 }: {
   selected: boolean;
   title: string;
   description: string;
   id: string;
-  footer?: ReactNode;
+  trailing?: ReactNode;
 }) => {
   return (
     <label
       htmlFor={id}
       className={cn(
-        'flex cursor-pointer flex-col rounded-2xl border transition-colors',
+        'flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 transition-colors',
         selected ? 'border-primary bg-primary/5' : 'border-border bg-background',
       )}
     >
-      <div className="flex items-start gap-3 px-4 py-4">
-        <RadioGroupItem id={id} value={id} className="mt-1 shrink-0" />
-        <div className="space-y-1">
+      <RadioGroupItem id={id} value={id} className="shrink-0" />
+      <div className="flex min-w-0 flex-1 flex-col items-stretch gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0 space-y-1">
           <p className="text-base font-semibold leading-none">{title}</p>
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>
+        {trailing ? <div className="shrink-0 lg:ml-4">{trailing}</div> : null}
       </div>
-      {footer ? <div className="border-t border-border/70 px-4 pb-4 pt-3">{footer}</div> : null}
     </label>
   );
 };
@@ -236,7 +236,7 @@ export default function CampaignDetailsPage() {
                   selected={campaignType === 'flash'}
                   title="Flash sale"
                   description="Send a campaign with an expiry date on it"
-                  footer={
+                  trailing={
                     flashSaleEnabled ? (
                       <CampaignDateTimeFields
                         date={flashSaleExpiresAt}
@@ -244,7 +244,8 @@ export default function CampaignDetailsPage() {
                         onDateChange={setFlashSaleExpiresAt}
                         onTimeChange={setFlashSaleExpiresTime}
                         minDate={today}
-                        variant="stacked"
+                        variant="compact"
+                        className="w-full lg:w-auto"
                       />
                     ) : null
                   }
