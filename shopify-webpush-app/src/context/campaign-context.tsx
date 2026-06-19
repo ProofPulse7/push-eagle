@@ -19,8 +19,8 @@ import {
 } from '@/lib/client/campaign-draft-storage';
 import {
   clearWizardLaunchMediaCache,
+  prepareWizardLaunchMedia,
   readPersistableImageSource,
-  startWizardMediaUpload,
 } from '@/lib/client/campaign-wizard-media';
 import {
   isMyshopifyHost,
@@ -347,15 +347,15 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
           }),
         );
 
-        void startWizardMediaUpload(shop, {
+        void prepareWizardLaunchMedia(shop, {
           imageUrl: persistedMacHero.preview ?? persistedWindowsHero.preview ?? persistedAndroidHero.preview,
           windowsImageUrl: persistedWindowsHero.preview,
           macosImageUrl: persistedMacHero.preview,
           androidImageUrl: persistedAndroidHero.preview,
           iconUrl: persistedLogo.preview,
-        });
+        }).catch(() => undefined);
       })();
-    }, 350);
+    }, 150);
 
     return () => {
       cancelled = true;

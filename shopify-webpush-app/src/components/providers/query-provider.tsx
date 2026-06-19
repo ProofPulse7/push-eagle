@@ -40,8 +40,7 @@ export function QueryProvider({ children }: { children: ReactNode }) {
       key: 'pe_query_cache_v1',
     }),
   );
-  // Never block the app shell while sessionStorage rehydrates — show cached UI immediately.
-  const [isRestored] = useState(true);
+  const [isRestored, setIsRestored] = useState(() => typeof window === 'undefined');
 
   return (
     <PersistRestoreContext.Provider value={isRestored}>
@@ -53,6 +52,9 @@ export function QueryProvider({ children }: { children: ReactNode }) {
           dehydrateOptions: {
             shouldDehydrateQuery: (query) => query.state.status === 'success',
           },
+        }}
+        onSuccess={() => {
+          setIsRestored(true);
         }}
       >
         {children}

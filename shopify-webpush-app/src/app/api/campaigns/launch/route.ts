@@ -40,24 +40,6 @@ const launchSchema = z.object({
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const isRemoteUrl = (value: string | null | undefined) => {
-  const trimmed = String(value ?? '').trim();
-  return trimmed.startsWith('http://') || trimmed.startsWith('https://');
-};
-
-const resolveMediaIfNeeded = async (shopDomain: string, value: string | null | undefined) => {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  if (isRemoteUrl(trimmed)) {
-    return trimmed;
-  }
-
-  return resolveServerCampaignMediaUrl(shopDomain, trimmed);
-};
-
 const deliverCampaignWithRetry = async (
   shopDomain: string,
   campaignId: string,
@@ -65,13 +47,13 @@ const deliverCampaignWithRetry = async (
 ) => {
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
       return await sendCampaign(shopDomain, campaignId, { maxBatches });
     } catch (error) {
       lastError = error;
-      if (attempt < 3) {
-        await sleep(1200 * attempt);
+      if (attempt < 4) {
+        await sleep(1000 * attempt);
       }
     }
   }
@@ -109,14 +91,14 @@ export async function POST(request: Request) {
     const media = body.media ?? {};
 
     const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
-      resolveMediaIfNeeded(shopDomain, media.iconUrl ?? null),
-      resolveMediaIfNeeded(shopDomain, media.windowsImageUrl ?? null),
-      resolveMediaIfNeeded(shopDomain, media.macosImageUrl ?? null),
-      resolveMediaIfNeeded(shopDomain, media.androidImageUrl ?? null),
+      resolveServerCampaignMediaUrl(shopDomain, media.iconUrl ?? null),
+      resolveServerCampaignMediaUrl(shopDomain, media.windowsImageUrl ?? null),
+      resolveServerCampaignMediaUrl(shopDomain, media.macosImageUrl ?? null),
+      resolveServerCampaignMediaUrl(shopDomain, media.androidImageUrl ?? null),
     ]);
 
     const listImageUrl =
-      (await resolveMediaIfNeeded(shopDomain, media.imageUrl ?? null))
+      (await resolveServerCampaignMediaUrl(shopDomain, media.imageUrl ?? null))
       ?? macosImageUrl
       ?? windowsImageUrl
       ?? androidImageUrl;
@@ -152,7 +134,10 @@ export async function POST(request: Request) {
         AND shop_domain = ${shopDomain}
     `;
 
+    const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+    void bumpCronWakeNow();
     void invalidateShopDashboardCaches(shopDomain);
+
     startBackgroundDelivery(shopDomain, campaignId, maxBatches);
 
     return NextResponse.json({
@@ -166,7 +151,7 @@ export async function POST(request: Request) {
       successCount: 0,
       delivery_count: 0,
       remainingRecipients: recipientCount,
-      message: 'Campaign created. Notifications are being delivered now.',
+      message: 'Campaign queued. Notifications are sending in the background.',
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to launch campaign.';

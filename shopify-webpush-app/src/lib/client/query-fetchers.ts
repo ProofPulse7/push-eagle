@@ -55,3 +55,10 @@ export const prefetchAppBootstrap = (queryClient: QueryClient, shop: string) =>
     queryFn: () => fetchAppBootstrap(queryClient, shop),
     staleTime: 5 * 60 * 1000,
   });
+
+export const prefetchCampaignsList = (queryClient: QueryClient, shop: string) =>
+  queryClient.prefetchQuery({
+    queryKey: queryKeys.campaigns(shop),
+    queryFn: () => fetchCampaignsList(queryClient, shop),
+    staleTime: 60_000,
+  });

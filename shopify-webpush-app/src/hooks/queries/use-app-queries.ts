@@ -16,7 +16,6 @@ import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
 import { mergeAutomationsFromCache } from '@/lib/client/optimistic-automations';
 import { mergeSegmentsFromCache } from '@/lib/client/optimistic-segments';
 import { fetchAppBootstrap, fetchCampaignsList, fetchDashboardSummary } from '@/lib/client/query-fetchers';
-import { readPageCache, writePageCache } from '@/lib/client/query-page-cache';
 import { clearPendingSettings } from '@/lib/client/pending-settings';
 import { type AppBootstrapPayload } from '@/lib/client/hydrate-app-cache';
 import { queryKeys } from '@/lib/client/query-keys';
@@ -31,8 +30,9 @@ export function useAppBootstrap() {
     queryFn: () => fetchAppBootstrap(queryClient, shop),
     enabled: Boolean(shop),
     staleTime: 60_000,
-    refetchOnMount: true,
-    placeholderData: (previous) => previous,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    placeholderData: (previous) => previous ?? (shop ? queryClient.getQueryData(queryKeys.bootstrap(shop)) : undefined),
   });
 }
 
@@ -53,20 +53,14 @@ export function useMerchantOverview() {
 export function useCampaigns() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
-  const cacheKey = shop ? JSON.stringify(queryKeys.campaigns(shop)) : '';
 
   return useQuery({
     queryKey: queryKeys.campaigns(shop),
-    queryFn: async () => {
-      const fresh = await fetchCampaignsList(queryClient, shop);
-      writePageCache(cacheKey, fresh);
-      return fresh;
-    },
+    queryFn: () => fetchCampaignsList(queryClient, shop),
     enabled: Boolean(shop),
     staleTime: 60_000,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: true,
-    initialData: () => (cacheKey ? readPageCache(cacheKey) : undefined),
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
     refetchInterval: (query) => {
       const campaigns = (query.state.data as { campaigns?: Array<Record<string, unknown>> } | undefined)?.campaigns;
       if (!Array.isArray(campaigns)) {
@@ -81,14 +75,13 @@ export function useCampaigns() {
       return hasActiveSend ? 15_000 : false;
     },
     refetchIntervalInBackground: false,
-    placeholderData: (previous) => previous,
+    placeholderData: (previous) => previous ?? (shop ? queryClient.getQueryData(queryKeys.campaigns(shop)) : undefined),
   });
 }
 
 export function useAutomationsOverview() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
-  const cacheKey = shop ? JSON.stringify(queryKeys.automationsOverview(shop)) : '';
 
   return useQuery({
     queryKey: queryKeys.automationsOverview(shop),
@@ -97,16 +90,14 @@ export function useAutomationsOverview() {
         rules: Array<Record<string, unknown>>;
         totals?: Record<string, unknown>;
       }>('/api/automations/overview', shop);
-      const merged = mergeAutomationsFromCache(queryClient, shop, fresh);
-      writePageCache(cacheKey, merged);
-      return merged;
+      return mergeAutomationsFromCache(queryClient, shop, fresh);
     },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: true,
-    initialData: () => (cacheKey ? readPageCache(cacheKey) : undefined),
-    placeholderData: (previous) => previous,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    placeholderData: (previous) =>
+      previous ?? (shop ? queryClient.getQueryData(queryKeys.automationsOverview(shop)) : undefined),
   });
 }
 

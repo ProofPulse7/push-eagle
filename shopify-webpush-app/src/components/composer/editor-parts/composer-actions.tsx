@@ -5,32 +5,36 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { handleSendLivePreview } from '@/lib/notification-service';
-import { startWizardMediaUpload } from '@/lib/client/campaign-wizard-media';
 
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Save, Eye, Loader2 } from "lucide-react";
 
-type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
+type ImageValue = { file: File | null; preview: string | null };
+
+// Basic URL validation: starts with http/https and has a dot in it.
+const isValidUrl = (url: string) => {
+    try {
+        const newUrl = new URL(url);
+        return newUrl.protocol === 'http:' || newUrl.protocol === 'https:';
+    } catch (e) {
+        return false;
+    }
+};
+
 
 export const ComposerActions = ({
-    shopDomain,
     title,
     primaryLink,
     message,
     logo,
-    windowsHero,
     macHero,
-    androidHero,
     onContinueClick,
 }: {
-    shopDomain: string;
     title: string;
     primaryLink: string;
     message: string;
     logo: ImageValue;
-    windowsHero: ImageValue;
     macHero: ImageValue;
-    androidHero: ImageValue;
     onContinueClick: () => boolean;
 }) => {
     const { toast } = useToast();
@@ -83,6 +87,7 @@ export const ComposerActions = ({
             return;
         }
         setIsSaving(true);
+        // Simulate API call
         await new Promise(resolve => setTimeout(resolve, 1000));
         setIsSaving(false);
         toast({
@@ -93,25 +98,13 @@ export const ComposerActions = ({
 
     const handleContinue = () => {
         const isFormValid = onContinueClick();
-        if (!isFormValid) {
-            return;
+        if (isFormValid) {
+            const queryShop = new URLSearchParams(window.location.search).get('shop');
+            const scheduleHref = queryShop
+                ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
+                : '/campaigns/new/schedule';
+            router.push(scheduleHref);
         }
-
-        if (shopDomain) {
-            startWizardMediaUpload(shopDomain, {
-                imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
-                windowsImageUrl: windowsHero.preview,
-                macosImageUrl: macHero.preview,
-                androidImageUrl: androidHero.preview,
-                iconUrl: logo.preview,
-            });
-        }
-
-        const queryShop = new URLSearchParams(window.location.search).get('shop');
-        const scheduleHref = queryShop
-            ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
-            : '/campaigns/new/schedule';
-        router.push(scheduleHref);
     }
 
     return (

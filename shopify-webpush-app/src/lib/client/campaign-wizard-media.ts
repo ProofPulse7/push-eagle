@@ -5,12 +5,11 @@ import type { LaunchMediaCache } from '@/lib/client/campaign-launch-media-cache'
 type WizardMediaSlot = keyof LaunchMediaCache;
 
 const cacheKey = (shop: string) => `pe:wizard-launch-media:${shop.trim().toLowerCase()}`;
+const sourceKey = (shop: string) => `pe:wizard-launch-media-src:${shop.trim().toLowerCase()}`;
 
 type WizardLaunchMediaCache = LaunchMediaCache & {
   __sources?: Partial<Record<WizardMediaSlot, string>>;
 };
-
-const uploadInflight = new Map<string, Promise<LaunchMediaCache>>();
 
 const blobToDataUrl = (blob: Blob) =>
   new Promise<string>((resolve, reject) => {
@@ -125,11 +124,7 @@ const readWizardLaunchMediaBundle = (shop: string): WizardLaunchMediaCache | nul
   }
 };
 
-const writeWizardLaunchMediaCache = (
-  shop: string,
-  media: LaunchMediaCache,
-  sources: Partial<Record<WizardMediaSlot, string>>,
-) => {
+const writeWizardLaunchMediaCache = (shop: string, media: LaunchMediaCache, sources: Partial<Record<WizardMediaSlot, string>>) => {
   if (typeof window === 'undefined' || !shop.trim()) {
     return;
   }
@@ -152,7 +147,7 @@ export const clearWizardLaunchMediaCache = (shop: string) => {
 
   try {
     sessionStorage.removeItem(cacheKey(shop));
-    uploadInflight.delete(shop.trim().toLowerCase());
+    sessionStorage.removeItem(sourceKey(shop));
   } catch {
     // Ignore storage errors.
   }
@@ -178,25 +173,14 @@ const slotMatches = (
   return previousUrl === nextSource;
 };
 
-const isRemoteUrl = (value: string | null | undefined) => {
-  const trimmed = String(value ?? '').trim();
-  return trimmed.startsWith('http://') || trimmed.startsWith('https://');
-};
-
-const mergeLaunchMedia = (resolved: LaunchMediaCache): LaunchMediaCache => ({
-  ...resolved,
-  imageUrl:
-    resolved.imageUrl
-    ?? resolved.macosImageUrl
-    ?? resolved.windowsImageUrl
-    ?? resolved.androidImageUrl
-    ?? null,
-});
-
-const runPrepareWizardLaunchMedia = async (
+export const prepareWizardLaunchMedia = async (
   shopDomain: string,
   media: LaunchMediaCache,
 ): Promise<LaunchMediaCache> => {
+  if (!shopDomain.trim()) {
+    return media;
+  }
+
   const cached = readWizardLaunchMediaBundle(shopDomain);
   const sourceEntries: Array<[WizardMediaSlot, string | null | undefined]> = [
     ['windowsImageUrl', media.windowsImageUrl],
@@ -208,113 +192,40 @@ const runPrepareWizardLaunchMedia = async (
 
   const resolved: LaunchMediaCache = {};
   const sources: Partial<Record<WizardMediaSlot, string>> = {};
+  const tasks = sourceEntries.map(async ([slot, source]) => {
+    const trimmed = source?.trim();
+    if (!trimmed) {
+      return;
+    }
 
-  await Promise.all(
-    sourceEntries.map(async ([slot, source]) => {
-      const trimmed = source?.trim();
-      if (!trimmed) {
-        return;
-      }
+    sources[slot] = trimmed;
 
-      sources[slot] = trimmed;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      resolved[slot] = trimmed;
+      return;
+    }
 
-      if (isRemoteUrl(trimmed)) {
-        resolved[slot] = trimmed;
-        return;
-      }
+    const cachedValue = cached?.[slot];
+    const cachedSource = cached?.__sources?.[slot];
+    if (slotMatches(cachedSource, cachedValue, trimmed)) {
+      resolved[slot] = cachedValue ?? null;
+      return;
+    }
 
-      const cachedValue = cached?.[slot];
-      const cachedSource = cached?.__sources?.[slot];
-      if (slotMatches(cachedSource, cachedValue, trimmed) && isRemoteUrl(cachedValue)) {
-        resolved[slot] = cachedValue ?? null;
-        return;
-      }
-
-      resolved[slot] = await resolveUploadedUrl(shopDomain, trimmed);
-    }),
-  );
-
-  const merged = mergeLaunchMedia(resolved);
-  writeWizardLaunchMediaCache(shopDomain, merged, sources);
-  return merged;
-};
-
-export const prepareWizardLaunchMedia = async (
-  shopDomain: string,
-  media: LaunchMediaCache,
-): Promise<LaunchMediaCache> => {
-  if (!shopDomain.trim()) {
-    return media;
-  }
-
-  const shopKey = shopDomain.trim().toLowerCase();
-  const inflight = uploadInflight.get(shopKey);
-  if (inflight) {
-    return inflight;
-  }
-
-  const promise = runPrepareWizardLaunchMedia(shopDomain, media).finally(() => {
-    uploadInflight.delete(shopKey);
+    resolved[slot] = await resolveUploadedUrl(shopDomain, trimmed);
   });
 
-  uploadInflight.set(shopKey, promise);
-  return promise;
-};
+  await Promise.all(tasks);
 
-/** Fire-and-forget background upload (e.g. on Continue from editor). */
-export const startWizardMediaUpload = (shopDomain: string, media: LaunchMediaCache) => {
-  if (!shopDomain.trim()) {
-    return;
-  }
+  resolved.imageUrl =
+    resolved.imageUrl
+    ?? resolved.macosImageUrl
+    ?? resolved.windowsImageUrl
+    ?? resolved.androidImageUrl
+    ?? null;
 
-  void prepareWizardLaunchMedia(shopDomain, media).catch(() => undefined);
-};
-
-/** Prefer cached remote URLs; wait briefly for in-flight uploads before launch. */
-export const ensureWizardLaunchMediaReady = async (
-  shopDomain: string,
-  media: LaunchMediaCache,
-  options?: { timeoutMs?: number },
-): Promise<LaunchMediaCache> => {
-  const cached = readWizardLaunchMediaCache(shopDomain);
-  const needsUpload = (value: string | null | undefined) => {
-    const trimmed = String(value ?? '').trim();
-    return Boolean(trimmed) && !isRemoteUrl(trimmed);
-  };
-
-  const slots = [
-    media.windowsImageUrl,
-    media.macosImageUrl,
-    media.androidImageUrl,
-    media.iconUrl,
-  ];
-
-  if (cached && !slots.some(needsUpload)) {
-    return mergeLaunchMedia({
-      ...cached,
-      imageUrl: media.imageUrl ?? cached.imageUrl,
-      windowsImageUrl: media.windowsImageUrl ?? cached.windowsImageUrl,
-      macosImageUrl: media.macosImageUrl ?? cached.macosImageUrl,
-      androidImageUrl: media.androidImageUrl ?? cached.androidImageUrl,
-      iconUrl: media.iconUrl ?? cached.iconUrl,
-    });
-  }
-
-  const uploadPromise = prepareWizardLaunchMedia(shopDomain, media);
-  const timeoutMs = options?.timeoutMs ?? 12_000;
-
-  try {
-    return await Promise.race([
-      uploadPromise,
-      new Promise<LaunchMediaCache>((resolve) => {
-        window.setTimeout(() => {
-          resolve(readWizardLaunchMediaCache(shopDomain) ?? media);
-        }, timeoutMs);
-      }),
-    ]);
-  } catch {
-    return readWizardLaunchMediaCache(shopDomain) ?? media;
-  }
+  writeWizardLaunchMediaCache(shopDomain, resolved, sources);
+  return resolved;
 };
 
 export const fileToDataUrl = (file: File) =>

@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import type { DateRange } from 'react-day-picker';
 import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
 import { PlusCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CampaignsTable } from '@/components/campaigns/campaigns-table';
@@ -14,27 +15,32 @@ import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-l
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { queryKeys } from '@/lib/client/query-keys';
 
 export default function CampaignsPage() {
   const [date, setDate] = useState<DateRange | undefined>(undefined);
   const { atLimit } = useImpressionLimit();
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
+  const cachedData = shop ? queryClient.getQueryData<{ campaigns?: unknown[] }>(queryKeys.campaigns(shop)) : undefined;
   const { data, isLoading, isError, error, refetch, isFetching } = useCampaigns();
+  const effectiveData = data ?? cachedData;
   const statsPeriodLabel = formatCampaignDateRangeLabel(date);
   const loadError = isError
     ? error instanceof Error
       ? error.message
       : 'Failed to load campaigns.'
     : null;
-  const showInitialLoad = Boolean(shop) && isLoading && !data;
+  const showInitialLoad = Boolean(shop) && isLoading && !effectiveData;
   const showSessionWarning = !shop && !isLoading;
+  const hasCachedOrLiveData = Boolean(effectiveData) || Boolean(shop);
 
   return (
     <PageLoadingShell
       title="Campaigns"
       isLoading={showInitialLoad}
-      hasData={Boolean(data) || Boolean(loadError) || showSessionWarning || Boolean(shop)}
-      isFetching={isFetching && Boolean(data)}
+      hasData={hasCachedOrLiveData || Boolean(loadError) || showSessionWarning}
+      isFetching={isFetching && Boolean(effectiveData)}
       error={loadError}
     >
       <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
@@ -49,7 +55,7 @@ export default function CampaignsPage() {
           </div>
         ) : null}
 
-        {loadError ? (
+        {loadError && !effectiveData ? (
           <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-6 text-center">
             <p className="text-sm text-destructive">{loadError}</p>
             <Button className="mt-4" type="button" variant="outline" onClick={() => void refetch()}>
@@ -58,7 +64,7 @@ export default function CampaignsPage() {
           </div>
         ) : null}
 
-        {!loadError ? (
+        {!showSessionWarning ? (
           <>
             <div className="flex items-center justify-between">
               <div>

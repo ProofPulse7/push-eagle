@@ -202,7 +202,7 @@ export default function AutomationsPage() {
         return { rules: mergedRules };
     }, [data, statsData, visibleRuleKeysSet]);
 
-    const statsLoading = isLoading && !data?.rules?.length;
+    const statsLoading = isLoading && !data;
     const loadError =
         !activeShopDomain
             ? 'Missing shop context. Open the app from Shopify so automation data can load for the current store.'
@@ -268,7 +268,7 @@ export default function AutomationsPage() {
         <PageLoadingShell
             title="Automations"
             isLoading={statsLoading}
-            hasData={Boolean(data) || rules.length > 0}
+            hasData={Boolean(activeShopDomain) || Boolean(data)}
             isFetching={isFetching && Boolean(data)}
             error={loadError}
         >
@@ -293,7 +293,7 @@ export default function AutomationsPage() {
                     <AutomationStats date={date} />
                 </section>
 
-                {loadError ? (
+                {loadError && !data ? (
                     <Card className="rounded-2xl border-red-200 bg-red-50 shadow-sm">
                         <CardContent className="p-6 text-sm text-destructive">{loadError}</CardContent>
                     </Card>

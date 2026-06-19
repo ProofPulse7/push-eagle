@@ -2,8 +2,6 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useCampaignState } from '@/context/campaign-context';
-import { startWizardMediaUpload } from '@/lib/client/campaign-wizard-media';
-import { useShopDomain } from '@/hooks/use-shop-domain';
 
 import { Button } from "@/components/ui/button";
 
@@ -50,7 +48,7 @@ export function Composer() {
         androidHero, setAndroidHero,
         logo, setLogo,
     } = useCampaignState();
-    const shopDomain = useShopDomain();
+    
     const [showWindowsWarning, setShowWindowsWarning] = useState(false);
     const [showMacWarning, setShowMacWarning] = useState(false);
     const [showAndroidWarning, setShowAndroidWarning] = useState(false);
@@ -182,30 +180,6 @@ export function Composer() {
         return () => clearTimeout(handler);
     }, [title, message, primaryLink, windowsHero, macHero, androidHero, logo, actionButtons]);
     
-    useEffect(() => {
-        if (!shopDomain) {
-            return;
-        }
-
-        const timer = window.setTimeout(() => {
-            startWizardMediaUpload(shopDomain, {
-                imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
-                windowsImageUrl: windowsHero.preview,
-                macosImageUrl: macHero.preview,
-                androidImageUrl: androidHero.preview,
-                iconUrl: logo.preview,
-            });
-        }, 400);
-
-        return () => window.clearTimeout(timer);
-    }, [
-        shopDomain,
-        logo.preview,
-        windowsHero.preview,
-        macHero.preview,
-        androidHero.preview,
-    ]);
-
     const validateForm = () => {
         const newErrors: { title?: string, primaryLink?: string } = {};
         if (!title.trim()) {
@@ -338,14 +312,11 @@ export function Composer() {
                 </div>
                 <div className="shrink-0 p-4 border-t bg-card flex justify-end items-center">
                     <ComposerActions
-                        shopDomain={shopDomain}
                         title={title}
                         primaryLink={primaryLink}
                         message={message}
                         logo={logo}
-                        windowsHero={windowsHero}
                         macHero={macHero}
-                        androidHero={androidHero}
                         onContinueClick={validateForm}
                     />
                 </div>

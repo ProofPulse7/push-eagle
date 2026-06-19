@@ -9,6 +9,7 @@ import { AppSetupScreen } from '@/components/ui/loading-ui';
 import { usePersistRestored } from '@/components/providers/query-provider';
 import { useAppBootstrap } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { queryKeys } from '@/lib/client/query-keys';
 
 const SETUP_STEPS = [
   'Connecting to your store…',
@@ -46,10 +47,12 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
   const skip = shouldSkipSetup(pathname);
 
   const hasWarmCache = Boolean(shop && hasWarmShopCache(queryClient, shop));
+  const cachedBootstrap = shop ? queryClient.getQueryData(queryKeys.bootstrap(shop)) : undefined;
   const canRenderApp = skip || !shop || isRestored;
-  const needsBootstrap = Boolean(shop) && !hasWarmCache && !bootstrap.data && bootstrap.isLoading;
+  const hasBootstrapData = Boolean(bootstrap.data ?? cachedBootstrap);
+  const needsBootstrap = Boolean(shop) && !hasWarmCache && !hasBootstrapData;
   const showBootstrapOverlay =
-    canRenderApp && !skip && Boolean(shop) && needsBootstrap && !bootstrap.isError;
+    canRenderApp && !skip && Boolean(shop) && needsBootstrap && bootstrap.isPending && !bootstrap.isError;
 
   const [progress, setProgress] = useState(hasWarmCache ? 100 : 24);
   const [overlayVisible, setOverlayVisible] = useState(showBootstrapOverlay);
@@ -85,7 +88,7 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
     Math.floor((progress / 100) * SETUP_STEPS.length),
   );
 
-  if (!canRenderApp && !shop) {
+  if (!canRenderApp) {
     return <AppSetupScreen progress={18} stepLabel="Restoring your workspace…" />;
   }
 

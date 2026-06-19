@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { prefetchAppBootstrap, prefetchDashboardSummary } from '@/lib/client/query-fetchers';
+import { prefetchAppBootstrap, prefetchCampaignsList, prefetchDashboardSummary } from '@/lib/client/query-fetchers';
 import { queryKeys } from '@/lib/client/query-keys';
 import { subscribeShopSync } from '@/lib/client/shop-sync-bus';
 import { useShopDomain } from '@/hooks/use-shop-domain';
@@ -39,6 +39,7 @@ export function LiveShopSync() {
 
     void prefetchAppBootstrap(queryClient, shop);
     void prefetchDashboardSummary(queryClient, shop);
+    void prefetchCampaignsList(queryClient, shop);
 
     const unsubscribe = subscribeShopSync(shop, (event) => {
       if (event.type === 'all') {
@@ -83,8 +84,7 @@ export function LiveShopSync() {
     const onFocus = () => {
       void prefetchAppBootstrap(queryClient, shop);
       void prefetchDashboardSummary(queryClient, shop);
-      void queryClient.refetchQueries({ queryKey: queryKeys.campaigns(shop), type: 'active' });
-      void queryClient.refetchQueries({ queryKey: queryKeys.automationsOverview(shop), type: 'active' });
+      void prefetchCampaignsList(queryClient, shop);
     };
 
     window.addEventListener('focus', onFocus);
