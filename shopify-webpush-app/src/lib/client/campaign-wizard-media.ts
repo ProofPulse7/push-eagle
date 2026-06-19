@@ -83,6 +83,38 @@ const resolveUploadedUrl = async (shopDomain: string, value: string | null | und
   return uploadDataUrl(shopDomain, dataUrl);
 };
 
+const hasLaunchMediaUrl = (media: LaunchMediaCache) =>
+  Object.values(media).some((value) => typeof value === 'string' && value.trim().length > 0);
+
+export const buildMergedLaunchMedia = (
+  cached: LaunchMediaCache | null,
+  live: LaunchMediaCache,
+): LaunchMediaCache => {
+  const pick = (...values: Array<string | null | undefined>) => {
+    for (const value of values) {
+      const trimmed = value?.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+    return null;
+  };
+
+  return {
+    imageUrl: pick(
+      cached?.imageUrl,
+      live.imageUrl,
+      live.macosImageUrl,
+      live.windowsImageUrl,
+      live.androidImageUrl,
+    ),
+    windowsImageUrl: pick(cached?.windowsImageUrl, live.windowsImageUrl),
+    macosImageUrl: pick(cached?.macosImageUrl, live.macosImageUrl),
+    androidImageUrl: pick(cached?.androidImageUrl, live.androidImageUrl),
+    iconUrl: pick(cached?.iconUrl, live.iconUrl),
+  };
+};
+
 export const readWizardLaunchMediaCache = (shop: string): LaunchMediaCache | null => {
   if (typeof window === 'undefined' || !shop.trim()) {
     return null;
@@ -100,7 +132,7 @@ export const readWizardLaunchMediaCache = (shop: string): LaunchMediaCache | nul
     }
 
     const { __sources: _sources, ...media } = parsed;
-    return media;
+    return hasLaunchMediaUrl(media) ? media : null;
   } catch {
     return null;
   }
@@ -192,6 +224,23 @@ export const prepareWizardLaunchMedia = async (
 
   const resolved: LaunchMediaCache = {};
   const sources: Partial<Record<WizardMediaSlot, string>> = {};
+  const uploadCache = new Map<string, string | null>();
+
+  const resolveSource = async (source: string) => {
+    const trimmed = source.trim();
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+
+    if (uploadCache.has(trimmed)) {
+      return uploadCache.get(trimmed) ?? null;
+    }
+
+    const uploaded = await resolveUploadedUrl(shopDomain, trimmed);
+    uploadCache.set(trimmed, uploaded);
+    return uploaded;
+  };
+
   const tasks = sourceEntries.map(async ([slot, source]) => {
     const trimmed = source?.trim();
     if (!trimmed) {
@@ -200,19 +249,14 @@ export const prepareWizardLaunchMedia = async (
 
     sources[slot] = trimmed;
 
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      resolved[slot] = trimmed;
-      return;
-    }
-
     const cachedValue = cached?.[slot];
     const cachedSource = cached?.__sources?.[slot];
-    if (slotMatches(cachedSource, cachedValue, trimmed)) {
-      resolved[slot] = cachedValue ?? null;
+    if (slotMatches(cachedSource, cachedValue, trimmed) && cachedValue?.trim()) {
+      resolved[slot] = cachedValue;
       return;
     }
 
-    resolved[slot] = await resolveUploadedUrl(shopDomain, trimmed);
+    resolved[slot] = await resolveSource(trimmed);
   });
 
   await Promise.all(tasks);
@@ -224,7 +268,10 @@ export const prepareWizardLaunchMedia = async (
     ?? resolved.androidImageUrl
     ?? null;
 
-  writeWizardLaunchMediaCache(shopDomain, resolved, sources);
+  if (hasLaunchMediaUrl(resolved)) {
+    writeWizardLaunchMediaCache(shopDomain, resolved, sources);
+  }
+
   return resolved;
 };
 

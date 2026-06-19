@@ -166,8 +166,8 @@ export const applyLaunchMediaToCampaign = (
 
   const pick = (current: unknown, fallback?: string | null) => {
     const value = String(current ?? '').trim();
-    if (value.startsWith('blob:') || !value) {
-      return fallback ?? value;
+    if (!value || value.startsWith('blob:')) {
+      return fallback?.trim() || value;
     }
     return value;
   };

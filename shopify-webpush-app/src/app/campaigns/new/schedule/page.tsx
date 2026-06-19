@@ -15,6 +15,7 @@ import {
   clearWizardLaunchMediaCache,
   prepareWizardLaunchMedia,
   readWizardLaunchMediaCache,
+  buildMergedLaunchMedia,
 } from '@/lib/client/campaign-wizard-media';
 import { queryKeys } from '@/lib/client/query-keys';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
@@ -273,25 +274,25 @@ export default function ScheduleCampaignPage() {
             const launchStatus =
                 sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
 
-            const launchMedia = readWizardLaunchMediaCache(shopDomain) ?? {
+            const launchMedia = buildMergedLaunchMedia(readWizardLaunchMediaCache(shopDomain), {
                 imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
                 windowsImageUrl: windowsHero.preview,
                 macosImageUrl: macHero.preview,
                 androidImageUrl: androidHero.preview,
                 iconUrl: logo.preview,
-            };
+            });
 
-            void cacheLaunchMedia(shopDomain, optimisticId, launchMedia);
+            const displayMedia = await cacheLaunchMedia(shopDomain, optimisticId, launchMedia);
 
             prependOptimisticCampaign(queryClient, shopDomain, {
                 id: optimisticId,
                 title: title || 'Untitled Campaign',
                 body: message || '',
-                image_url: launchMedia.imageUrl,
-                windows_image_url: launchMedia.windowsImageUrl,
-                macos_image_url: launchMedia.macosImageUrl,
-                android_image_url: launchMedia.androidImageUrl,
-                icon_url: launchMedia.iconUrl,
+                image_url: displayMedia.imageUrl,
+                windows_image_url: displayMedia.windowsImageUrl,
+                macos_image_url: displayMedia.macosImageUrl,
+                android_image_url: displayMedia.androidImageUrl,
+                icon_url: displayMedia.iconUrl,
                 segment_id: segmentId,
                 status: launchStatus,
                 created_at: new Date().toISOString(),
@@ -329,85 +330,85 @@ export default function ScheduleCampaignPage() {
                 clearCampaignDraft(shopDomain);
             }
 
+            const runBackgroundLaunch = async () => {
+                try {
+                    const resolvedMedia = await prepareWizardLaunchMedia(shopDomain, launchMedia);
+
+                    const launchResponse = await fetch('/api/campaigns/launch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            shopDomain,
+                            title: title || 'Untitled Campaign',
+                            body: message || ' ',
+                            targetUrl: primaryLink || '',
+                            segmentId,
+                            media: resolvedMedia,
+                            actionButtons: actionButtons
+                                .filter((button) => button.title?.trim() && button.link?.trim())
+                                .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
+                            maxBatches: 2000,
+                        }),
+                    });
+
+                    const launchResultPayload = await parseApiResponse(launchResponse);
+                    const launchResult = launchResultPayload.json;
+                    if (!launchResponse.ok || !launchResult?.ok || !launchResult?.campaignId) {
+                        throw new Error(buildResponseError('Failed to launch campaign.', launchResultPayload));
+                    }
+
+                    const campaignId = String(launchResult.campaignId);
+                    const resolvedTargetCount = Number(
+                        launchResult.recipientCount
+                            ?? launchResult.targetRecipientCount
+                            ?? segmentSubscriberCount
+                            ?? 0,
+                    );
+
+                    const cachedMedia = await cacheLaunchMedia(shopDomain, campaignId, resolvedMedia);
+
+                    replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
+                        id: campaignId,
+                        title: title || 'Untitled Campaign',
+                        body: message || '',
+                        image_url: cachedMedia.imageUrl ?? resolvedMedia.imageUrl ?? displayMedia.imageUrl,
+                        windows_image_url: cachedMedia.windowsImageUrl ?? resolvedMedia.windowsImageUrl ?? displayMedia.windowsImageUrl,
+                        macos_image_url: cachedMedia.macosImageUrl ?? resolvedMedia.macosImageUrl ?? displayMedia.macosImageUrl,
+                        android_image_url: cachedMedia.androidImageUrl ?? resolvedMedia.androidImageUrl ?? displayMedia.androidImageUrl,
+                        icon_url: cachedMedia.iconUrl ?? resolvedMedia.iconUrl ?? displayMedia.iconUrl,
+                        segment_id: segmentId,
+                        status: 'sending',
+                        created_at: new Date().toISOString(),
+                        sent_at: new Date().toISOString(),
+                        delivery_count: 0,
+                        target_recipient_count: resolvedTargetCount,
+                        click_count: 0,
+                        revenue_cents: 0,
+                    });
+
+                    clearWizardLaunchMediaCache(shopDomain);
+                    void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
+                } catch (launchError) {
+                    patchOptimisticCampaign(queryClient, shopDomain, optimisticId, {
+                        status: 'draft',
+                    });
+                    toast({
+                        variant: 'destructive',
+                        title: 'Campaign launch failed',
+                        description:
+                            launchError instanceof Error
+                                ? launchError.message
+                                : 'Failed to queue campaign delivery.',
+                    });
+                }
+            };
+
             setIsLaunching(false);
             router.push(campaignsHref);
 
             if (launchStatus === 'sending') {
                 void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
-
-                void (async () => {
-                    try {
-                        const resolvedMedia = await prepareWizardLaunchMedia(shopDomain, launchMedia);
-
-                        const launchResponse = await fetch('/api/campaigns/launch', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            keepalive: true,
-                            body: JSON.stringify({
-                                shopDomain,
-                                title: title || 'Untitled Campaign',
-                                body: message || ' ',
-                                targetUrl: primaryLink || '',
-                                segmentId,
-                                media: resolvedMedia,
-                                actionButtons: actionButtons
-                                    .filter((button) => button.title?.trim() && button.link?.trim())
-                                    .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
-                                maxBatches: 2000,
-                            }),
-                        });
-
-                        const launchResultPayload = await parseApiResponse(launchResponse);
-                        const launchResult = launchResultPayload.json;
-                        if (!launchResponse.ok || !launchResult?.ok || !launchResult?.campaignId) {
-                            throw new Error(buildResponseError('Failed to launch campaign.', launchResultPayload));
-                        }
-
-                        const campaignId = String(launchResult.campaignId);
-                        const resolvedTargetCount = Number(
-                            launchResult.recipientCount
-                                ?? launchResult.targetRecipientCount
-                                ?? segmentSubscriberCount
-                                ?? 0,
-                        );
-
-                        replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
-                            id: campaignId,
-                            title: title || 'Untitled Campaign',
-                            body: message || '',
-                            image_url: resolvedMedia.imageUrl ?? launchMedia.imageUrl,
-                            windows_image_url: resolvedMedia.windowsImageUrl ?? launchMedia.windowsImageUrl,
-                            macos_image_url: resolvedMedia.macosImageUrl ?? launchMedia.macosImageUrl,
-                            android_image_url: resolvedMedia.androidImageUrl ?? launchMedia.androidImageUrl,
-                            icon_url: resolvedMedia.iconUrl ?? launchMedia.iconUrl,
-                            segment_id: segmentId,
-                            status: 'sending',
-                            created_at: new Date().toISOString(),
-                            sent_at: new Date().toISOString(),
-                            delivery_count: 0,
-                            target_recipient_count: resolvedTargetCount,
-                            click_count: 0,
-                            revenue_cents: 0,
-                        });
-
-                        void cacheLaunchMedia(shopDomain, campaignId, resolvedMedia);
-                        clearWizardLaunchMediaCache(shopDomain);
-                        void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
-                    } catch (launchError) {
-                        patchOptimisticCampaign(queryClient, shopDomain, optimisticId, {
-                            status: 'draft',
-                        });
-                        toast({
-                            variant: 'destructive',
-                            title: 'Campaign launch failed',
-                            description:
-                                launchError instanceof Error
-                                    ? launchError.message
-                                    : 'Failed to queue campaign delivery.',
-                        });
-                    }
-                })();
-
+                void runBackgroundLaunch();
                 return;
             }
 
