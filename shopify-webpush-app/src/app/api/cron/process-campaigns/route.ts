@@ -1,13 +1,19 @@
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
-import { completeCronHeartbeat, listDueScheduledCampaigns, listQueuedCampaigns, sendCampaign, startCronHeartbeat } from '@/lib/server/data/store';
+import { deliverCampaignUntilComplete } from '@/lib/server/campaigns/deliver-campaign';
+import {
+  completeCronHeartbeat,
+  listDueScheduledCampaigns,
+  listQueuedCampaigns,
+  recoverStuckSendingCampaigns,
+  startCronHeartbeat,
+} from '@/lib/server/data/store';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 const isAuthorized = (request: Request) => {
-  // Vercel cron can arrive with varying header formats depending on platform/runtime.
   const vercelCronHeader = (request.headers.get('x-vercel-cron') ?? '').trim().toLowerCase();
   const userAgent = (request.headers.get('user-agent') ?? '').toLowerCase();
   if (vercelCronHeader === '1' || vercelCronHeader === 'true' || userAgent.includes('vercel-cron')) {
@@ -43,7 +49,7 @@ export async function GET(request: Request) {
     const shardCount = parsePositiveInt(url.searchParams.get('shardCount'), 1, 1, 128);
     const shardIndex = parsePositiveInt(url.searchParams.get('shardIndex'), 0, 0, shardCount - 1);
     const maxCampaigns = parsePositiveInt(url.searchParams.get('maxCampaigns'), 25, 1, 250);
-    const maxBatches = parsePositiveInt(url.searchParams.get('maxBatches'), 20, 1, 2000);
+    const maxBatches = parsePositiveInt(url.searchParams.get('maxBatches'), 100, 1, 2000);
     const workerId = request.headers.get('x-worker-id') ?? `worker-${shardIndex}`;
 
     heartbeatId = await startCronHeartbeat('process_campaigns', {
@@ -54,6 +60,7 @@ export async function GET(request: Request) {
       workerId,
     });
 
+    const recoveredCount = await recoverStuckSendingCampaigns(maxCampaigns, shardCount, shardIndex);
     const dueCampaigns = await listDueScheduledCampaigns(maxCampaigns, shardCount, shardIndex);
     const queuedCampaigns = await listQueuedCampaigns(maxCampaigns, shardCount, shardIndex);
     const candidates = [...dueCampaigns, ...queuedCampaigns];
@@ -71,7 +78,10 @@ export async function GET(request: Request) {
 
     for (const campaign of uniqueCandidates) {
       try {
-        const result = await sendCampaign(campaign.shop_domain, campaign.id, { maxBatches });
+        const result = await deliverCampaignUntilComplete(campaign.shop_domain, campaign.id, {
+          maxBatches,
+          maxRounds: 12,
+        });
         processed.push({
           campaignId: campaign.id,
           shopDomain: campaign.shop_domain,
@@ -93,6 +103,7 @@ export async function GET(request: Request) {
       shardIndex,
       maxCampaigns,
       maxBatches,
+      recoveredCount,
       dueCount: dueCampaigns.length,
       queuedCount: queuedCampaigns.length,
       candidateCount: uniqueCandidates.length,
@@ -109,6 +120,7 @@ export async function GET(request: Request) {
           candidateCount: uniqueCandidates.length,
           processedCount: responsePayload.processedCount,
           failedCount: responsePayload.failedCount,
+          recoveredCount,
         },
       });
     }

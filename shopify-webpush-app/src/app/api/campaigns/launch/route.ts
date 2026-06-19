@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -7,13 +8,14 @@ import {
   upsertCampaignDeliveryOptions,
   type CampaignDeliveryOptions,
 } from '@/lib/server/campaigns/delivery-options';
+import { deliverCampaignUntilComplete } from '@/lib/server/campaigns/deliver-campaign';
 import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import {
   countCampaignAudienceTokens,
   createCampaign,
+  ensureMerchantAccount,
   requeueCampaignForDelivery,
-  sendCampaign,
 } from '@/lib/server/data/store';
 import { resolveServerCampaignMediaUrl } from '@/lib/server/media/resolve-campaign-media';
 import { extractShopDomain } from '@/lib/server/shop-context';
@@ -65,51 +67,6 @@ const launchSchema = z.object({
   delivery: deliverySchema,
 });
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const deliverCampaignWithRetry = async (
-  shopDomain: string,
-  campaignId: string,
-  maxBatches: number,
-) => {
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
-    try {
-      return await sendCampaign(shopDomain, campaignId, { maxBatches });
-    } catch (error) {
-      lastError = error;
-      if (attempt < 4) {
-        await sleep(1000 * attempt);
-      }
-    }
-  }
-
-  await requeueCampaignForDelivery(shopDomain, campaignId);
-  throw lastError instanceof Error ? lastError : new Error('Campaign delivery failed after retries.');
-};
-
-const startBackgroundDelivery = (
-  shopDomain: string,
-  campaignId: string,
-  maxBatches: number,
-) => {
-  deferAfterResponse(async () => {
-    try {
-      await deliverCampaignWithRetry(shopDomain, campaignId, maxBatches);
-    } catch (error) {
-      console.error('[campaigns/launch] background delivery failed', {
-        shopDomain,
-        campaignId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await requeueCampaignForDelivery(shopDomain, campaignId).catch(() => undefined);
-    } finally {
-      void invalidateShopDashboardCaches(shopDomain);
-    }
-  });
-};
-
 export async function POST(request: Request) {
   try {
     const body = launchSchema.parse(await request.json());
@@ -152,6 +109,107 @@ export async function POST(request: Request) {
       }
     }
 
+    const segmentId = body.segmentId && body.segmentId !== '' ? body.segmentId : 'all';
+    const recipientCount = await countCampaignAudienceTokens(shopDomain, segmentId);
+    const notificationBody = buildFlashSaleNotificationBody(body.body || ' ', delivery.flashSaleConfig);
+
+    const campaignId = randomUUID();
+    const sql = getNeonSql();
+
+    if (delivery.sendingOption !== 'schedule') {
+      await ensureMerchantAccount(shopDomain);
+
+      await sql`
+        INSERT INTO campaigns (
+          id,
+          shop_domain,
+          title,
+          body,
+          target_url,
+          segment_id,
+          status,
+          sent_at,
+          target_recipient_count,
+          created_at
+        )
+        VALUES (
+          ${campaignId},
+          ${shopDomain},
+          ${body.title},
+          ${notificationBody},
+          ${body.targetUrl},
+          ${segmentId},
+          'queued',
+          NOW(),
+          ${recipientCount},
+          NOW()
+        )
+      `;
+
+      const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+      void bumpCronWakeNow();
+      void invalidateShopDashboardCaches(shopDomain);
+
+      deferAfterResponse(async () => {
+        try {
+          const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
+            resolveServerCampaignMediaUrl(shopDomain, media.iconUrl ?? null),
+            resolveServerCampaignMediaUrl(shopDomain, media.windowsImageUrl ?? null),
+            resolveServerCampaignMediaUrl(shopDomain, media.macosImageUrl ?? null),
+            resolveServerCampaignMediaUrl(shopDomain, media.androidImageUrl ?? null),
+          ]);
+
+          const listImageUrl =
+            (await resolveServerCampaignMediaUrl(shopDomain, media.imageUrl ?? null))
+            ?? macosImageUrl
+            ?? windowsImageUrl
+            ?? androidImageUrl;
+
+          await sql`
+            UPDATE campaigns
+            SET
+              icon_url = ${iconUrl},
+              image_url = ${listImageUrl},
+              windows_image_url = ${windowsImageUrl},
+              macos_image_url = ${macosImageUrl},
+              android_image_url = ${androidImageUrl},
+              action_buttons = ${JSON.stringify(body.actionButtons ?? [])}::jsonb
+            WHERE id = ${campaignId}
+              AND shop_domain = ${shopDomain}
+          `;
+
+          await upsertCampaignDeliveryOptions(sql, campaignId, shopDomain, delivery);
+          await deliverCampaignUntilComplete(shopDomain, campaignId, { maxBatches, maxRounds: 60 });
+        } catch (error) {
+          console.error('[campaigns/launch] deferred create/deliver failed', {
+            shopDomain,
+            campaignId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await requeueCampaignForDelivery(shopDomain, campaignId).catch(() => undefined);
+        } finally {
+          void invalidateShopDashboardCaches(shopDomain);
+        }
+      });
+
+      return NextResponse.json({
+        ok: true,
+        campaignId,
+        async: true,
+        queued: true,
+        scheduled: false,
+        completed: false,
+        recipientCount,
+        targetRecipientCount: recipientCount,
+        successCount: 0,
+        delivery_count: 0,
+        remainingRecipients: recipientCount,
+        message: delivery.smartDeliver
+          ? 'Campaign queued. Smart delivery is sending in optimized batches.'
+          : 'Campaign queued. Notifications are sending in the background.',
+      });
+    }
+
     const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
       resolveServerCampaignMediaUrl(shopDomain, media.iconUrl ?? null),
       resolveServerCampaignMediaUrl(shopDomain, media.windowsImageUrl ?? null),
@@ -165,10 +223,6 @@ export async function POST(request: Request) {
       ?? windowsImageUrl
       ?? androidImageUrl;
 
-    const segmentId = body.segmentId && body.segmentId !== '' ? body.segmentId : 'all';
-    const recipientCount = await countCampaignAudienceTokens(shopDomain, segmentId);
-    const notificationBody = buildFlashSaleNotificationBody(body.body || ' ', delivery.flashSaleConfig);
-
     const campaign = await createCampaign({
       shopDomain,
       title: body.title,
@@ -181,54 +235,22 @@ export async function POST(request: Request) {
       androidImageUrl,
       actionButtons: body.actionButtons,
       segmentId,
-      status: delivery.sendingOption === 'schedule' ? 'scheduled' : 'draft',
-      scheduledAt: delivery.sendingOption === 'schedule' ? delivery.scheduledAt ?? null : null,
+      status: 'scheduled',
+      scheduledAt: delivery.scheduledAt ?? null,
     });
 
-    const campaignId = String(campaign.id);
-    const sql = getNeonSql();
+    const resolvedCampaignId = String(campaign.id);
 
-    await upsertCampaignDeliveryOptions(sql, campaignId, shopDomain, delivery);
-
-    if (delivery.sendingOption === 'schedule') {
-      await sql`
-        UPDATE campaigns
-        SET
-          status = 'scheduled',
-          scheduled_at = ${delivery.scheduledAt ? new Date(delivery.scheduledAt) : null},
-          sent_at = NULL,
-          target_recipient_count = ${recipientCount}
-        WHERE id = ${campaignId}
-          AND shop_domain = ${shopDomain}
-      `;
-
-      const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
-      void bumpCronWakeNow();
-      void invalidateShopDashboardCaches(shopDomain);
-
-      return NextResponse.json({
-        ok: true,
-        campaignId,
-        async: false,
-        queued: false,
-        scheduled: true,
-        completed: false,
-        recipientCount,
-        targetRecipientCount: recipientCount,
-        successCount: 0,
-        delivery_count: 0,
-        remainingRecipients: recipientCount,
-        message: 'Campaign scheduled successfully.',
-      });
-    }
+    await upsertCampaignDeliveryOptions(sql, resolvedCampaignId, shopDomain, delivery);
 
     await sql`
       UPDATE campaigns
       SET
-        status = 'queued',
-        sent_at = NOW(),
+        status = 'scheduled',
+        scheduled_at = ${delivery.scheduledAt ? new Date(delivery.scheduledAt) : null},
+        sent_at = NULL,
         target_recipient_count = ${recipientCount}
-      WHERE id = ${campaignId}
+      WHERE id = ${resolvedCampaignId}
         AND shop_domain = ${shopDomain}
     `;
 
@@ -236,23 +258,19 @@ export async function POST(request: Request) {
     void bumpCronWakeNow();
     void invalidateShopDashboardCaches(shopDomain);
 
-    startBackgroundDelivery(shopDomain, campaignId, maxBatches);
-
     return NextResponse.json({
       ok: true,
-      campaignId,
-      async: true,
-      queued: true,
-      scheduled: false,
+      campaignId: resolvedCampaignId,
+      async: false,
+      queued: false,
+      scheduled: true,
       completed: false,
       recipientCount,
       targetRecipientCount: recipientCount,
       successCount: 0,
       delivery_count: 0,
       remainingRecipients: recipientCount,
-      message: delivery.smartDeliver
-        ? 'Campaign queued. Smart delivery is sending in optimized batches.'
-        : 'Campaign queued. Notifications are sending in the background.',
+      message: 'Campaign scheduled successfully.',
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to launch campaign.';

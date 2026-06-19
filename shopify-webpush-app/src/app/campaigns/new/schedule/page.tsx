@@ -258,7 +258,7 @@ export default function ScheduleCampaignPage() {
             }
 
             const isScheduled = sendingOption === 'schedule';
-            const launchStatus = isScheduled ? 'scheduled' : 'sending';
+            const launchStatus = isScheduled ? 'scheduled' : 'queued';
 
             const optimisticId = crypto.randomUUID();
 
@@ -286,7 +286,13 @@ export default function ScheduleCampaignPage() {
                 iconUrl: logo.preview,
             });
 
-            const displayMedia = await cacheLaunchMedia(shopDomain, optimisticId, launchMedia);
+            const displayMedia = {
+                imageUrl: launchMedia.imageUrl ?? macHero.preview ?? windowsHero.preview ?? androidHero.preview,
+                windowsImageUrl: launchMedia.windowsImageUrl ?? windowsHero.preview,
+                macosImageUrl: launchMedia.macosImageUrl ?? macHero.preview,
+                androidImageUrl: launchMedia.androidImageUrl ?? androidHero.preview,
+                iconUrl: launchMedia.iconUrl ?? logo.preview,
+            };
 
             prependOptimisticCampaign(queryClient, shopDomain, {
                 id: optimisticId,
@@ -300,7 +306,7 @@ export default function ScheduleCampaignPage() {
                 segment_id: segmentId,
                 status: launchStatus,
                 created_at: new Date().toISOString(),
-                sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
+                sent_at: launchStatus === 'queued' ? new Date().toISOString() : null,
                 scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
                 delivery_count: 0,
                 target_recipient_count: segmentSubscriberCount,
@@ -308,7 +314,7 @@ export default function ScheduleCampaignPage() {
                 revenue_cents: 0,
             });
 
-            if (launchStatus === 'sending') {
+            if (launchStatus === 'queued') {
                 bumpDashboardCampaignSent(queryClient, shopDomain);
             }
 
@@ -327,6 +333,15 @@ export default function ScheduleCampaignPage() {
             if (shopDomain) {
                 clearCampaignDraft(shopDomain);
             }
+
+            setIsLaunching(false);
+            const redirectHref = isScheduled
+                ? `${campaignsHref}${campaignsHref.includes('?') ? '&' : '?'}tab=scheduled`
+                : campaignsHref;
+            router.push(redirectHref);
+
+            void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
+            void cacheLaunchMedia(shopDomain, optimisticId, launchMedia).catch(() => undefined);
 
             const runBackgroundLaunch = async () => {
                 try {
@@ -363,7 +378,7 @@ export default function ScheduleCampaignPage() {
                             ?? segmentSubscriberCount
                             ?? 0,
                     );
-                    const resolvedStatus = launchResult.scheduled ? 'scheduled' : 'sending';
+                    const resolvedStatus = launchResult.scheduled ? 'scheduled' : 'queued';
 
                     const cachedMedia = await cacheLaunchMedia(shopDomain, campaignId, resolvedMedia);
 
@@ -379,7 +394,7 @@ export default function ScheduleCampaignPage() {
                         segment_id: segmentId,
                         status: resolvedStatus,
                         created_at: new Date().toISOString(),
-                        sent_at: resolvedStatus === 'sending' ? new Date().toISOString() : null,
+                        sent_at: resolvedStatus === 'queued' ? new Date().toISOString() : null,
                         scheduled_at: isScheduled ? scheduledAt?.toISOString() ?? null : null,
                         delivery_count: 0,
                         target_recipient_count: resolvedTargetCount,
@@ -404,13 +419,6 @@ export default function ScheduleCampaignPage() {
                 }
             };
 
-            setIsLaunching(false);
-            const redirectHref = isScheduled
-                ? `${campaignsHref}${campaignsHref.includes('?') ? '&' : '?'}tab=scheduled`
-                : campaignsHref;
-            router.push(redirectHref);
-
-            void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
             void runBackgroundLaunch();
         } catch (error) {
             toast({

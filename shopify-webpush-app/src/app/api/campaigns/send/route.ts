@@ -1,48 +1,21 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
+import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
+import { deliverCampaignUntilComplete } from '@/lib/server/campaigns/deliver-campaign';
 import { deferAfterResponse } from '@/lib/server/defer-after-response';
-import {
-  countCampaignAudienceTokens,
-  getCampaignById,
-  requeueCampaignForDelivery,
-  sendCampaign,
-} from '@/lib/server/data/store';
+import { getCampaignById, countCampaignAudienceTokens, requeueCampaignForDelivery } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
 const schema = z.object({
-  campaignId: z.string().min(1),
   shopDomain: z.string().optional(),
-  maxBatches: z.number().int().min(1).max(2000).optional(),
+  campaignId: z.string().min(1),
   async: z.boolean().optional(),
+  maxBatches: z.number().int().min(1).max(2000).optional(),
 });
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const deliverCampaignWithRetry = async (
-  shopDomain: string,
-  campaignId: string,
-  maxBatches: number,
-) => {
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      return await sendCampaign(shopDomain, campaignId, { maxBatches });
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) {
-        await sleep(1500 * attempt);
-      }
-    }
-  }
-
-  await requeueCampaignForDelivery(shopDomain, campaignId);
-  throw lastError instanceof Error ? lastError : new Error('Campaign delivery failed after retries.');
-};
 
 export async function POST(request: Request) {
   try {
@@ -51,7 +24,7 @@ export async function POST(request: Request) {
     const maxBatches = body.maxBatches ?? 2000;
     const runAsync = body.async === true;
 
-    const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+    const { invalidateShopDashboardCaches: invalidateCaches } = await import('@/lib/server/cache/api-kv-cache');
 
     if (runAsync) {
       const campaign = await getCampaignById(shopDomain, body.campaignId);
@@ -62,19 +35,20 @@ export async function POST(request: Request) {
           )
         : null;
 
-      void invalidateShopDashboardCaches(shopDomain);
+      void invalidateCaches(shopDomain);
 
       deferAfterResponse(async () => {
         try {
-          await deliverCampaignWithRetry(shopDomain, body.campaignId, maxBatches);
+          await deliverCampaignUntilComplete(shopDomain, body.campaignId, { maxBatches, maxRounds: 60 });
         } catch (error) {
           console.error('[campaigns/send] background delivery failed', {
             shopDomain,
             campaignId: body.campaignId,
             error: error instanceof Error ? error.message : String(error),
           });
+          await requeueCampaignForDelivery(shopDomain, body.campaignId).catch(() => undefined);
         } finally {
-          void invalidateShopDashboardCaches(shopDomain);
+          void invalidateCaches(shopDomain);
         }
       });
 
@@ -92,8 +66,8 @@ export async function POST(request: Request) {
       });
     }
 
-    const result = await deliverCampaignWithRetry(shopDomain, body.campaignId, maxBatches);
-    void invalidateShopDashboardCaches(shopDomain);
+    const result = await deliverCampaignUntilComplete(shopDomain, body.campaignId, { maxBatches, maxRounds: 60 });
+    void invalidateCaches(shopDomain);
 
     return NextResponse.json({
       ok: true,

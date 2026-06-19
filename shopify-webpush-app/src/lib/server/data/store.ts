@@ -6532,11 +6532,57 @@ export const listQueuedCampaigns = async (limit = 25, shardCount = 1, shardIndex
         ${safeShardCount} = 1
         OR MOD(ABS(hashtext(id)), ${safeShardCount}) = ${safeShardIndex}
       )
-    ORDER BY scheduled_at ASC NULLS LAST, created_at ASC
+    ORDER BY scheduled_at ASC NULLS LAST, sent_at ASC NULLS LAST, created_at ASC
     LIMIT ${limit}
   `;
 
   return rows as Array<{ id: string; shop_domain: string }>;
+};
+
+export const listStuckSendingCampaigns = async (limit = 25, shardCount = 1, shardIndex = 0) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
+  const safeShardIndex = Math.max(0, Math.min(Number(shardIndex) || 0, safeShardCount - 1));
+
+  const rows = await sql`
+    SELECT id, shop_domain
+    FROM campaigns
+    WHERE status = 'sending'
+      AND sent_at IS NOT NULL
+      AND sent_at < NOW() - INTERVAL '90 seconds'
+      AND (
+        ${safeShardCount} = 1
+        OR MOD(ABS(hashtext(id)), ${safeShardCount}) = ${safeShardIndex}
+      )
+    ORDER BY sent_at ASC
+    LIMIT ${limit}
+  `;
+
+  return rows as Array<{ id: string; shop_domain: string }>;
+};
+
+export const recoverStuckSendingCampaigns = async (limit = 25, shardCount = 1, shardIndex = 0) => {
+  const stuck = await listStuckSendingCampaigns(limit, shardCount, shardIndex);
+  if (stuck.length === 0) {
+    return 0;
+  }
+
+  const sql = getNeonSql();
+  const ids = stuck.map((item) => item.id);
+
+  await sql`
+    UPDATE campaigns
+    SET status = 'queued'
+    WHERE id = ANY(${ids}::text[])
+      AND status = 'sending'
+  `;
+
+  const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+  void bumpCronWakeNow();
+
+  return stuck.length;
 };
 
 export const getCampaignProgress = async (shopDomain: string, campaignId: string) => {
@@ -7877,14 +7923,20 @@ export const sendCampaign = async (
 
     await sql`
       UPDATE campaigns
-      SET status = 'queued', sent_at = NULL, delivery_count = 0
+      SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), delivery_count = 0
       WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
     `;
 
     const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
     void bumpCronWakeNow();
 
-    throw new Error('No active browser notification tokens found for this audience. Ask visitors to allow notifications first.');
+    return {
+      successCount: 0,
+      failureCount: 0,
+      recipientCount: 0,
+      completed: true,
+      remainingRecipients: 0,
+    };
   }
 
   try {
@@ -8192,14 +8244,20 @@ export const sendCampaign = async (
     if (deliveredCount === 0 && recipients.length > 0) {
       await sql`
         UPDATE campaigns
-        SET status = 'queued', sent_at = NULL, delivery_count = 0
+        SET status = 'queued', delivery_count = 0
         WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
       `;
 
       const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
       void bumpCronWakeNow();
 
-      throw new Error('Failed to deliver campaign notifications to the selected audience. Check subscriber tokens and try again.');
+      return {
+        successCount,
+        failureCount,
+        recipientCount: recipients.length,
+        completed: false,
+        remainingRecipients: recipients.length,
+      };
     }
 
     await sql`
@@ -8260,7 +8318,13 @@ export const sendCampaign = async (
     const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
     void bumpCronWakeNow();
 
-    throw error;
+    return {
+      successCount: 0,
+      failureCount: 0,
+      recipientCount: recipients.length,
+      completed: false,
+      remainingRecipients: recipients.length,
+    };
   }
 };
 
@@ -8273,7 +8337,7 @@ export const requeueCampaignForDelivery = async (shopDomain: string, campaignId:
     SET status = 'queued'
     WHERE id = ${campaignId}
       AND shop_domain = ${shopDomain}
-      AND status IN ('draft', 'sending')
+      AND status IN ('draft', 'sending', 'queued')
   `;
 
   const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
