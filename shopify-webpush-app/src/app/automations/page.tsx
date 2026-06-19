@@ -34,6 +34,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Separator } from '@/components/ui/separator';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { formatCurrency, formatNumber } from '@/lib/utils';
+import { isComingSoonAutomation } from '@/lib/client/coming-soon-automations';
 
 type RuleKey =
     | 'welcome_subscriber'
@@ -213,6 +214,10 @@ export default function AutomationsPage() {
               : error;
 
     const handleToggleStatus = (rule: AutomationRule) => {
+        if (isComingSoonAutomation(rule.ruleKey)) {
+            return;
+        }
+
         if (!activeShopDomain) {
             setError('Missing shop context. Refresh the app from Shopify and try again.');
             return;
@@ -305,10 +310,22 @@ export default function AutomationsPage() {
                         {rules.map((rule) => {
                                   const definition = automationDefinitions[rule.ruleKey];
                                   const Icon = definition.icon;
-                                  const footerStatusText = rule.enabled ? 'Activated.' : definition.footerStatusText;
+                                  const comingSoon = isComingSoonAutomation(rule.ruleKey);
+                                  const footerStatusText = comingSoon
+                                    ? 'Coming soon.'
+                                    : rule.enabled
+                                      ? 'Activated.'
+                                      : definition.footerStatusText;
 
                                   return (
-                                      <Card key={rule.id} className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
+                                      <Card key={rule.id} className="relative overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
+                                          {comingSoon ? (
+                                              <div className="absolute right-4 top-4 z-10">
+                                                  <Badge className="border-0 bg-violet-600 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-600">
+                                                      Coming soon
+                                                  </Badge>
+                                              </div>
+                                          ) : null}
                                           <CardHeader className="space-y-0 px-5 pb-4 pt-5">
                                               <div className="flex items-start gap-4">
                                                   <div className="rounded-2xl bg-slate-100 p-3 text-violet-600">
@@ -317,7 +334,9 @@ export default function AutomationsPage() {
                                                   <div className="flex-1">
                                                       <div className="flex flex-wrap items-center gap-2">
                                                           <CardTitle className="text-2xl font-semibold tracking-tight text-slate-950">{definition.title}</CardTitle>
-                                                          <Badge className={getStatusBadgeClassName(rule.enabled)}>{rule.enabled ? 'Active' : 'Inactive'}</Badge>
+                                                          {!comingSoon ? (
+                                                              <Badge className={getStatusBadgeClassName(rule.enabled)}>{rule.enabled ? 'Active' : 'Inactive'}</Badge>
+                                                          ) : null}
                                                       </div>
                                                       <CardDescription className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">{definition.description}</CardDescription>
                                                   </div>
@@ -342,22 +361,39 @@ export default function AutomationsPage() {
                                               <div className="flex items-center gap-2">
                                                   <Button
                                                       size="sm"
-                                                      className={getActionButtonClassName(rule.enabled)}
+                                                      className={
+                                                          comingSoon
+                                                              ? 'h-8 cursor-not-allowed rounded-lg bg-slate-200 px-3 text-xs font-semibold text-slate-400 hover:bg-slate-200'
+                                                              : getActionButtonClassName(rule.enabled)
+                                                      }
                                                       onClick={() => handleToggleStatus(rule)}
-                                                      disabled={!rule.enabled && atLimit}
+                                                      disabled={comingSoon || (!rule.enabled && atLimit)}
                                                       title={
-                                                          !rule.enabled && atLimit
-                                                              ? 'Monthly impression limit reached.'
-                                                              : undefined
+                                                          comingSoon
+                                                              ? 'This automation is coming soon.'
+                                                              : !rule.enabled && atLimit
+                                                                ? 'Monthly impression limit reached.'
+                                                                : undefined
                                                       }
                                                   >
-                                                      {rule.enabled ? 'Deactivate' : 'Activate'}
+                                                      {comingSoon ? 'Activate' : rule.enabled ? 'Deactivate' : 'Activate'}
                                                   </Button>
-                                                  <Button variant="outline" size="sm" className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100" asChild>
-                                                      <Link href={activeShopDomain ? `${definition.href}?shop=${encodeURIComponent(activeShopDomain)}` : definition.href}>
+                                                  {comingSoon ? (
+                                                      <Button
+                                                          variant="outline"
+                                                          size="sm"
+                                                          className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-400"
+                                                          disabled
+                                                      >
                                                           View Flow <ArrowRight className="ml-2 h-4 w-4" />
-                                                      </Link>
-                                                  </Button>
+                                                      </Button>
+                                                  ) : (
+                                                      <Button variant="outline" size="sm" className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100" asChild>
+                                                          <Link href={activeShopDomain ? `${definition.href}?shop=${encodeURIComponent(activeShopDomain)}` : definition.href}>
+                                                              View Flow <ArrowRight className="ml-2 h-4 w-4" />
+                                                          </Link>
+                                                      </Button>
+                                                  )}
                                               </div>
                                               <span className="text-sm text-slate-400">{footerStatusText}</span>
                                           </CardFooter>

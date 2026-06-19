@@ -11,6 +11,8 @@
     "db:cleanup-merchants": "node scripts/cleanup-merchant-tables.mjs",
     "automations:step": "node scripts/step-all-automations.mjs",
     "automations:test-six": "node scripts/verify-six-automations.mjs",
+    "automations:lock": "node scripts/toggle-coming-soon-automations.mjs lock",
+    "automations:unlock": "node scripts/toggle-coming-soon-automations.mjs unlock",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
