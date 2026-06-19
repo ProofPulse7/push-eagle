@@ -2,6 +2,8 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useCampaignState } from '@/context/campaign-context';
+import { startWizardMediaUpload } from '@/lib/client/campaign-wizard-media';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 
 import { Button } from "@/components/ui/button";
 
@@ -19,8 +21,7 @@ import { LogoUploaderEditor } from './editor-parts/logo-uploader-editor';
 import { ImageEditorSheet } from './editor-parts/image-editor-sheet';
 import { ScrollArea } from '../ui/scroll-area';
 import { ComposerActions } from './editor-parts/composer-actions';
-import { fileToDataUrl, buildWizardLaunchMediaInput, kickoffWizardMediaUpload } from '@/lib/client/campaign-wizard-media';
-import { useShopDomain } from '@/hooks/use-shop-domain';
+import { fileToDataUrl } from '@/lib/client/campaign-wizard-media';
 
 // Basic URL validation
 const isValidUrl = (url: string) => {
@@ -50,7 +51,6 @@ export function Composer() {
         logo, setLogo,
     } = useCampaignState();
     const shopDomain = useShopDomain();
-    
     const [showWindowsWarning, setShowWindowsWarning] = useState(false);
     const [showMacWarning, setShowMacWarning] = useState(false);
     const [showAndroidWarning, setShowAndroidWarning] = useState(false);
@@ -102,34 +102,12 @@ export function Composer() {
         reader.readAsDataURL(file);
     };
 
-    const queueMediaUpload = (overrides?: {
-        logoPreview?: string | null;
-        windowsPreview?: string | null;
-        macPreview?: string | null;
-        androidPreview?: string | null;
-    }) => {
-        if (!shopDomain) {
-            return;
-        }
-
-        kickoffWizardMediaUpload(
-            shopDomain,
-            buildWizardLaunchMediaInput({
-                logoPreview: overrides?.logoPreview ?? logo.preview,
-                windowsPreview: overrides?.windowsPreview ?? windowsHero.preview,
-                macPreview: overrides?.macPreview ?? macHero.preview,
-                androidPreview: overrides?.androidPreview ?? androidHero.preview,
-            }),
-        );
-    };
-
     const handleImageUpload = (file: File | undefined, imageType: 'windows' | 'mac' | 'android' | 'logo') => {
         if (!file) return;
 
         void fileToDataUrl(file).then((previewUrl) => {
             if (imageType === 'logo') {
                 setLogo({ file, preview: previewUrl, originalPreview: previewUrl });
-                queueMediaUpload({ logoPreview: previewUrl });
                 return;
             }
 
@@ -143,30 +121,22 @@ export function Composer() {
                 checkImageDimensions(file, 'windows');
                 checkImageDimensions(file, 'mac');
                 checkImageDimensions(file, 'android');
-                queueMediaUpload({
-                    windowsPreview: previewUrl,
-                    macPreview: previewUrl,
-                    androidPreview: previewUrl,
-                });
                 return;
             }
 
             if (imageType === 'windows') {
                 setWindowsHero(newImageValue);
                 checkImageDimensions(file, 'windows');
-                queueMediaUpload({ windowsPreview: previewUrl });
             }
 
             if (imageType === 'mac') {
                 setMacHero(newImageValue);
                 checkImageDimensions(file, 'mac');
-                queueMediaUpload({ macPreview: previewUrl });
             }
 
             if (imageType === 'android') {
                 setAndroidHero(newImageValue);
                 checkImageDimensions(file, 'android');
-                queueMediaUpload({ androidPreview: previewUrl });
             }
         }).catch(() => undefined);
     };
@@ -180,36 +150,22 @@ export function Composer() {
 
         if (type === 'logo') {
             setLogo({ ...logo, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
-            queueMediaUpload({ logoPreview: croppedDataUrl });
             return;
         }
 
         if (type === 'windows') {
             setWindowsHero({ ...windowsHero, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
-            queueMediaUpload({ windowsPreview: croppedDataUrl });
         } else if (type === 'mac') {
             setMacHero({ ...macHero, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
-            queueMediaUpload({ macPreview: croppedDataUrl });
         } else if (type === 'android') {
             setAndroidHero({ ...androidHero, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
-            queueMediaUpload({ androidPreview: croppedDataUrl });
         }
 
         const warningSetter = warningSetters[type as keyof typeof warningSetters];
         if (warningSetter) {
-            warningSetter(false);
+            warningSetter(false); // Hide warning after crop
         }
     };
-
-    useEffect(() => {
-        queueMediaUpload();
-    }, [
-        shopDomain,
-        logo.preview,
-        windowsHero.preview,
-        macHero.preview,
-        androidHero.preview,
-    ]);
 
     useEffect(() => {
         const hasContent = title || message || primaryLink || windowsHero.file || macHero.file || androidHero.file || logo.file || actionButtons.length > 0;
@@ -226,6 +182,30 @@ export function Composer() {
         return () => clearTimeout(handler);
     }, [title, message, primaryLink, windowsHero, macHero, androidHero, logo, actionButtons]);
     
+    useEffect(() => {
+        if (!shopDomain) {
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            startWizardMediaUpload(shopDomain, {
+                imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
+                windowsImageUrl: windowsHero.preview,
+                macosImageUrl: macHero.preview,
+                androidImageUrl: androidHero.preview,
+                iconUrl: logo.preview,
+            });
+        }, 400);
+
+        return () => window.clearTimeout(timer);
+    }, [
+        shopDomain,
+        logo.preview,
+        windowsHero.preview,
+        macHero.preview,
+        androidHero.preview,
+    ]);
+
     const validateForm = () => {
         const newErrors: { title?: string, primaryLink?: string } = {};
         if (!title.trim()) {
@@ -363,8 +343,8 @@ export function Composer() {
                         primaryLink={primaryLink}
                         message={message}
                         logo={logo}
-                        macHero={macHero}
                         windowsHero={windowsHero}
+                        macHero={macHero}
                         androidHero={androidHero}
                         onContinueClick={validateForm}
                     />

@@ -90,6 +90,12 @@ export function PageLoadingView({ title, description, className }: PageLoadingVi
   );
 }
 
+export function DataRefreshingBar({ label = 'Updating data…' }: { label?: string }) {
+  return (
+    <TopLoadingBar active className="z-[180]" />
+  );
+}
+
 type PageLoadingShellProps = {
   title: string;
   description?: string;
@@ -109,15 +115,21 @@ export function PageLoadingShell({
   error,
   children,
 }: PageLoadingShellProps) {
-  const showInitialSkeleton = isLoading && !hasData && !error;
-
-  if (showInitialSkeleton) {
+  if (!hasData && isLoading) {
     return <PageLoadingView title={title} description={description} />;
+  }
+
+  if (!hasData && !isLoading && !error) {
+    return (
+      <div className="px-4 py-6 sm:px-6 md:px-8 md:py-8">
+        <PageLoadingView title={title} description={description} />
+      </div>
+    );
   }
 
   return (
     <>
-      <TopLoadingBar active={Boolean(isFetching && hasData)} />
+      {hasData && isFetching ? <DataRefreshingBar label={`Refreshing ${title.toLowerCase()}…`} /> : null}
       {error ? (
         <p className="mx-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive sm:mx-6 md:mx-8">
           {error}

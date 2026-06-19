@@ -46,10 +46,10 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
   const skip = shouldSkipSetup(pathname);
 
   const hasWarmCache = Boolean(shop && hasWarmShopCache(queryClient, shop));
-  const canRenderApp = skip || !shop || isRestored || hasWarmCache;
-  const needsBootstrap = Boolean(shop) && !hasWarmCache && !bootstrap.data;
+  const canRenderApp = skip || !shop || isRestored;
+  const needsBootstrap = Boolean(shop) && !hasWarmCache && !bootstrap.data && bootstrap.isLoading;
   const showBootstrapOverlay =
-    canRenderApp && !skip && Boolean(shop) && needsBootstrap && !bootstrap.isError && !hasWarmCache;
+    canRenderApp && !skip && Boolean(shop) && needsBootstrap && !bootstrap.isError;
 
   const [progress, setProgress] = useState(hasWarmCache ? 100 : 24);
   const [overlayVisible, setOverlayVisible] = useState(showBootstrapOverlay);
@@ -85,7 +85,7 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
     Math.floor((progress / 100) * SETUP_STEPS.length),
   );
 
-  if (!canRenderApp) {
+  if (!canRenderApp && !shop) {
     return <AppSetupScreen progress={18} stepLabel="Restoring your workspace…" />;
   }
 

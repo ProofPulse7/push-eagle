@@ -5,11 +5,12 @@ import type { LaunchMediaCache } from '@/lib/client/campaign-launch-media-cache'
 type WizardMediaSlot = keyof LaunchMediaCache;
 
 const cacheKey = (shop: string) => `pe:wizard-launch-media:${shop.trim().toLowerCase()}`;
-const sourceKey = (shop: string) => `pe:wizard-launch-media-src:${shop.trim().toLowerCase()}`;
 
 type WizardLaunchMediaCache = LaunchMediaCache & {
   __sources?: Partial<Record<WizardMediaSlot, string>>;
 };
+
+const uploadInflight = new Map<string, Promise<LaunchMediaCache>>();
 
 const blobToDataUrl = (blob: Blob) =>
   new Promise<string>((resolve, reject) => {
@@ -124,7 +125,11 @@ const readWizardLaunchMediaBundle = (shop: string): WizardLaunchMediaCache | nul
   }
 };
 
-const writeWizardLaunchMediaCache = (shop: string, media: LaunchMediaCache, sources: Partial<Record<WizardMediaSlot, string>>) => {
+const writeWizardLaunchMediaCache = (
+  shop: string,
+  media: LaunchMediaCache,
+  sources: Partial<Record<WizardMediaSlot, string>>,
+) => {
   if (typeof window === 'undefined' || !shop.trim()) {
     return;
   }
@@ -147,7 +152,7 @@ export const clearWizardLaunchMediaCache = (shop: string) => {
 
   try {
     sessionStorage.removeItem(cacheKey(shop));
-    sessionStorage.removeItem(sourceKey(shop));
+    uploadInflight.delete(shop.trim().toLowerCase());
   } catch {
     // Ignore storage errors.
   }
@@ -173,14 +178,25 @@ const slotMatches = (
   return previousUrl === nextSource;
 };
 
-export const prepareWizardLaunchMedia = async (
+const isRemoteUrl = (value: string | null | undefined) => {
+  const trimmed = String(value ?? '').trim();
+  return trimmed.startsWith('http://') || trimmed.startsWith('https://');
+};
+
+const mergeLaunchMedia = (resolved: LaunchMediaCache): LaunchMediaCache => ({
+  ...resolved,
+  imageUrl:
+    resolved.imageUrl
+    ?? resolved.macosImageUrl
+    ?? resolved.windowsImageUrl
+    ?? resolved.androidImageUrl
+    ?? null,
+});
+
+const runPrepareWizardLaunchMedia = async (
   shopDomain: string,
   media: LaunchMediaCache,
 ): Promise<LaunchMediaCache> => {
-  if (!shopDomain.trim()) {
-    return media;
-  }
-
   const cached = readWizardLaunchMediaBundle(shopDomain);
   const sourceEntries: Array<[WizardMediaSlot, string | null | undefined]> = [
     ['windowsImageUrl', media.windowsImageUrl],
@@ -192,40 +208,113 @@ export const prepareWizardLaunchMedia = async (
 
   const resolved: LaunchMediaCache = {};
   const sources: Partial<Record<WizardMediaSlot, string>> = {};
-  const tasks = sourceEntries.map(async ([slot, source]) => {
-    const trimmed = source?.trim();
-    if (!trimmed) {
-      return;
-    }
 
-    sources[slot] = trimmed;
+  await Promise.all(
+    sourceEntries.map(async ([slot, source]) => {
+      const trimmed = source?.trim();
+      if (!trimmed) {
+        return;
+      }
 
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      resolved[slot] = trimmed;
-      return;
-    }
+      sources[slot] = trimmed;
 
-    const cachedValue = cached?.[slot];
-    const cachedSource = cached?.__sources?.[slot];
-    if (slotMatches(cachedSource, cachedValue, trimmed)) {
-      resolved[slot] = cachedValue ?? null;
-      return;
-    }
+      if (isRemoteUrl(trimmed)) {
+        resolved[slot] = trimmed;
+        return;
+      }
 
-    resolved[slot] = await resolveUploadedUrl(shopDomain, trimmed);
+      const cachedValue = cached?.[slot];
+      const cachedSource = cached?.__sources?.[slot];
+      if (slotMatches(cachedSource, cachedValue, trimmed) && isRemoteUrl(cachedValue)) {
+        resolved[slot] = cachedValue ?? null;
+        return;
+      }
+
+      resolved[slot] = await resolveUploadedUrl(shopDomain, trimmed);
+    }),
+  );
+
+  const merged = mergeLaunchMedia(resolved);
+  writeWizardLaunchMediaCache(shopDomain, merged, sources);
+  return merged;
+};
+
+export const prepareWizardLaunchMedia = async (
+  shopDomain: string,
+  media: LaunchMediaCache,
+): Promise<LaunchMediaCache> => {
+  if (!shopDomain.trim()) {
+    return media;
+  }
+
+  const shopKey = shopDomain.trim().toLowerCase();
+  const inflight = uploadInflight.get(shopKey);
+  if (inflight) {
+    return inflight;
+  }
+
+  const promise = runPrepareWizardLaunchMedia(shopDomain, media).finally(() => {
+    uploadInflight.delete(shopKey);
   });
 
-  await Promise.all(tasks);
+  uploadInflight.set(shopKey, promise);
+  return promise;
+};
 
-  resolved.imageUrl =
-    resolved.imageUrl
-    ?? resolved.macosImageUrl
-    ?? resolved.windowsImageUrl
-    ?? resolved.androidImageUrl
-    ?? null;
+/** Fire-and-forget background upload (e.g. on Continue from editor). */
+export const startWizardMediaUpload = (shopDomain: string, media: LaunchMediaCache) => {
+  if (!shopDomain.trim()) {
+    return;
+  }
 
-  writeWizardLaunchMediaCache(shopDomain, resolved, sources);
-  return resolved;
+  void prepareWizardLaunchMedia(shopDomain, media).catch(() => undefined);
+};
+
+/** Prefer cached remote URLs; wait briefly for in-flight uploads before launch. */
+export const ensureWizardLaunchMediaReady = async (
+  shopDomain: string,
+  media: LaunchMediaCache,
+  options?: { timeoutMs?: number },
+): Promise<LaunchMediaCache> => {
+  const cached = readWizardLaunchMediaCache(shopDomain);
+  const needsUpload = (value: string | null | undefined) => {
+    const trimmed = String(value ?? '').trim();
+    return Boolean(trimmed) && !isRemoteUrl(trimmed);
+  };
+
+  const slots = [
+    media.windowsImageUrl,
+    media.macosImageUrl,
+    media.androidImageUrl,
+    media.iconUrl,
+  ];
+
+  if (cached && !slots.some(needsUpload)) {
+    return mergeLaunchMedia({
+      ...cached,
+      imageUrl: media.imageUrl ?? cached.imageUrl,
+      windowsImageUrl: media.windowsImageUrl ?? cached.windowsImageUrl,
+      macosImageUrl: media.macosImageUrl ?? cached.macosImageUrl,
+      androidImageUrl: media.androidImageUrl ?? cached.androidImageUrl,
+      iconUrl: media.iconUrl ?? cached.iconUrl,
+    });
+  }
+
+  const uploadPromise = prepareWizardLaunchMedia(shopDomain, media);
+  const timeoutMs = options?.timeoutMs ?? 12_000;
+
+  try {
+    return await Promise.race([
+      uploadPromise,
+      new Promise<LaunchMediaCache>((resolve) => {
+        window.setTimeout(() => {
+          resolve(readWizardLaunchMediaCache(shopDomain) ?? media);
+        }, timeoutMs);
+      }),
+    ]);
+  } catch {
+    return readWizardLaunchMediaCache(shopDomain) ?? media;
+  }
 };
 
 export const fileToDataUrl = (file: File) =>
@@ -235,59 +324,3 @@ export const fileToDataUrl = (file: File) =>
     reader.onerror = () => reject(new Error('Failed to read image file.'));
     reader.readAsDataURL(file);
   });
-
-const inflightUploads = new Map<string, Promise<LaunchMediaCache>>();
-
-const buildUploadKey = (shopDomain: string, media: LaunchMediaCache) =>
-  [
-    shopDomain.trim().toLowerCase(),
-    media.imageUrl ?? '',
-    media.windowsImageUrl ?? '',
-    media.macosImageUrl ?? '',
-    media.androidImageUrl ?? '',
-    media.iconUrl ?? '',
-  ].join('|');
-
-export const buildWizardLaunchMediaInput = (input: {
-  logoPreview?: string | null;
-  windowsPreview?: string | null;
-  macPreview?: string | null;
-  androidPreview?: string | null;
-}): LaunchMediaCache => ({
-  imageUrl: input.macPreview ?? input.windowsPreview ?? input.androidPreview ?? null,
-  windowsImageUrl: input.windowsPreview ?? null,
-  macosImageUrl: input.macPreview ?? null,
-  androidImageUrl: input.androidPreview ?? null,
-  iconUrl: input.logoPreview ?? null,
-});
-
-/** Fire-and-forget media upload used while the merchant is still editing. */
-export const kickoffWizardMediaUpload = (shopDomain: string, media: LaunchMediaCache) => {
-  if (!shopDomain.trim()) {
-    return;
-  }
-
-  const key = buildUploadKey(shopDomain, media);
-  if (inflightUploads.has(key)) {
-    return;
-  }
-
-  const task = prepareWizardLaunchMedia(shopDomain, media)
-    .catch(() => media)
-    .finally(() => {
-      inflightUploads.delete(key);
-    });
-
-  inflightUploads.set(key, task);
-};
-
-/** Wait for any in-flight wizard uploads before launch. */
-export const waitForWizardMediaUpload = async (shopDomain: string, media: LaunchMediaCache) => {
-  const key = buildUploadKey(shopDomain, media);
-  const inflight = inflightUploads.get(key);
-  if (inflight) {
-    await inflight.catch(() => undefined);
-  }
-
-  return prepareWizardLaunchMedia(shopDomain, media);
-};

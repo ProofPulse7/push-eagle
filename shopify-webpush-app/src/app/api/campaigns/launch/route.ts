@@ -40,6 +40,24 @@ const launchSchema = z.object({
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const isRemoteUrl = (value: string | null | undefined) => {
+  const trimmed = String(value ?? '').trim();
+  return trimmed.startsWith('http://') || trimmed.startsWith('https://');
+};
+
+const resolveMediaIfNeeded = async (shopDomain: string, value: string | null | undefined) => {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (isRemoteUrl(trimmed)) {
+    return trimmed;
+  }
+
+  return resolveServerCampaignMediaUrl(shopDomain, trimmed);
+};
+
 const deliverCampaignWithRetry = async (
   shopDomain: string,
   campaignId: string,
@@ -62,6 +80,27 @@ const deliverCampaignWithRetry = async (
   throw lastError instanceof Error ? lastError : new Error('Campaign delivery failed after retries.');
 };
 
+const startBackgroundDelivery = (
+  shopDomain: string,
+  campaignId: string,
+  maxBatches: number,
+) => {
+  deferAfterResponse(async () => {
+    try {
+      await deliverCampaignWithRetry(shopDomain, campaignId, maxBatches);
+    } catch (error) {
+      console.error('[campaigns/launch] background delivery failed', {
+        shopDomain,
+        campaignId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await requeueCampaignForDelivery(shopDomain, campaignId).catch(() => undefined);
+    } finally {
+      void invalidateShopDashboardCaches(shopDomain);
+    }
+  });
+};
+
 export async function POST(request: Request) {
   try {
     const body = launchSchema.parse(await request.json());
@@ -70,14 +109,14 @@ export async function POST(request: Request) {
     const media = body.media ?? {};
 
     const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
-      resolveServerCampaignMediaUrl(shopDomain, media.iconUrl ?? null),
-      resolveServerCampaignMediaUrl(shopDomain, media.windowsImageUrl ?? null),
-      resolveServerCampaignMediaUrl(shopDomain, media.macosImageUrl ?? null),
-      resolveServerCampaignMediaUrl(shopDomain, media.androidImageUrl ?? null),
+      resolveMediaIfNeeded(shopDomain, media.iconUrl ?? null),
+      resolveMediaIfNeeded(shopDomain, media.windowsImageUrl ?? null),
+      resolveMediaIfNeeded(shopDomain, media.macosImageUrl ?? null),
+      resolveMediaIfNeeded(shopDomain, media.androidImageUrl ?? null),
     ]);
 
     const listImageUrl =
-      (await resolveServerCampaignMediaUrl(shopDomain, media.imageUrl ?? null))
+      (await resolveMediaIfNeeded(shopDomain, media.imageUrl ?? null))
       ?? macosImageUrl
       ?? windowsImageUrl
       ?? androidImageUrl;
@@ -114,21 +153,7 @@ export async function POST(request: Request) {
     `;
 
     void invalidateShopDashboardCaches(shopDomain);
-
-    deferAfterResponse(async () => {
-      try {
-        await deliverCampaignWithRetry(shopDomain, campaignId, maxBatches);
-      } catch (error) {
-        console.error('[campaigns/launch] background delivery failed', {
-          shopDomain,
-          campaignId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        await requeueCampaignForDelivery(shopDomain, campaignId).catch(() => undefined);
-      } finally {
-        void invalidateShopDashboardCaches(shopDomain);
-      }
-    });
+    startBackgroundDelivery(shopDomain, campaignId, maxBatches);
 
     return NextResponse.json({
       ok: true,

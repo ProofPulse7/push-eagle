@@ -27,14 +27,13 @@ export default function CampaignsPage() {
       : 'Failed to load campaigns.'
     : null;
   const showInitialLoad = Boolean(shop) && isLoading && !data;
-  const showSessionWarning = !shop;
-  const hasVisibleData = Boolean(data) || Boolean(loadError) || showSessionWarning || !showInitialLoad;
+  const showSessionWarning = !shop && !isLoading;
 
   return (
     <PageLoadingShell
       title="Campaigns"
       isLoading={showInitialLoad}
-      hasData={hasVisibleData}
+      hasData={Boolean(data) || Boolean(loadError) || showSessionWarning || Boolean(shop)}
       isFetching={isFetching && Boolean(data)}
       error={loadError}
     >

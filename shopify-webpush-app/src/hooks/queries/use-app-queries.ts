@@ -16,6 +16,7 @@ import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
 import { mergeAutomationsFromCache } from '@/lib/client/optimistic-automations';
 import { mergeSegmentsFromCache } from '@/lib/client/optimistic-segments';
 import { fetchAppBootstrap, fetchCampaignsList, fetchDashboardSummary } from '@/lib/client/query-fetchers';
+import { readPageCache, writePageCache } from '@/lib/client/query-page-cache';
 import { clearPendingSettings } from '@/lib/client/pending-settings';
 import { type AppBootstrapPayload } from '@/lib/client/hydrate-app-cache';
 import { queryKeys } from '@/lib/client/query-keys';
@@ -52,14 +53,20 @@ export function useMerchantOverview() {
 export function useCampaigns() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
+  const cacheKey = shop ? JSON.stringify(queryKeys.campaigns(shop)) : '';
 
   return useQuery({
     queryKey: queryKeys.campaigns(shop),
-    queryFn: () => fetchCampaignsList(queryClient, shop),
+    queryFn: async () => {
+      const fresh = await fetchCampaignsList(queryClient, shop);
+      writePageCache(cacheKey, fresh);
+      return fresh;
+    },
     enabled: Boolean(shop),
     staleTime: 60_000,
-    refetchOnMount: true,
+    refetchOnMount: 'always',
     refetchOnWindowFocus: true,
+    initialData: () => (cacheKey ? readPageCache(cacheKey) : undefined),
     refetchInterval: (query) => {
       const campaigns = (query.state.data as { campaigns?: Array<Record<string, unknown>> } | undefined)?.campaigns;
       if (!Array.isArray(campaigns)) {
@@ -81,6 +88,7 @@ export function useCampaigns() {
 export function useAutomationsOverview() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
+  const cacheKey = shop ? JSON.stringify(queryKeys.automationsOverview(shop)) : '';
 
   return useQuery({
     queryKey: queryKeys.automationsOverview(shop),
@@ -89,12 +97,15 @@ export function useAutomationsOverview() {
         rules: Array<Record<string, unknown>>;
         totals?: Record<string, unknown>;
       }>('/api/automations/overview', shop);
-      return mergeAutomationsFromCache(queryClient, shop, fresh);
+      const merged = mergeAutomationsFromCache(queryClient, shop, fresh);
+      writePageCache(cacheKey, merged);
+      return merged;
     },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: true,
+    refetchOnMount: 'always',
     refetchOnWindowFocus: true,
+    initialData: () => (cacheKey ? readPageCache(cacheKey) : undefined),
     placeholderData: (previous) => previous,
   });
 }

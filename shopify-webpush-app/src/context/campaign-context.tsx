@@ -19,9 +19,8 @@ import {
 } from '@/lib/client/campaign-draft-storage';
 import {
   clearWizardLaunchMediaCache,
-  kickoffWizardMediaUpload,
-  prepareWizardLaunchMedia,
   readPersistableImageSource,
+  startWizardMediaUpload,
 } from '@/lib/client/campaign-wizard-media';
 import {
   isMyshopifyHost,
@@ -348,7 +347,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
           }),
         );
 
-        void kickoffWizardMediaUpload(shop, {
+        void startWizardMediaUpload(shop, {
           imageUrl: persistedMacHero.preview ?? persistedWindowsHero.preview ?? persistedAndroidHero.preview,
           windowsImageUrl: persistedWindowsHero.preview,
           macosImageUrl: persistedMacHero.preview,
