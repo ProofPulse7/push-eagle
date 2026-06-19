@@ -3,13 +3,13 @@
 
 import { useState, useMemo, startTransition, useEffect } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { formatDistanceToNow, isWithinInterval } from 'date-fns';
 import type { DateRange } from "react-day-picker";
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge";
-import { PlusCircle, Rocket, Users, Calendar, Hash, Copy, CheckCircle, Clock, AlertCircle, ChevronDown } from "lucide-react"
+import { PlusCircle, Rocket, Users, Calendar, Hash, Copy, CheckCircle, Clock, AlertCircle, ChevronDown, Loader2 } from "lucide-react"
 import { Card, CardContent } from "../ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Skeleton } from "../ui/skeleton";
@@ -19,6 +19,8 @@ import { applyLaunchMediaToCampaign } from '@/lib/client/campaign-launch-media-c
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { formatCampaignScheduleLabel } from '@/lib/client/campaign-schedule';
+import { duplicateCampaignToWizard } from '@/lib/client/campaign-duplicate';
+import { useToast } from '@/hooks/use-toast';
 
 type Campaign = {
     id: string;
@@ -127,12 +129,15 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
 
 export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined }) {
     const shopDomain = useShopDomain();
+    const router = useRouter();
+    const { toast } = useToast();
     const searchParams = useSearchParams();
     const { data, isLoading, isError, error: queryError } = useCampaigns();
     const initialTab = searchParams.get('tab');
     const [activeTab, setActiveTab] = useState(
         initialTab === 'scheduled' || initialTab === 'draft' ? initialTab : 'sent',
     );
+    const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
     const [visibleCount, setVisibleCount] = useState(CAMPAIGNS_PAGE_SIZE);
 
     const campaigns = useMemo(() => {
@@ -197,6 +202,31 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             draft: campaigns.filter(c => c.status === 'Draft').length,
         }
     }, [campaigns]);
+
+    const handleDuplicateCampaign = async (campaignId: string) => {
+        if (!shopDomain) {
+            toast({
+                variant: 'destructive',
+                title: 'Duplicate failed',
+                description: 'Open Push Eagle from Shopify Admin before duplicating campaigns.',
+            });
+            return;
+        }
+
+        setDuplicatingId(campaignId);
+        try {
+            const { detailsHref } = await duplicateCampaignToWizard(shopDomain, campaignId);
+            router.push(detailsHref);
+        } catch (error) {
+            toast({
+                variant: 'destructive',
+                title: 'Duplicate failed',
+                description: error instanceof Error ? error.message : 'Failed to duplicate campaign.',
+            });
+        } finally {
+            setDuplicatingId(null);
+        }
+    };
 
 
     const renderEmptyStateForTab = () => {
@@ -364,7 +394,21 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                     ) : null}
                                     <div className="flex items-center gap-1.5"><Hash className="h-3 w-3" /><span>ID: {campaign.id}</span></div>
                                 </div>
-                                <Button variant="outline" size="sm" className="mt-2 sm:mt-0 self-end sm:self-center"><Copy className="mr-2 h-3 w-3"/>Duplicate</Button>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="mt-2 sm:mt-0 self-end sm:self-center"
+                                    disabled={duplicatingId === campaign.id}
+                                    onClick={() => void handleDuplicateCampaign(campaign.id)}
+                                >
+                                    {duplicatingId === campaign.id ? (
+                                        <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                    ) : (
+                                        <Copy className="mr-2 h-3 w-3" />
+                                    )}
+                                    Duplicate
+                                </Button>
                             </div>
                         </div>
                     </Card>

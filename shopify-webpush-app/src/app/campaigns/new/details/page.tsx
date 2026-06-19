@@ -9,7 +9,6 @@ import { ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { useCampaignState } from '@/context/campaign-context';
@@ -26,36 +25,33 @@ type AudienceSegment = {
 
 const OptionCard = ({
   selected,
-  onClick,
   title,
   description,
   id,
-  trailing,
+  footer,
 }: {
   selected: boolean;
-  onClick: () => void;
   title: string;
   description: string;
   id: string;
-  trailing?: ReactNode;
+  footer?: ReactNode;
 }) => {
   return (
     <label
       htmlFor={id}
       className={cn(
-        'flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-4 transition-colors',
+        'flex cursor-pointer flex-col rounded-2xl border transition-colors',
         selected ? 'border-primary bg-primary/5' : 'border-border bg-background',
-        trailing ? 'md:items-center' : undefined,
       )}
     >
-      <RadioGroupItem id={id} value={id} className="mt-1 md:mt-0 shrink-0" />
-      <div className={cn('flex min-w-0 flex-1 flex-col gap-3 md:flex-row md:items-center md:justify-between', trailing && 'md:gap-4')}>
+      <div className="flex items-start gap-3 px-4 py-4">
+        <RadioGroupItem id={id} value={id} className="mt-1 shrink-0" />
         <div className="space-y-1">
           <p className="text-base font-semibold leading-none">{title}</p>
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>
-        {trailing}
       </div>
+      {footer ? <div className="border-t border-border/70 px-4 pb-4 pt-3">{footer}</div> : null}
     </label>
   );
 };
@@ -198,7 +194,7 @@ export default function CampaignDetailsPage() {
                     <span className="text-sm font-medium">Send Now</span>
                   </label>
                   <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                    <label htmlFor="send-schedule" className="flex cursor-pointer items-center gap-2 shrink-0">
+                    <label htmlFor="send-schedule" className="flex shrink-0 cursor-pointer items-center gap-2">
                       <RadioGroupItem id="send-schedule" value="schedule" />
                       <span className="text-sm font-medium">Schedule</span>
                     </label>
@@ -227,22 +223,20 @@ export default function CampaignDetailsPage() {
               <RadioGroup
                 value={campaignType}
                 onValueChange={(value) => setFlashSaleEnabled(value === 'flash')}
-                className="grid gap-3 md:grid-cols-2"
+                className="flex flex-col gap-3"
               >
                 <OptionCard
                   id="regular"
                   selected={campaignType === 'regular'}
-                  onClick={() => setFlashSaleEnabled(false)}
                   title="Regular campaign"
                   description="Send a campaign about your sale or products"
                 />
                 <OptionCard
                   id="flash"
                   selected={campaignType === 'flash'}
-                  onClick={() => setFlashSaleEnabled(true)}
                   title="Flash sale"
                   description="Send a campaign with an expiry date on it"
-                  trailing={
+                  footer={
                     flashSaleEnabled ? (
                       <CampaignDateTimeFields
                         date={flashSaleExpiresAt}
@@ -250,8 +244,7 @@ export default function CampaignDetailsPage() {
                         onDateChange={setFlashSaleExpiresAt}
                         onTimeChange={setFlashSaleExpiresTime}
                         minDate={today}
-                        variant="inline"
-                        className="w-full md:max-w-[340px]"
+                        variant="stacked"
                       />
                     ) : null
                   }

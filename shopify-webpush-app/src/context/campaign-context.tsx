@@ -27,6 +27,7 @@ import {
   normalizeMerchantWebsiteUrl,
   resolveMerchantWebsiteUrl,
 } from '@/lib/client/merchant-website-url';
+import { getDefaultCampaignScheduleDefaults } from '@/lib/client/campaign-schedule';
 
 type ActionButton = { title: string; link: string };
 type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
@@ -189,23 +190,23 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
   const [androidHero, setAndroidHero] = useState<ImageValue>(emptyImage);
   const [logo, setLogo] = useState<ImageValue>(emptyImage);
   const { storeUrl, logo: settingsLogo } = useSettings();
+  const scheduleDefaults = getDefaultCampaignScheduleDefaults();
   const [sendingOption, setSendingOption] = useState('now');
-  const [scheduledDate, setScheduledDate] = useState<Date | undefined>(new Date());
-  const [scheduledTime, setScheduledTime] = useState('10:00 AM');
+  const [scheduledDate, setScheduledDate] = useState<Date | undefined>(scheduleDefaults.scheduledDate);
+  const [scheduledTime, setScheduledTime] = useState(scheduleDefaults.scheduledTime);
   const [segmentId, setSegmentId] = useState('all');
   const [smartDeliver, setSmartDeliver] = useState(false);
   const [flashSaleEnabled, setFlashSaleEnabled] = useState(false);
   const [flashSaleDiscountPercent, setFlashSaleDiscountPercent] = useState(20);
   const [flashSaleOriginalPrice, setFlashSaleOriginalPrice] = useState(0);
   const [flashSaleSalePrice, setFlashSaleSalePrice] = useState(0);
-  const [flashSaleExpiresAt, setFlashSaleExpiresAt] = useState<Date | undefined>(
-    new Date(Date.now() + 24 * 60 * 60 * 1000),
-  );
-  const [flashSaleExpiresTime, setFlashSaleExpiresTime] = useState('10:00 AM');
+  const [flashSaleExpiresAt, setFlashSaleExpiresAt] = useState<Date | undefined>(scheduleDefaults.flashSaleExpiresAt);
+  const [flashSaleExpiresTime, setFlashSaleExpiresTime] = useState(scheduleDefaults.flashSaleExpiresTime);
   const [flashSaleUrgencyText, setFlashSaleUrgencyText] = useState('⏰ Limited time offer!');
   const [recurringPattern, setRecurringPattern] = useState('');
 
   const resetCampaignState = useCallback(() => {
+    const defaults = getDefaultCampaignScheduleDefaults();
     setTitle('');
     setMessage('');
     setPrimaryLink('');
@@ -215,16 +216,16 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     setAndroidHero(emptyImage());
     setLogo(emptyImage());
     setSendingOption('now');
-    setScheduledDate(new Date());
-    setScheduledTime('10:00 AM');
+    setScheduledDate(defaults.scheduledDate);
+    setScheduledTime(defaults.scheduledTime);
     setSegmentId('all');
     setSmartDeliver(false);
     setFlashSaleEnabled(false);
     setFlashSaleDiscountPercent(20);
     setFlashSaleOriginalPrice(0);
     setFlashSaleSalePrice(0);
-    setFlashSaleExpiresAt(new Date(Date.now() + 24 * 60 * 60 * 1000));
-    setFlashSaleExpiresTime('10:00 AM');
+    setFlashSaleExpiresAt(defaults.flashSaleExpiresAt);
+    setFlashSaleExpiresTime(defaults.flashSaleExpiresTime);
     setFlashSaleUrgencyText('⏰ Limited time offer!');
     setRecurringPattern('');
     primaryLinkInitializedRef.current = false;
@@ -241,8 +242,8 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     setAndroidHero(imageFromDraft(draft.androidHero));
     setLogo(imageFromDraft(draft.logo));
     setSendingOption(draft.sendingOption);
-    setScheduledDate(draft.scheduledDate ? new Date(draft.scheduledDate) : new Date());
-    setScheduledTime(draft.scheduledTime);
+    setScheduledDate(draft.scheduledDate ? new Date(draft.scheduledDate) : getDefaultCampaignScheduleDefaults().scheduledDate);
+    setScheduledTime(draft.scheduledTime || getDefaultCampaignScheduleDefaults().scheduledTime);
     setSegmentId(draft.segmentId);
     setSmartDeliver(draft.smartDeliver);
     setFlashSaleEnabled(draft.flashSaleEnabled);
@@ -250,9 +251,11 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     setFlashSaleOriginalPrice(draft.flashSaleOriginalPrice);
     setFlashSaleSalePrice(draft.flashSaleSalePrice);
     setFlashSaleExpiresAt(
-      draft.flashSaleExpiresAt ? new Date(draft.flashSaleExpiresAt) : new Date(Date.now() + 24 * 60 * 60 * 1000),
+      draft.flashSaleExpiresAt
+        ? new Date(draft.flashSaleExpiresAt)
+        : getDefaultCampaignScheduleDefaults().flashSaleExpiresAt,
     );
-    setFlashSaleExpiresTime(draft.flashSaleExpiresTime || '10:00 AM');
+    setFlashSaleExpiresTime(draft.flashSaleExpiresTime || getDefaultCampaignScheduleDefaults().flashSaleExpiresTime);
     setFlashSaleUrgencyText(draft.flashSaleUrgencyText);
     setRecurringPattern(draft.recurringPattern);
     primaryLinkInitializedRef.current = Boolean(draft.primaryLink.trim());

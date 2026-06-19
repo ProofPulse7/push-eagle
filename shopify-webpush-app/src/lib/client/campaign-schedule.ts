@@ -49,6 +49,42 @@ export const CAMPAIGN_TIME_OPTIONS = [
   '11:30 PM',
 ] as const;
 
+export const dateToCampaignTimeOption = (value: Date): string => {
+  const minutes = value.getMinutes();
+  const roundedMinutes = minutes < 15 ? 0 : minutes < 45 ? 30 : 0;
+  let hours = value.getHours();
+  if (minutes >= 45) {
+    hours = (hours + 1) % 24;
+  }
+
+  const meridiem = hours >= 12 ? 'PM' : 'AM';
+  const hour12 = hours % 12 || 12;
+  const candidate = `${hour12}:${roundedMinutes.toString().padStart(2, '0')} ${meridiem}`;
+
+  if ((CAMPAIGN_TIME_OPTIONS as readonly string[]).includes(candidate)) {
+    return candidate;
+  }
+
+  return CAMPAIGN_TIME_OPTIONS[0];
+};
+
+export const splitCampaignDateTime = (value: Date) => ({
+  date: new Date(value.getFullYear(), value.getMonth(), value.getDate()),
+  time: dateToCampaignTimeOption(value),
+});
+
+export const getDefaultCampaignScheduleDefaults = () => {
+  const now = new Date();
+  const flashExpiry = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+  return {
+    scheduledDate: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+    scheduledTime: dateToCampaignTimeOption(now),
+    flashSaleExpiresAt: new Date(flashExpiry.getFullYear(), flashExpiry.getMonth(), flashExpiry.getDate()),
+    flashSaleExpiresTime: dateToCampaignTimeOption(flashExpiry),
+  };
+};
+
 export const buildCampaignDateTime = (date?: Date, time?: string): Date | null => {
   if (!date || !time?.trim()) {
     return null;

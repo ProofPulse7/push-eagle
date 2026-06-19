@@ -7329,6 +7329,40 @@ export const getCampaignById = async (shopDomain: string, campaignId: string) =>
   return rows[0] ?? null;
 };
 
+export const getCampaignWithDetails = async (shopDomain: string, campaignId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT
+      c.*,
+      cs.schedule_type,
+      cs.send_at,
+      cs.smart_send_enabled,
+      cs.flash_sale_enabled AS schedule_flash_sale_enabled,
+      cs.flash_sale_config
+    FROM campaigns c
+    LEFT JOIN campaign_schedules cs ON cs.campaign_id = c.id
+    WHERE c.shop_domain = ${shopDomain}
+      AND c.id = ${campaignId}
+    LIMIT 1
+  `;
+
+  const row = rows[0] as Record<string, unknown> | undefined;
+  if (!row) {
+    return null;
+  }
+
+  const flashConfig = (row.flash_sale_config ?? {}) as Record<string, unknown>;
+  const scheduleFlashSale = Boolean(row.schedule_flash_sale_enabled);
+
+  return {
+    ...row,
+    flash_sale_enabled: Boolean(row.flash_sale_enabled) || scheduleFlashSale,
+    flash_sale_config: Object.keys(flashConfig).length > 0 ? flashConfig : null,
+  };
+};
+
 export const getCampaignStats = async (shopDomain: string, from?: Date | null, to?: Date | null) => {
   await ensureSchema();
   const sql = getNeonSql();
