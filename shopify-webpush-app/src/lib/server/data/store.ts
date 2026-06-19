@@ -6,7 +6,13 @@ import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
 import { sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
 import { buildFcmDataOnlyWebPushMessage } from '@/lib/server/push/fcm-web-push-message';
 import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
-import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
+import {
+  buildFlashSaleNotificationBody,
+  filterRecipientsForSmartDeliveryHour,
+  loadCampaignScheduleMeta,
+  upsertCampaignDeliveryOptions,
+  type CampaignDeliveryOptions,
+} from '@/lib/server/campaigns/delivery-options';
 import { deleteImageFromR2 } from '@/lib/server/media/r2';
 
 type CreateCampaignInput = {
@@ -882,6 +888,9 @@ const ensureSchema = async () => {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_schedules_campaign_id ON campaign_schedules(campaign_id)`;
+      await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS flash_sale_enabled BOOLEAN NOT NULL DEFAULT FALSE`;
+      await sql`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS flash_sale_ends_at TIMESTAMPTZ`;
 
       await sql`CREATE TABLE IF NOT EXISTS smart_delivery_metrics (
         id TEXT PRIMARY KEY,
@@ -7293,10 +7302,14 @@ export const listCampaigns = async (shopDomain: string, limit = 50) => {
   const sql = getNeonSql();
 
   return sql`
-    SELECT *
-    FROM campaigns
-    WHERE shop_domain = ${shopDomain}
-    ORDER BY created_at DESC
+    SELECT
+      c.*,
+      cs.smart_send_enabled,
+      cs.flash_sale_enabled AS schedule_flash_sale_enabled
+    FROM campaigns c
+    LEFT JOIN campaign_schedules cs ON cs.campaign_id = c.id
+    WHERE c.shop_domain = ${shopDomain}
+    ORDER BY c.created_at DESC
     LIMIT ${limit}
   `;
 };
@@ -7670,7 +7683,9 @@ export const sendCampaign = async (
 
   const campaignRows = await sql`
     UPDATE campaigns
-    SET status = 'sending'
+    SET
+      status = 'sending',
+      sent_at = COALESCE(sent_at, NOW())
     WHERE id = ${campaignId}
       AND shop_domain = ${shopDomain}
       AND status IN ('draft', 'scheduled', 'queued', 'sending')
@@ -7718,6 +7733,53 @@ export const sendCampaign = async (
   let recipients = dedupeRecipientsBySubscriber(
     await resolveCampaignAudience(shopDomain, campaign.segment_id, campaignId),
   );
+
+  const scheduleMeta = await loadCampaignScheduleMeta(sql, campaignId, shopDomain);
+  if (scheduleMeta?.flash_sale_enabled) {
+    if (scheduleMeta.flash_sale_ends_at) {
+      const endsAt = new Date(scheduleMeta.flash_sale_ends_at);
+      if (!Number.isNaN(endsAt.getTime()) && endsAt.getTime() <= Date.now()) {
+        await sql`
+          UPDATE campaigns
+          SET status = 'sent', sent_at = COALESCE(sent_at, NOW())
+          WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+        `;
+        throw new Error('Flash sale has expired.');
+      }
+    }
+
+    campaign.body = buildFlashSaleNotificationBody(campaign.body, scheduleMeta.flash_sale_config);
+    await sql`
+      UPDATE campaigns
+      SET body = ${campaign.body}
+      WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+    `;
+  }
+
+  const totalAudienceBeforeSmartFilter = recipients.length;
+  if (scheduleMeta?.smart_send_enabled && recipients.length > 0) {
+    const currentHour = new Date().getHours();
+    recipients = await filterRecipientsForSmartDeliveryHour(sql, shopDomain, recipients, currentHour);
+
+    if (recipients.length === 0) {
+      await sql`
+        UPDATE campaigns
+        SET status = 'queued', target_recipient_count = ${totalAudienceBeforeSmartFilter}
+        WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+      `;
+
+      const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+      void bumpCronWakeNow();
+
+      return {
+        successCount: 0,
+        failureCount: 0,
+        recipientCount: totalAudienceBeforeSmartFilter,
+        completed: false,
+        remainingRecipients: totalAudienceBeforeSmartFilter,
+      };
+    }
+  }
 
   const previousStatus = campaign.status === 'sending' ? 'draft' : campaign.status;
 
@@ -8064,6 +8126,34 @@ export const sendCampaign = async (
     `;
 
     const deliveredCount = Number(deliveredRows[0]?.count ?? 0);
+
+    if (scheduleMeta?.smart_send_enabled) {
+      const fullAudience = dedupeRecipientsBySubscriber(
+        await resolveCampaignAudience(shopDomain, campaign.segment_id, campaignId),
+      );
+
+      if (deliveredCount < fullAudience.length) {
+        await sql`
+          UPDATE campaigns
+          SET
+            status = 'queued',
+            target_recipient_count = ${fullAudience.length},
+            delivery_count = ${deliveredCount}
+          WHERE id = ${campaignId} AND shop_domain = ${shopDomain}
+        `;
+
+        const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+        void bumpCronWakeNow();
+
+        return {
+          successCount,
+          failureCount,
+          recipientCount: fullAudience.length,
+          completed: false,
+          remainingRecipients: Math.max(fullAudience.length - deliveredCount, 0),
+        };
+      }
+    }
 
     if (deliveredCount === 0 && recipients.length > 0) {
       await sql`

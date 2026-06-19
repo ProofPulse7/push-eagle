@@ -68,6 +68,8 @@ export interface CampaignContextType {
   setFlashSaleSalePrice: (price: number) => void;
   flashSaleExpiresAt: Date | undefined;
   setFlashSaleExpiresAt: (date: Date | undefined) => void;
+  flashSaleExpiresTime: string;
+  setFlashSaleExpiresTime: (value: string) => void;
   flashSaleUrgencyText: string;
   setFlashSaleUrgencyText: (text: string) => void;
   recurringPattern: string;
@@ -121,6 +123,7 @@ const buildDraftSnapshot = (state: {
   flashSaleOriginalPrice: number;
   flashSaleSalePrice: number;
   flashSaleExpiresAt: Date | undefined;
+  flashSaleExpiresTime: string;
   flashSaleUrgencyText: string;
   recurringPattern: string;
 }): CampaignDraftSnapshot => ({
@@ -154,6 +157,7 @@ const buildDraftSnapshot = (state: {
   flashSaleOriginalPrice: state.flashSaleOriginalPrice,
   flashSaleSalePrice: state.flashSaleSalePrice,
   flashSaleExpiresAt: state.flashSaleExpiresAt ? state.flashSaleExpiresAt.toISOString() : null,
+  flashSaleExpiresTime: state.flashSaleExpiresTime,
   flashSaleUrgencyText: state.flashSaleUrgencyText,
   recurringPattern: state.recurringPattern,
   updatedAt: Date.now(),
@@ -197,6 +201,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
   const [flashSaleExpiresAt, setFlashSaleExpiresAt] = useState<Date | undefined>(
     new Date(Date.now() + 24 * 60 * 60 * 1000),
   );
+  const [flashSaleExpiresTime, setFlashSaleExpiresTime] = useState('10:00 AM');
   const [flashSaleUrgencyText, setFlashSaleUrgencyText] = useState('⏰ Limited time offer!');
   const [recurringPattern, setRecurringPattern] = useState('');
 
@@ -219,6 +224,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     setFlashSaleOriginalPrice(0);
     setFlashSaleSalePrice(0);
     setFlashSaleExpiresAt(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    setFlashSaleExpiresTime('10:00 AM');
     setFlashSaleUrgencyText('⏰ Limited time offer!');
     setRecurringPattern('');
     primaryLinkInitializedRef.current = false;
@@ -246,6 +252,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     setFlashSaleExpiresAt(
       draft.flashSaleExpiresAt ? new Date(draft.flashSaleExpiresAt) : new Date(Date.now() + 24 * 60 * 60 * 1000),
     );
+    setFlashSaleExpiresTime(draft.flashSaleExpiresTime || '10:00 AM');
     setFlashSaleUrgencyText(draft.flashSaleUrgencyText);
     setRecurringPattern(draft.recurringPattern);
     primaryLinkInitializedRef.current = Boolean(draft.primaryLink.trim());
@@ -342,6 +349,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
             flashSaleOriginalPrice,
             flashSaleSalePrice,
             flashSaleExpiresAt,
+            flashSaleExpiresTime,
             flashSaleUrgencyText,
             recurringPattern,
           }),
@@ -382,6 +390,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     flashSaleOriginalPrice,
     flashSaleSalePrice,
     flashSaleExpiresAt,
+    flashSaleExpiresTime,
     flashSaleUrgencyText,
     recurringPattern,
   ]);
@@ -458,6 +467,8 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     setFlashSaleSalePrice,
     flashSaleExpiresAt,
     setFlashSaleExpiresAt,
+    flashSaleExpiresTime,
+    setFlashSaleExpiresTime,
     flashSaleUrgencyText,
     setFlashSaleUrgencyText,
     recurringPattern,

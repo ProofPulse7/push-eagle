@@ -4,12 +4,10 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { format } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useCampaignState, clearCampaignDraft } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
 import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
-import { runWithBackgroundRetries } from '@/lib/client/background-save';
 import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
 import {
   clearWizardLaunchMediaCache,
@@ -17,6 +15,7 @@ import {
   readWizardLaunchMediaCache,
   buildMergedLaunchMedia,
 } from '@/lib/client/campaign-wizard-media';
+import { buildCampaignDateTime, formatCampaignScheduleLabel } from '@/lib/client/campaign-schedule';
 import { queryKeys } from '@/lib/client/query-keys';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
 
@@ -29,27 +28,6 @@ import { IOSPreview } from '@/components/composer/previews/ios-preview';
 import { AndroidPreview } from '@/components/composer/previews/android-preview';
 import { WindowsPreview } from '@/components/composer/previews/windows-preview';
 import { MacOSPreview } from '@/components/composer/previews/macos-preview';
-
-const buildScheduledAt = (scheduledDate?: Date, scheduledTime?: string) => {
-    if (!scheduledDate || !scheduledTime) {
-        return null;
-    }
-
-    const match = scheduledTime.match(/^(\d{1,2}):(\d{2})\s?(AM|PM)$/i);
-    if (!match) {
-        return null;
-    }
-
-    const [, hourValue, minuteValue, meridiem] = match;
-    let hours = Number(hourValue) % 12;
-    if (meridiem.toUpperCase() === 'PM') {
-        hours += 12;
-    }
-
-    const result = new Date(scheduledDate);
-    result.setHours(hours, Number(minuteValue), 0, 0);
-    return result;
-};
 
 const sanitizeMediaUrl = (value: string | null | undefined): string | null => {
     const trimmed = value?.trim();
@@ -157,10 +135,8 @@ export default function ScheduleCampaignPage() {
         flashSaleOriginalPrice,
         flashSaleSalePrice,
         flashSaleExpiresAt,
+        flashSaleExpiresTime,
         flashSaleUrgencyText,
-        // Recurring
-        recurringPattern,
-        setRecurringPattern,
     } = useCampaignState();
     const [isSaving, setIsSaving] = useState(false);
     const [isLaunching, setIsLaunching] = useState(false);
@@ -174,7 +150,8 @@ export default function ScheduleCampaignPage() {
     const { shopDomain: settingsShop } = useSettings();
     const [queryShop, setQueryShop] = useState('');
     const shopDomain = queryShop || settingsShop || '';
-    const scheduledAt = buildScheduledAt(scheduledDate, scheduledTime);
+    const scheduledAt = buildCampaignDateTime(scheduledDate, scheduledTime);
+    const flashSaleEndsAt = buildCampaignDateTime(flashSaleExpiresAt, flashSaleExpiresTime);
 
     const editorHref = queryShop
         ? `/campaigns/new/editor?shop=${encodeURIComponent(queryShop)}`
@@ -270,9 +247,36 @@ export default function ScheduleCampaignPage() {
                 }
             }
 
+            if (flashSaleEnabled) {
+                if (!flashSaleEndsAt) {
+                    throw new Error('Choose a valid flash sale expiry date and time.');
+                }
+
+                if (flashSaleEndsAt.getTime() <= Date.now()) {
+                    throw new Error('Flash sale expiry must be in the future.');
+                }
+            }
+
+            const isScheduled = sendingOption === 'schedule';
+            const launchStatus = isScheduled ? 'scheduled' : 'sending';
+
             const optimisticId = crypto.randomUUID();
-            const launchStatus =
-                sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
+
+            const deliveryPayload = {
+                sendingOption: isScheduled ? 'schedule' as const : 'now' as const,
+                scheduledAt: isScheduled ? scheduledAt?.toISOString() ?? null : null,
+                smartDeliver,
+                flashSaleEnabled,
+                flashSaleConfig: flashSaleEnabled
+                    ? {
+                          discountPercent: flashSaleDiscountPercent,
+                          originalPrice: flashSaleOriginalPrice,
+                          salePrice: flashSaleSalePrice,
+                          expiresAt: flashSaleEndsAt?.toISOString() ?? null,
+                          urgencyText: flashSaleUrgencyText,
+                      }
+                    : null,
+            };
 
             const launchMedia = buildMergedLaunchMedia(readWizardLaunchMediaCache(shopDomain), {
                 imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
@@ -308,18 +312,12 @@ export default function ScheduleCampaignPage() {
                 bumpDashboardCampaignSent(queryClient, shopDomain);
             }
 
-            const toastTitle =
-                sendingOption === 'schedule'
-                    ? 'Campaign Scheduled!'
-                    : sendingOption === 'recurring'
-                      ? 'Recurring Campaign Set!'
-                      : 'Campaign Launched!';
-            const toastDescription =
-                sendingOption === 'schedule'
-                    ? 'Your campaign has been scheduled.'
-                    : sendingOption === 'recurring'
-                      ? 'Your recurring campaign has been configured.'
-                      : 'Your campaign is queued. Notifications send in the background.';
+            const toastTitle = isScheduled ? 'Campaign Scheduled!' : 'Campaign Launched!';
+            const toastDescription = isScheduled
+                ? 'Your campaign has been scheduled.'
+                : smartDeliver
+                  ? 'Your campaign is queued with smart delivery.'
+                  : 'Your campaign is queued. Notifications send in the background.';
 
             toast({
                 title: toastTitle,
@@ -348,6 +346,7 @@ export default function ScheduleCampaignPage() {
                                 .filter((button) => button.title?.trim() && button.link?.trim())
                                 .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
                             maxBatches: 2000,
+                            delivery: deliveryPayload,
                         }),
                     });
 
@@ -364,6 +363,7 @@ export default function ScheduleCampaignPage() {
                             ?? segmentSubscriberCount
                             ?? 0,
                     );
+                    const resolvedStatus = launchResult.scheduled ? 'scheduled' : 'sending';
 
                     const cachedMedia = await cacheLaunchMedia(shopDomain, campaignId, resolvedMedia);
 
@@ -377,9 +377,10 @@ export default function ScheduleCampaignPage() {
                         android_image_url: cachedMedia.androidImageUrl ?? resolvedMedia.androidImageUrl ?? displayMedia.androidImageUrl,
                         icon_url: cachedMedia.iconUrl ?? resolvedMedia.iconUrl ?? displayMedia.iconUrl,
                         segment_id: segmentId,
-                        status: 'sending',
+                        status: resolvedStatus,
                         created_at: new Date().toISOString(),
-                        sent_at: new Date().toISOString(),
+                        sent_at: resolvedStatus === 'sending' ? new Date().toISOString() : null,
+                        scheduled_at: isScheduled ? scheduledAt?.toISOString() ?? null : null,
                         delivery_count: 0,
                         target_recipient_count: resolvedTargetCount,
                         click_count: 0,
@@ -404,152 +405,13 @@ export default function ScheduleCampaignPage() {
             };
 
             setIsLaunching(false);
-            router.push(campaignsHref);
+            const redirectHref = isScheduled
+                ? `${campaignsHref}${campaignsHref.includes('?') ? '&' : '?'}tab=scheduled`
+                : campaignsHref;
+            router.push(redirectHref);
 
-            if (launchStatus === 'sending') {
-                void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
-                void runBackgroundLaunch();
-                return;
-            }
-
-            void (async () => {
-                let campaignId: string | null = null;
-                try {
-                    const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
-                        resolveCampaignMediaUrl(logo.preview, shopDomain),
-                        resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
-                        resolveCampaignMediaUrl(macHero.preview, shopDomain),
-                        resolveCampaignMediaUrl(androidHero.preview, shopDomain),
-                    ]);
-
-                    const createResponse = await runWithBackgroundRetries(() =>
-                        fetch('/api/campaigns', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            keepalive: true,
-                            body: JSON.stringify({
-                                shopDomain,
-                                title: title || 'Untitled Campaign',
-                                body: message || ' ',
-                                targetUrl: primaryLink || null,
-                                iconUrl,
-                                imageUrl: macosImageUrl,
-                                windowsImageUrl,
-                                macosImageUrl,
-                                androidImageUrl,
-                                actionButtons: actionButtons
-                                    .filter((button) => button.title?.trim() && button.link?.trim())
-                                    .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
-                                segmentId,
-                                status: sendingOption === 'schedule' ? 'scheduled' : 'draft',
-                                scheduledAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                                smartDeliver,
-                                flashSaleEnabled,
-                                flashSaleConfig: flashSaleEnabled ? {
-                                    discountPercent: flashSaleDiscountPercent,
-                                    originalPrice: flashSaleOriginalPrice,
-                                    salePrice: flashSaleSalePrice,
-                                    expiresAt: flashSaleExpiresAt?.toISOString(),
-                                    urgencyText: flashSaleUrgencyText,
-                                } : undefined,
-                                recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
-                            }),
-                        }),
-                    );
-
-                    const createPayload = await parseApiResponse(createResponse);
-                    const createResult = createPayload.json;
-                    if (!createResponse.ok || !createResult?.ok || !createResult?.campaign?.id) {
-                        throw new Error(buildResponseError('Failed to create campaign.', createPayload));
-                    }
-
-                    campaignId = String(createResult.campaign.id);
-
-                    replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
-                        id: campaignId,
-                        title: title || 'Untitled Campaign',
-                        body: message || '',
-                        image_url: macosImageUrl ?? windowsImageUrl ?? androidImageUrl ?? cachedMedia.imageUrl,
-                        windows_image_url: windowsImageUrl ?? cachedMedia.windowsImageUrl,
-                        macos_image_url: macosImageUrl ?? cachedMedia.macosImageUrl,
-                        android_image_url: androidImageUrl ?? cachedMedia.androidImageUrl,
-                        icon_url: iconUrl ?? cachedMedia.iconUrl,
-                        segment_id: segmentId,
-                        status: launchStatus,
-                        created_at: new Date().toISOString(),
-                        sent_at: launchStatus === 'sending' ? new Date().toISOString() : null,
-                        scheduled_at: sendingOption === 'schedule' ? scheduledAt?.toISOString() ?? null : null,
-                        delivery_count: 0,
-                        target_recipient_count: segmentSubscriberCount,
-                        click_count: 0,
-                        revenue_cents: 0,
-                    });
-
-                    if (sendingOption === 'schedule' || sendingOption === 'recurring') {
-                        if (sendingOption === 'schedule') {
-                            if (!scheduledAt) {
-                                throw new Error('Choose a valid scheduled date and time.');
-                            }
-
-                            if (scheduledAt.getTime() <= Date.now()) {
-                                throw new Error('Scheduled time must be in the future.');
-                            }
-                        }
-
-                        if (sendingOption === 'recurring' && !recurringPattern) {
-                            throw new Error('Choose a recurring pattern.');
-                        }
-
-                        const scheduleResponse = await fetch('/api/campaigns/schedule', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify({
-                                campaignId,
-                                shopDomain,
-                                scheduleType: sendingOption,
-                                sendAt: sendingOption === 'schedule' ? scheduledAt?.toISOString() : undefined,
-                                recurringPattern: sendingOption === 'recurring' ? recurringPattern : undefined,
-                                smartSendEnabled: smartDeliver,
-                                flashSaleEnabled,
-                                flashSaleConfig: flashSaleEnabled
-                                    ? {
-                                          discountPercent: flashSaleDiscountPercent,
-                                          originalPrice: flashSaleOriginalPrice,
-                                          salePrice: flashSaleSalePrice,
-                                          expiresAt: flashSaleExpiresAt?.toISOString(),
-                                          urgencyText: flashSaleUrgencyText,
-                                      }
-                                    : undefined,
-                            }),
-                        });
-
-                        const schedulePayload = await parseApiResponse(scheduleResponse);
-                        const scheduleResult = schedulePayload.json;
-                        if (!scheduleResponse.ok || !scheduleResult?.ok) {
-                            throw new Error(buildResponseError('Failed to schedule campaign.', schedulePayload));
-                        }
-                        return;
-                    }
-                } catch (backgroundError) {
-                    if (campaignId) {
-                        patchOptimisticCampaign(queryClient, shopDomain, campaignId, {
-                            status: 'sending',
-                        });
-                    }
-                    toast({
-                        variant: 'destructive',
-                        title: 'Campaign delivery issue',
-                        description:
-                            backgroundError instanceof Error
-                                ? backgroundError.message
-                                : 'Background delivery failed. Retrying automatically — check campaigns for status.',
-                    });
-                }
-            })();
+            void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
+            void runBackgroundLaunch();
         } catch (error) {
             toast({
                 variant: 'destructive',
@@ -666,7 +528,14 @@ export default function ScheduleCampaignPage() {
                         <CardContent className="space-y-4">
                             <div className="space-y-1">
                                 <p className="text-sm text-muted-foreground">Campaign type</p>
-                                <p className="font-medium">Regular campaign</p>
+                                <p className="font-medium">
+                                    {flashSaleEnabled ? 'Flash sale' : 'Regular campaign'}
+                                </p>
+                                {flashSaleEnabled && flashSaleEndsAt ? (
+                                    <p className="text-sm text-muted-foreground">
+                                        Expires {formatCampaignScheduleLabel(flashSaleEndsAt)}
+                                    </p>
+                                ) : null}
                             </div>
                             <div className="space-y-1">
                                 <p className="text-sm text-muted-foreground">Campaign gets delivered to</p>
@@ -675,12 +544,18 @@ export default function ScheduleCampaignPage() {
                             <div className="space-y-1">
                                 <p className="text-sm text-muted-foreground">Starts</p>
                                 <p className="font-medium flex items-center gap-2">
-                                    <Clock className="h-4 w-4" /> 
-                                    {sendingOption === 'schedule' && scheduledAt
-                                        ? format(scheduledAt, 'PPP p')
+                                    <Clock className="h-4 w-4" />
+                                    {sendingOption === 'schedule'
+                                        ? formatCampaignScheduleLabel(scheduledAt)
                                         : 'Immediately'}
                                 </p>
                             </div>
+                            {smartDeliver ? (
+                                <div className="space-y-1">
+                                    <p className="text-sm text-muted-foreground">Smart delivery</p>
+                                    <p className="font-medium">Enabled — sends when each subscriber is most active</p>
+                                </div>
+                            ) : null}
                         </CardContent>
                     </Card>
                 </div>

@@ -40,6 +40,9 @@ const transformCampaign = (campaign: any) => ({
   createdAt: campaign.created_at,
   scheduledAt: campaign.scheduled_at,
   sentAt: campaign.sent_at,
+  flashSaleEnabled: Boolean(campaign.flash_sale_enabled),
+  flashSaleEndsAt: campaign.flash_sale_ends_at,
+  smartSendEnabled: Boolean(campaign.smart_send_enabled),
   shopDomain: campaign.shop_domain,
 });
 

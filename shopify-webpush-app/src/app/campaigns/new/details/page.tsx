@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ChevronDown } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator';
 import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
+import { CampaignDateTimeFields } from '@/components/campaigns/campaign-date-time-fields';
 import { buildAudienceSegmentsFromCache } from '@/lib/client/optimistic-campaigns';
 import { cn } from '@/lib/utils';
 
@@ -29,12 +30,14 @@ const OptionCard = ({
   title,
   description,
   id,
+  trailing,
 }: {
   selected: boolean;
   onClick: () => void;
   title: string;
   description: string;
   id: string;
+  trailing?: ReactNode;
 }) => {
   return (
     <label
@@ -42,12 +45,16 @@ const OptionCard = ({
       className={cn(
         'flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-4 transition-colors',
         selected ? 'border-primary bg-primary/5' : 'border-border bg-background',
+        trailing ? 'md:items-center' : undefined,
       )}
     >
-      <RadioGroupItem id={id} value={id} className="mt-1" />
-      <div className="space-y-1">
-        <p className="text-base font-semibold leading-none">{title}</p>
-        <p className="text-sm text-muted-foreground">{description}</p>
+      <RadioGroupItem id={id} value={id} className="mt-1 md:mt-0 shrink-0" />
+      <div className={cn('flex min-w-0 flex-1 flex-col gap-3 md:flex-row md:items-center md:justify-between', trailing && 'md:gap-4')}>
+        <div className="space-y-1">
+          <p className="text-base font-semibold leading-none">{title}</p>
+          <p className="text-sm text-muted-foreground">{description}</p>
+        </div>
+        {trailing}
       </div>
     </label>
   );
@@ -68,6 +75,14 @@ export default function CampaignDetailsPage() {
     setSmartDeliver,
     flashSaleEnabled,
     setFlashSaleEnabled,
+    scheduledDate,
+    setScheduledDate,
+    scheduledTime,
+    setScheduledTime,
+    flashSaleExpiresAt,
+    setFlashSaleExpiresAt,
+    flashSaleExpiresTime,
+    setFlashSaleExpiresTime,
   } = useCampaignState();
 
   const [segments, setSegments] = useState<AudienceSegment[]>(() =>
@@ -149,6 +164,11 @@ export default function CampaignDetailsPage() {
     : '/campaigns';
 
   const campaignType = flashSaleEnabled ? 'flash' : 'regular';
+  const today = useMemo(() => {
+    const value = new Date();
+    value.setHours(0, 0, 0, 0);
+    return value;
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#f6f6fb] px-4 py-4 md:px-6 md:py-6">
@@ -170,16 +190,30 @@ export default function CampaignDetailsPage() {
               <RadioGroup
                 value={sendingOption === 'schedule' ? 'schedule' : 'now'}
                 onValueChange={(value) => setSendingOption(value === 'schedule' ? 'schedule' : 'now')}
-                className="flex flex-wrap gap-4"
+                className="space-y-3"
               >
-                <label htmlFor="send-now" className="flex cursor-pointer items-center gap-2">
-                  <RadioGroupItem id="send-now" value="now" />
-                  <span className="text-sm font-medium">Send Now</span>
-                </label>
-                <label htmlFor="send-schedule" className="flex cursor-pointer items-center gap-2">
-                  <RadioGroupItem id="send-schedule" value="schedule" />
-                  <span className="text-sm font-medium">Schedule</span>
-                </label>
+                <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
+                  <label htmlFor="send-now" className="flex cursor-pointer items-center gap-2">
+                    <RadioGroupItem id="send-now" value="now" />
+                    <span className="text-sm font-medium">Send Now</span>
+                  </label>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                    <label htmlFor="send-schedule" className="flex cursor-pointer items-center gap-2 shrink-0">
+                      <RadioGroupItem id="send-schedule" value="schedule" />
+                      <span className="text-sm font-medium">Schedule</span>
+                    </label>
+                    {sendingOption === 'schedule' ? (
+                      <CampaignDateTimeFields
+                        date={scheduledDate}
+                        time={scheduledTime}
+                        onDateChange={setScheduledDate}
+                        onTimeChange={setScheduledTime}
+                        minDate={today}
+                        variant="inline"
+                      />
+                    ) : null}
+                  </div>
+                </div>
               </RadioGroup>
             </section>
 
@@ -208,6 +242,19 @@ export default function CampaignDetailsPage() {
                   onClick={() => setFlashSaleEnabled(true)}
                   title="Flash sale"
                   description="Send a campaign with an expiry date on it"
+                  trailing={
+                    flashSaleEnabled ? (
+                      <CampaignDateTimeFields
+                        date={flashSaleExpiresAt}
+                        time={flashSaleExpiresTime}
+                        onDateChange={setFlashSaleExpiresAt}
+                        onTimeChange={setFlashSaleExpiresTime}
+                        minDate={today}
+                        variant="inline"
+                        className="w-full md:max-w-[340px]"
+                      />
+                    ) : null
+                  }
                 />
               </RadioGroup>
             </section>

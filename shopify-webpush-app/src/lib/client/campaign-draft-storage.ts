@@ -27,6 +27,7 @@ export type CampaignDraftSnapshot = {
   flashSaleOriginalPrice: number;
   flashSaleSalePrice: number;
   flashSaleExpiresAt: string | null;
+  flashSaleExpiresTime: string;
   flashSaleUrgencyText: string;
   recurringPattern: string;
   updatedAt: number;

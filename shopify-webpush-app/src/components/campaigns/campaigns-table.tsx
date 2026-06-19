@@ -3,6 +3,7 @@
 
 import { useState, useMemo, startTransition, useEffect } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { formatDistanceToNow, isWithinInterval } from 'date-fns';
 import type { DateRange } from "react-day-picker";
 
@@ -17,6 +18,7 @@ import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import { applyLaunchMediaToCampaign } from '@/lib/client/campaign-launch-media-cache';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { formatCampaignScheduleLabel } from '@/lib/client/campaign-schedule';
 
 type Campaign = {
     id: string;
@@ -24,6 +26,10 @@ type Campaign = {
     message?: string;
     imagePreviewUrl?: string | null;
     sendTime: string;
+    scheduledAt?: string | null;
+    sentAt?: string | null;
+    flashSaleEndsAt?: string | null;
+    smartDelivery?: boolean;
     segment: string;
     impressions: number;
     deliveryCount: number;
@@ -64,15 +70,21 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
         enriched.target_recipient_count ?? enriched.targetRecipientCount ?? 0,
     );
     let rawStatus = String(enriched.status ?? '').toLowerCase();
-    const sentAt = enriched.sent_at ?? enriched.sentAt;
+    const sentAtRaw = enriched.sent_at ?? enriched.sentAt;
     if (
         rawStatus === 'draft'
-        && (sentAt || targetRecipientCount > 0)
+        && (sentAtRaw || targetRecipientCount > 0)
         && deliveryCount === 0
     ) {
         rawStatus = 'sending';
     }
     const mappedStatus = statusMap[rawStatus] ?? 'Draft';
+    const scheduledAtRaw = enriched.scheduled_at ?? enriched.scheduledAt;
+    const scheduledAt = scheduledAtRaw ? String(scheduledAtRaw) : null;
+    const sentAt = sentAtRaw ? String(sentAtRaw) : null;
+    const flashSaleEndsAtRaw = enriched.flash_sale_ends_at ?? enriched.flashSaleEndsAt;
+    const flashSaleEndsAt = flashSaleEndsAtRaw ? String(flashSaleEndsAtRaw) : null;
+    const smartDelivery = Boolean(enriched.smart_send_enabled ?? enriched.smartSendEnabled);
     const impressions =
         mappedStatus === 'Sending'
             ? Math.max(targetRecipientCount, deliveryCount, 0)
@@ -92,7 +104,15 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
             macosImageUrl: (enriched.macos_image_url ?? enriched.macosImageUrl) as string | null | undefined,
             androidImageUrl: (enriched.android_image_url ?? enriched.androidImageUrl) as string | null | undefined,
         }),
-        sendTime: String(enriched.sent_at ?? enriched.sentAt ?? enriched.created_at ?? enriched.createdAt ?? new Date().toISOString()),
+        sendTime: String(
+            mappedStatus === 'Scheduled' && scheduledAt
+                ? scheduledAt
+                : sentAt ?? scheduledAt ?? enriched.created_at ?? enriched.createdAt ?? new Date().toISOString(),
+        ),
+        scheduledAt,
+        sentAt,
+        flashSaleEndsAt,
+        smartDelivery,
         segment: enriched.segment_id === 'all' || !enriched.segment_id
             ? 'All Subscribers'
             : `Segment ${String(enriched.segment_id ?? enriched.segmentId ?? '')}`,
@@ -107,8 +127,12 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
 
 export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined }) {
     const shopDomain = useShopDomain();
+    const searchParams = useSearchParams();
     const { data, isLoading, isError, error: queryError } = useCampaigns();
-    const [activeTab, setActiveTab] = useState('sent');
+    const initialTab = searchParams.get('tab');
+    const [activeTab, setActiveTab] = useState(
+        initialTab === 'scheduled' || initialTab === 'draft' ? initialTab : 'sent',
+    );
     const [visibleCount, setVisibleCount] = useState(CAMPAIGNS_PAGE_SIZE);
 
     const campaigns = useMemo(() => {
@@ -255,6 +279,26 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                     );
                 };
 
+                const formatSendLabel = () => {
+                    if (campaign.status === 'Scheduled' && campaign.scheduledAt) {
+                        return `Sends ${formatCampaignScheduleLabel(new Date(campaign.scheduledAt))}`;
+                    }
+
+                    if ((campaign.status === 'Sent' || campaign.status === 'Sending') && campaign.sentAt) {
+                        return `Sent ${formatCampaignScheduleLabel(new Date(campaign.sentAt))}`;
+                    }
+
+                    if (campaign.status === 'Sending' && campaign.scheduledAt) {
+                        return `Sending (scheduled ${formatCampaignScheduleLabel(new Date(campaign.scheduledAt))})`;
+                    }
+
+                    return campaign.createdAt
+                        ? Date.now() - new Date(campaign.createdAt).getTime() < 60_000
+                            ? 'Created just now'
+                            : `Created ${formatDistanceToNow(new Date(campaign.createdAt), { addSuffix: true })}`
+                        : 'Created just now';
+                };
+
                 return (
                     <Card key={campaign.id} className="transition-shadow duration-300 hover:shadow-lg">
                         <div className="p-4 space-y-4">
@@ -305,7 +349,19 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                             <div className="pt-4 border-t flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                                 <div className="text-xs text-muted-foreground flex items-center gap-4 flex-wrap">
                                     <div className="flex items-center gap-1.5"><Users className="h-3 w-3" /><span>{campaign.segment}</span></div>
-                                    <div className="flex items-center gap-1.5"><Calendar className="h-3 w-3" /><span>{campaign.createdAt ? (Date.now() - new Date(campaign.createdAt).getTime() < 60_000 ? 'Just now' : formatDistanceToNow(new Date(campaign.createdAt), { addSuffix: true })) : 'Just now'}</span></div>
+                                    <div className="flex items-center gap-1.5"><Clock className="h-3 w-3" /><span>{formatSendLabel()}</span></div>
+                                    {campaign.flashSaleEndsAt ? (
+                                        <div className="flex items-center gap-1.5">
+                                            <Calendar className="h-3 w-3" />
+                                            <span>Expires {formatCampaignScheduleLabel(new Date(campaign.flashSaleEndsAt))}</span>
+                                        </div>
+                                    ) : null}
+                                    {campaign.smartDelivery ? (
+                                        <div className="flex items-center gap-1.5">
+                                            <Rocket className="h-3 w-3" />
+                                            <span>Smart delivery</span>
+                                        </div>
+                                    ) : null}
                                     <div className="flex items-center gap-1.5"><Hash className="h-3 w-3" /><span>ID: {campaign.id}</span></div>
                                 </div>
                                 <Button variant="outline" size="sm" className="mt-2 sm:mt-0 self-end sm:self-center"><Copy className="mr-2 h-3 w-3"/>Duplicate</Button>
