@@ -15,6 +15,8 @@ import {
   clearWizardLaunchMediaCache,
   prepareWizardLaunchMedia,
   readWizardLaunchMediaCache,
+  waitForWizardMediaUpload,
+  buildWizardLaunchMediaInput,
 } from '@/lib/client/campaign-wizard-media';
 import { queryKeys } from '@/lib/client/query-keys';
 import { OS_PREVIEW_LOGOS, type PreviewDevice } from '@/lib/client/preview-assets';
@@ -229,13 +231,12 @@ export default function ScheduleCampaignPage() {
             return;
         }
 
-        void prepareWizardLaunchMedia(shopDomain, {
-            imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
-            windowsImageUrl: windowsHero.preview,
-            macosImageUrl: macHero.preview,
-            androidImageUrl: androidHero.preview,
-            iconUrl: logo.preview,
-        }).catch(() => undefined);
+        void prepareWizardLaunchMedia(shopDomain, buildWizardLaunchMediaInput({
+            logoPreview: logo.preview,
+            windowsPreview: windowsHero.preview,
+            macPreview: macHero.preview,
+            androidPreview: androidHero.preview,
+        })).catch(() => undefined);
     }, [
         shopDomain,
         logo.preview,
@@ -273,15 +274,16 @@ export default function ScheduleCampaignPage() {
             const launchStatus =
                 sendingOption === 'schedule' || sendingOption === 'recurring' ? 'scheduled' : 'sending';
 
+            const mediaInput = buildWizardLaunchMediaInput({
+                logoPreview: logo.preview,
+                windowsPreview: windowsHero.preview,
+                macPreview: macHero.preview,
+                androidPreview: androidHero.preview,
+            });
+
             const cachedMedia =
                 readWizardLaunchMediaCache(shopDomain)
-                ?? (await prepareWizardLaunchMedia(shopDomain, {
-                    imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
-                    windowsImageUrl: windowsHero.preview,
-                    macosImageUrl: macHero.preview,
-                    androidImageUrl: androidHero.preview,
-                    iconUrl: logo.preview,
-                }));
+                ?? (await waitForWizardMediaUpload(shopDomain, mediaInput));
 
             prependOptimisticCampaign(queryClient, shopDomain, {
                 id: optimisticId,
@@ -336,7 +338,7 @@ export default function ScheduleCampaignPage() {
                         ?? segmentSubscriberCount
                         ?? 0,
                 );
-                const resolvedStatus = launchResult.completed ? 'sent' : 'sending';
+                const resolvedStatus = 'sending';
 
                 replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
                     id: campaignId,
@@ -358,6 +360,17 @@ export default function ScheduleCampaignPage() {
                 });
 
                 void cacheLaunchMedia(shopDomain, campaignId, cachedMedia);
+
+                void fetch('/api/campaigns/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        shopDomain,
+                        campaignId,
+                        async: true,
+                        maxBatches: 2000,
+                    }),
+                }).catch(() => undefined);
             }
 
             const toastTitle =
@@ -371,7 +384,7 @@ export default function ScheduleCampaignPage() {
                     ? 'Your campaign has been scheduled.'
                     : sendingOption === 'recurring'
                       ? 'Your recurring campaign has been configured.'
-                      : 'Your campaign is being delivered in the background.';
+                      : 'Your campaign is being delivered to subscribers.';
 
             toast({
                 title: toastTitle,

@@ -90,15 +90,6 @@ export function PageLoadingView({ title, description, className }: PageLoadingVi
   );
 }
 
-export function DataRefreshingBar({ label = 'Updating data…' }: { label?: string }) {
-  return (
-    <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-      <span>{label}</span>
-    </div>
-  );
-}
-
 type PageLoadingShellProps = {
   title: string;
   description?: string;
@@ -118,27 +109,21 @@ export function PageLoadingShell({
   error,
   children,
 }: PageLoadingShellProps) {
-  if (!hasData && isLoading) {
+  const showInitialSkeleton = isLoading && !hasData && !error;
+
+  if (showInitialSkeleton) {
     return <PageLoadingView title={title} description={description} />;
   }
 
-  if (!hasData && !isLoading && !error) {
-    return (
-      <div className="px-4 py-6 sm:px-6 md:px-8 md:py-8">
-        <PageLoadingView title={title} description={description} />
-      </div>
-    );
-  }
-
   return (
-    <div className="flex flex-col gap-4">
-      {hasData && isFetching ? <DataRefreshingBar label={`Refreshing ${title.toLowerCase()}…`} /> : null}
+    <>
+      <TopLoadingBar active={Boolean(isFetching && hasData)} />
       {error ? (
         <p className="mx-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive sm:mx-6 md:mx-8">
           {error}
         </p>
       ) : null}
       {children}
-    </div>
+    </>
   );
 }

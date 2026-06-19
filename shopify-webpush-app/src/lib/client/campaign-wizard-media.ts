@@ -235,3 +235,59 @@ export const fileToDataUrl = (file: File) =>
     reader.onerror = () => reject(new Error('Failed to read image file.'));
     reader.readAsDataURL(file);
   });
+
+const inflightUploads = new Map<string, Promise<LaunchMediaCache>>();
+
+const buildUploadKey = (shopDomain: string, media: LaunchMediaCache) =>
+  [
+    shopDomain.trim().toLowerCase(),
+    media.imageUrl ?? '',
+    media.windowsImageUrl ?? '',
+    media.macosImageUrl ?? '',
+    media.androidImageUrl ?? '',
+    media.iconUrl ?? '',
+  ].join('|');
+
+export const buildWizardLaunchMediaInput = (input: {
+  logoPreview?: string | null;
+  windowsPreview?: string | null;
+  macPreview?: string | null;
+  androidPreview?: string | null;
+}): LaunchMediaCache => ({
+  imageUrl: input.macPreview ?? input.windowsPreview ?? input.androidPreview ?? null,
+  windowsImageUrl: input.windowsPreview ?? null,
+  macosImageUrl: input.macPreview ?? null,
+  androidImageUrl: input.androidPreview ?? null,
+  iconUrl: input.logoPreview ?? null,
+});
+
+/** Fire-and-forget media upload used while the merchant is still editing. */
+export const kickoffWizardMediaUpload = (shopDomain: string, media: LaunchMediaCache) => {
+  if (!shopDomain.trim()) {
+    return;
+  }
+
+  const key = buildUploadKey(shopDomain, media);
+  if (inflightUploads.has(key)) {
+    return;
+  }
+
+  const task = prepareWizardLaunchMedia(shopDomain, media)
+    .catch(() => media)
+    .finally(() => {
+      inflightUploads.delete(key);
+    });
+
+  inflightUploads.set(key, task);
+};
+
+/** Wait for any in-flight wizard uploads before launch. */
+export const waitForWizardMediaUpload = async (shopDomain: string, media: LaunchMediaCache) => {
+  const key = buildUploadKey(shopDomain, media);
+  const inflight = inflightUploads.get(key);
+  if (inflight) {
+    await inflight.catch(() => undefined);
+  }
+
+  return prepareWizardLaunchMedia(shopDomain, media);
+};

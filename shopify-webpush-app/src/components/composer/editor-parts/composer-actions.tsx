@@ -5,42 +5,51 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { handleSendLivePreview } from '@/lib/notification-service';
+import {
+  buildWizardLaunchMediaInput,
+  kickoffWizardMediaUpload,
+  waitForWizardMediaUpload,
+} from '@/lib/client/campaign-wizard-media';
 
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Save, Eye, Loader2 } from "lucide-react";
 
-type ImageValue = { file: File | null; preview: string | null };
-
-// Basic URL validation: starts with http/https and has a dot in it.
-const isValidUrl = (url: string) => {
-    try {
-        const newUrl = new URL(url);
-        return newUrl.protocol === 'http:' || newUrl.protocol === 'https:';
-    } catch (e) {
-        return false;
-    }
-};
-
+type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
 
 export const ComposerActions = ({
+    shopDomain,
     title,
     primaryLink,
     message,
     logo,
     macHero,
+    windowsHero,
+    androidHero,
     onContinueClick,
 }: {
+    shopDomain: string;
     title: string;
     primaryLink: string;
     message: string;
     logo: ImageValue;
     macHero: ImageValue;
+    windowsHero: ImageValue;
+    androidHero: ImageValue;
     onContinueClick: () => boolean;
 }) => {
     const { toast } = useToast();
     const router = useRouter();
     const [isSending, setIsSending] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isContinuing, setIsContinuing] = useState(false);
+
+    const buildMediaInput = () =>
+      buildWizardLaunchMediaInput({
+        logoPreview: logo.preview,
+        windowsPreview: windowsHero.preview,
+        macPreview: macHero.preview,
+        androidPreview: androidHero.preview,
+      });
 
     const onSendPreview = async () => {
         if (!title) {
@@ -87,7 +96,6 @@ export const ComposerActions = ({
             return;
         }
         setIsSaving(true);
-        // Simulate API call
         await new Promise(resolve => setTimeout(resolve, 1000));
         setIsSaving(false);
         toast({
@@ -96,24 +104,40 @@ export const ComposerActions = ({
         });
     }
 
-    const handleContinue = () => {
+    const handleContinue = async () => {
         const isFormValid = onContinueClick();
-        if (isFormValid) {
-            const queryShop = new URLSearchParams(window.location.search).get('shop');
-            const scheduleHref = queryShop
-                ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
-                : '/campaigns/new/schedule';
-            router.push(scheduleHref);
+        if (!isFormValid) {
+            return;
         }
+
+        const queryShop = new URLSearchParams(window.location.search).get('shop');
+        const scheduleHref = queryShop
+            ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
+            : '/campaigns/new/schedule';
+
+        const mediaInput = buildMediaInput();
+        if (shopDomain) {
+            kickoffWizardMediaUpload(shopDomain, mediaInput);
+            setIsContinuing(true);
+            try {
+                await waitForWizardMediaUpload(shopDomain, mediaInput);
+            } catch {
+                // Continue to review even if upload fails; launch will retry.
+            } finally {
+                setIsContinuing(false);
+            }
+        }
+
+        router.push(scheduleHref);
     }
 
     return (
         <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={onSaveDraft} disabled={isSaving}>
+            <Button variant="outline" onClick={onSaveDraft} disabled={isSaving || isContinuing}>
                 {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                 {isSaving ? 'Saving...' : 'Save as Draft'}
             </Button>
-            <Button variant="outline" onClick={onSendPreview} disabled={isSending}>
+            <Button variant="outline" onClick={onSendPreview} disabled={isSending || isContinuing}>
                 {isSending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
@@ -121,9 +145,12 @@ export const ComposerActions = ({
                 )}
                 {isSending ? 'Sending...' : 'See live preview'}
             </Button>
-            <Button onClick={handleContinue}>
-                Continue
-                <ArrowRight className="ml-2 h-4 w-4" />
+            <Button onClick={() => void handleContinue()} disabled={isContinuing}>
+                {isContinuing ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
+                {isContinuing ? 'Uploading images…' : 'Continue'}
+                {!isContinuing ? <ArrowRight className="ml-2 h-4 w-4" /> : null}
             </Button>
         </div>
     );

@@ -46,10 +46,10 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
   const skip = shouldSkipSetup(pathname);
 
   const hasWarmCache = Boolean(shop && hasWarmShopCache(queryClient, shop));
-  const canRenderApp = skip || !shop || isRestored;
+  const canRenderApp = skip || !shop || isRestored || hasWarmCache;
   const needsBootstrap = Boolean(shop) && !hasWarmCache && !bootstrap.data;
   const showBootstrapOverlay =
-    canRenderApp && !skip && Boolean(shop) && needsBootstrap && !bootstrap.isError;
+    canRenderApp && !skip && Boolean(shop) && needsBootstrap && !bootstrap.isError && !hasWarmCache;
 
   const [progress, setProgress] = useState(hasWarmCache ? 100 : 24);
   const [overlayVisible, setOverlayVisible] = useState(showBootstrapOverlay);

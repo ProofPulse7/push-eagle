@@ -7,12 +7,25 @@ import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persist
 
 const STALE_TIME_MS = 30 * 60 * 1000;
 const GC_TIME_MS = 2 * 60 * 60 * 1000;
+const PERSIST_KEY = 'pe_query_cache_v1';
 
 const PersistRestoreContext = createContext(true);
 
 export function usePersistRestored() {
   return useContext(PersistRestoreContext);
 }
+
+const hasPersistedQueryCache = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  try {
+    return Boolean(window.sessionStorage.getItem(PERSIST_KEY));
+  } catch {
+    return false;
+  }
+};
 
 function makeQueryClient() {
   return new QueryClient({
@@ -37,10 +50,12 @@ export function QueryProvider({ children }: { children: ReactNode }) {
   const [persister] = useState(() =>
     createSyncStoragePersister({
       storage: typeof window !== 'undefined' ? window.sessionStorage : undefined,
-      key: 'pe_query_cache_v1',
+      key: PERSIST_KEY,
     }),
   );
-  const [isRestored, setIsRestored] = useState(() => typeof window === 'undefined');
+  const [isRestored, setIsRestored] = useState(
+    () => typeof window === 'undefined' || hasPersistedQueryCache(),
+  );
 
   return (
     <PersistRestoreContext.Provider value={isRestored}>

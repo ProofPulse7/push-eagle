@@ -93,7 +93,8 @@ export function useAutomationsOverview() {
     },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
     placeholderData: (previous) => previous,
   });
 }

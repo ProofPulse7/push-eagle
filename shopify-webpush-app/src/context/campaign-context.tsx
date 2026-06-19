@@ -19,6 +19,7 @@ import {
 } from '@/lib/client/campaign-draft-storage';
 import {
   clearWizardLaunchMediaCache,
+  kickoffWizardMediaUpload,
   prepareWizardLaunchMedia,
   readPersistableImageSource,
 } from '@/lib/client/campaign-wizard-media';
@@ -347,13 +348,13 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
           }),
         );
 
-        void prepareWizardLaunchMedia(shop, {
+        void kickoffWizardMediaUpload(shop, {
           imageUrl: persistedMacHero.preview ?? persistedWindowsHero.preview ?? persistedAndroidHero.preview,
           windowsImageUrl: persistedWindowsHero.preview,
           macosImageUrl: persistedMacHero.preview,
           androidImageUrl: persistedAndroidHero.preview,
           iconUrl: persistedLogo.preview,
-        }).catch(() => undefined);
+        });
       })();
     }, 350);
 

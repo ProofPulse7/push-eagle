@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
+import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import {
   countCampaignAudienceTokens,
@@ -114,24 +115,33 @@ export async function POST(request: Request) {
 
     void invalidateShopDashboardCaches(shopDomain);
 
-    const deliveryResult = await deliverCampaignWithRetry(shopDomain, campaignId, maxBatches);
-    void invalidateShopDashboardCaches(shopDomain);
+    deferAfterResponse(async () => {
+      try {
+        await deliverCampaignWithRetry(shopDomain, campaignId, maxBatches);
+      } catch (error) {
+        console.error('[campaigns/launch] background delivery failed', {
+          shopDomain,
+          campaignId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await requeueCampaignForDelivery(shopDomain, campaignId).catch(() => undefined);
+      } finally {
+        void invalidateShopDashboardCaches(shopDomain);
+      }
+    });
 
     return NextResponse.json({
       ok: true,
       campaignId,
-      async: false,
-      queued: !deliveryResult.completed,
-      completed: deliveryResult.completed,
+      async: true,
+      queued: true,
+      completed: false,
       recipientCount,
       targetRecipientCount: recipientCount,
-      successCount: deliveryResult.successCount,
-      failureCount: deliveryResult.failureCount,
-      delivery_count: deliveryResult.successCount,
-      remainingRecipients: deliveryResult.remainingRecipients ?? 0,
-      message: deliveryResult.completed
-        ? 'Campaign launched and notifications sent.'
-        : 'Campaign started. Remaining notifications will continue in the background.',
+      successCount: 0,
+      delivery_count: 0,
+      remainingRecipients: recipientCount,
+      message: 'Campaign created. Notifications are being delivered now.',
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to launch campaign.';

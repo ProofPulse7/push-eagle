@@ -81,15 +81,27 @@ export function LiveShopSync() {
     }, 30_000);
 
     const onFocus = () => {
-      invalidateActiveShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
+      void prefetchAppBootstrap(queryClient, shop);
+      void prefetchDashboardSummary(queryClient, shop);
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+
+      void prefetchAppBootstrap(queryClient, shop);
+      void prefetchDashboardSummary(queryClient, shop);
     };
 
     window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       unsubscribe();
       window.clearInterval(poll);
       window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [queryClient, shop]);
 

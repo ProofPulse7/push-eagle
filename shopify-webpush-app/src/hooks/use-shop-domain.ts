@@ -4,6 +4,21 @@ import { useEffect, useState } from 'react';
 
 import { useSettings } from '@/context/settings-context';
 
+const SHOP_SESSION_KEY = 'pe_active_shop';
+
+const persistShop = (shop: string) => {
+  if (!shop || typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    sessionStorage.setItem(SHOP_SESSION_KEY, shop);
+    localStorage.setItem('shopDomain', shop);
+  } catch {
+    // Ignore storage errors.
+  }
+};
+
 const readShopFromBrowser = () => {
   if (typeof window === 'undefined') {
     return '';
@@ -11,7 +26,9 @@ const readShopFromBrowser = () => {
 
   const queryShop = new URLSearchParams(window.location.search).get('shop');
   if (queryShop?.trim()) {
-    return queryShop.trim().toLowerCase();
+    const normalized = queryShop.trim().toLowerCase();
+    persistShop(normalized);
+    return normalized;
   }
 
   const cookieShop = document.cookie
@@ -21,7 +38,18 @@ const readShopFromBrowser = () => {
     ?.slice('pe_shop='.length);
 
   if (cookieShop?.trim()) {
-    return cookieShop.trim().toLowerCase();
+    const normalized = cookieShop.trim().toLowerCase();
+    persistShop(normalized);
+    return normalized;
+  }
+
+  try {
+    const sessionShop = sessionStorage.getItem(SHOP_SESSION_KEY);
+    if (sessionShop?.trim()) {
+      return sessionShop.trim().toLowerCase();
+    }
+  } catch {
+    // Ignore storage errors.
   }
 
   const stored = localStorage.getItem('shopDomain');
@@ -33,11 +61,31 @@ export function useShopDomain() {
   const [queryShop, setQueryShop] = useState(() => readShopFromBrowser());
 
   useEffect(() => {
-    const resolved = readShopFromBrowser();
-    setQueryShop(resolved);
-    if (resolved && resolved !== contextShop) {
-      setShopDomain(resolved);
-    }
+    const syncShop = () => {
+      const resolved = readShopFromBrowser();
+      if (resolved) {
+        setQueryShop(resolved);
+        if (resolved !== contextShop) {
+          setShopDomain(resolved);
+        }
+        return;
+      }
+
+      if (contextShop) {
+        setQueryShop(contextShop);
+        persistShop(contextShop);
+      }
+    };
+
+    syncShop();
+
+    window.addEventListener('focus', syncShop);
+    document.addEventListener('visibilitychange', syncShop);
+
+    return () => {
+      window.removeEventListener('focus', syncShop);
+      document.removeEventListener('visibilitychange', syncShop);
+    };
   }, [contextShop, setShopDomain]);
 
   return (queryShop || contextShop || '').trim().toLowerCase();
