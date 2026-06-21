@@ -1,81 +1,36 @@
 'use client';
 
-import { useEffect } from 'react';
-import { AlertTriangle, ExternalLink, Sparkles } from 'lucide-react';
-import { useQueryClient } from '@tanstack/react-query';
+import { AlertTriangle, ExternalLink } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { useThemeEmbedStatus } from '@/hooks/queries/use-app-queries';
-import { useShopDomain } from '@/hooks/use-shop-domain';
-import { queryKeys } from '@/lib/client/query-keys';
 
 export function ThemeExtensionWarningBanner() {
-  const shop = useShopDomain();
-  const queryClient = useQueryClient();
-  const { data, isFetching } = useThemeEmbedStatus();
+  const { data } = useThemeEmbedStatus();
   const themeEditorUrl = data?.themeEditorUrl;
-
-  useEffect(() => {
-    if (!shop) {
-      return;
-    }
-
-    const refetch = () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.themeEmbedStatus(shop) });
-    };
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        refetch();
-      }
-    };
-
-    window.addEventListener('focus', refetch);
-    document.addEventListener('visibilitychange', onVisibility);
-
-    return () => {
-      window.removeEventListener('focus', refetch);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [queryClient, shop]);
 
   if (!data?.ok || !data.checkAvailable || data.enabled || !themeEditorUrl) {
     return null;
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-amber-300/70 bg-white shadow-[0_8px_30px_rgba(251,191,36,0.18)]">
-      <div className="flex items-center gap-2.5 bg-amber-400 px-4 py-3 sm:px-5">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-black/10">
-          <AlertTriangle className="h-4 w-4 text-black" aria-hidden />
-        </span>
-        <p className="text-sm font-semibold tracking-tight text-black sm:text-[15px]">
-          Push Eagle isn&apos;t connected to your store yet
-        </p>
+    <div className="overflow-hidden rounded-lg border border-border">
+      <div className="flex items-center gap-2 bg-amber-400 px-4 py-2 text-sm font-semibold text-black">
+        <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
+        Push Eagle isn&apos;t connected to your store yet
       </div>
-
-      <div className="space-y-4 bg-white px-4 py-4 sm:px-5 sm:py-5">
-        <div className="flex items-start gap-3">
-          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
-            <Sparkles className="h-4 w-4" aria-hidden />
-          </span>
-          <p className="text-sm leading-relaxed text-slate-600">
-            Your store isn&apos;t collecting subscribers yet. Enable Push Eagle in your theme{' '}
-            <span className="font-medium text-slate-800">App embeds</span>, then click{' '}
-            <span className="font-medium text-slate-800">Save</span>. This banner disappears as
-            soon as the embed is active.
-            {isFetching ? (
-              <span className="ml-1 text-xs text-violet-600">Checking status…</span>
-            ) : null}
-          </p>
-        </div>
-
+      <div className="flex flex-col gap-3 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-muted-foreground">
+          Your store isn&apos;t collecting subscribers yet. Enable Push Eagle in your theme App
+          embeds, then click Save.
+        </p>
         <Button
           asChild
-          className="h-10 rounded-lg bg-violet-600 px-5 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 focus-visible:ring-violet-600"
+          size="sm"
+          className="shrink-0 bg-violet-600 text-white hover:bg-violet-700"
         >
           <a href={themeEditorUrl} target="_blank" rel="noopener noreferrer">
-            <ExternalLink className="mr-2 h-4 w-4" />
+            <ExternalLink className="mr-2 h-3.5 w-3.5" />
             Enable Push Eagle
           </a>
         </Button>

@@ -3,12 +3,9 @@
 import { usePathname } from 'next/navigation';
 import { AppLegalFooter } from './app-legal-footer';
 import { Sidebar } from './sidebar';
-import { ThemeExtensionWarningBanner } from '@/components/dashboard/theme-extension-warning-banner';
-import { useShopDomain } from '@/hooks/use-shop-domain';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const shopDomain = useShopDomain();
   
   const isCampaignComposerFullscreen =
     pathname.startsWith('/campaigns/new/editor') ||
@@ -27,11 +24,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="flex flex-col md:pl-64">
         <main className="flex-grow pe-page-enter">
-          {shopDomain ? (
-            <div className="px-4 pt-4 sm:px-6 md:px-8">
-              <ThemeExtensionWarningBanner />
-            </div>
-          ) : null}
           {children}
           <AppLegalFooter />
         </main>
