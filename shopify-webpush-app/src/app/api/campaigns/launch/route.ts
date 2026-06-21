@@ -15,6 +15,7 @@ import {
   countCampaignAudienceTokens,
   createCampaign,
   ensureMerchantAccount,
+  getCampaignById,
   requeueCampaignForDelivery,
 } from '@/lib/server/data/store';
 import { resolveServerCampaignMediaUrl } from '@/lib/server/media/resolve-campaign-media';
@@ -54,6 +55,7 @@ const deliverySchema = z
 
 const launchSchema = z.object({
   shopDomain: z.string().optional(),
+  campaignId: z.string().uuid().optional(),
   title: z.string().min(1),
   body: z.string().default(''),
   targetUrl: z.string().min(1),
@@ -113,38 +115,72 @@ export async function POST(request: Request) {
     const recipientCount = await countCampaignAudienceTokens(shopDomain, segmentId);
     const notificationBody = resolveCampaignNotificationBody(body.body || ' ', delivery);
 
-    const campaignId = randomUUID();
+    const existingDraft = body.campaignId
+      ? await getCampaignById(shopDomain, body.campaignId)
+      : null;
+
+    if (body.campaignId) {
+      if (!existingDraft) {
+        return NextResponse.json({ ok: false, error: 'Draft campaign not found.' }, { status: 404 });
+      }
+
+      if (String(existingDraft.status ?? '').toLowerCase() !== 'draft') {
+        return NextResponse.json({ ok: false, error: 'Only draft campaigns can be launched from draft.' }, { status: 400 });
+      }
+    }
+
+    const campaignId = body.campaignId ?? randomUUID();
+    let resolvedCampaignId = campaignId;
     const sql = getNeonSql();
 
     if (delivery.sendingOption !== 'schedule') {
       await ensureMerchantAccount(shopDomain);
 
-      await sql`
-        INSERT INTO campaigns (
-          id,
-          shop_domain,
-          title,
-          body,
-          target_url,
-          segment_id,
-          status,
-          sent_at,
-          target_recipient_count,
-          created_at
-        )
-        VALUES (
-          ${campaignId},
-          ${shopDomain},
-          ${body.title},
-          ${notificationBody},
-          ${body.targetUrl},
-          ${segmentId},
-          'queued',
-          NOW(),
-          ${recipientCount},
-          NOW()
-        )
-      `;
+      if (existingDraft) {
+        await sql`
+          UPDATE campaigns
+          SET
+            title = ${body.title},
+            body = ${notificationBody},
+            target_url = ${body.targetUrl},
+            segment_id = ${segmentId},
+            status = 'queued',
+            sent_at = NOW(),
+            target_recipient_count = ${recipientCount},
+            scheduled_at = NULL,
+            updated_at = NOW()
+          WHERE id = ${campaignId}
+            AND shop_domain = ${shopDomain}
+            AND status = 'draft'
+        `;
+      } else {
+        await sql`
+          INSERT INTO campaigns (
+            id,
+            shop_domain,
+            title,
+            body,
+            target_url,
+            segment_id,
+            status,
+            sent_at,
+            target_recipient_count,
+            created_at
+          )
+          VALUES (
+            ${campaignId},
+            ${shopDomain},
+            ${body.title},
+            ${notificationBody},
+            ${body.targetUrl},
+            ${segmentId},
+            'queued',
+            NOW(),
+            ${recipientCount},
+            NOW()
+          )
+        `;
+      }
 
       const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
       void bumpCronWakeNow();
@@ -223,23 +259,48 @@ export async function POST(request: Request) {
       ?? windowsImageUrl
       ?? androidImageUrl;
 
-    const campaign = await createCampaign({
-      shopDomain,
-      title: body.title,
-      body: notificationBody,
-      targetUrl: body.targetUrl,
-      iconUrl,
-      imageUrl: listImageUrl,
-      windowsImageUrl,
-      macosImageUrl,
-      androidImageUrl,
-      actionButtons: body.actionButtons,
-      segmentId,
-      status: 'scheduled',
-      scheduledAt: delivery.scheduledAt ?? null,
-    });
+    if (existingDraft) {
+      await sql`
+        UPDATE campaigns
+        SET
+          title = ${body.title},
+          body = ${notificationBody},
+          target_url = ${body.targetUrl},
+          icon_url = ${iconUrl},
+          image_url = ${listImageUrl},
+          windows_image_url = ${windowsImageUrl},
+          macos_image_url = ${macosImageUrl},
+          android_image_url = ${androidImageUrl},
+          action_buttons = ${JSON.stringify(body.actionButtons ?? [])}::jsonb,
+          segment_id = ${segmentId},
+          status = 'scheduled',
+          scheduled_at = ${delivery.scheduledAt ? new Date(delivery.scheduledAt) : null},
+          sent_at = NULL,
+          target_recipient_count = ${recipientCount},
+          updated_at = NOW()
+        WHERE id = ${campaignId}
+          AND shop_domain = ${shopDomain}
+          AND status = 'draft'
+      `;
+    } else {
+      const campaign = await createCampaign({
+        shopDomain,
+        title: body.title,
+        body: notificationBody,
+        targetUrl: body.targetUrl,
+        iconUrl,
+        imageUrl: listImageUrl,
+        windowsImageUrl,
+        macosImageUrl,
+        androidImageUrl,
+        actionButtons: body.actionButtons,
+        segmentId,
+        status: 'scheduled',
+        scheduledAt: delivery.scheduledAt ?? null,
+      });
 
-    const resolvedCampaignId = String(campaign.id);
+      resolvedCampaignId = String(campaign.id);
+    }
 
     await upsertCampaignDeliveryOptions(sql, resolvedCampaignId, shopDomain, delivery);
 

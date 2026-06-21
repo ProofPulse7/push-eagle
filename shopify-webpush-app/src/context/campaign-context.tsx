@@ -75,6 +75,8 @@ export interface CampaignContextType {
   setFlashSaleUrgencyText: (text: string) => void;
   recurringPattern: string;
   setRecurringPattern: (pattern: string) => void;
+  draftCampaignId: string | null;
+  setDraftCampaignId: (id: string | null) => void;
 }
 
 export const CampaignContext = createContext<CampaignContextType | undefined>(undefined);
@@ -127,7 +129,9 @@ const buildDraftSnapshot = (state: {
   flashSaleExpiresTime: string;
   flashSaleUrgencyText: string;
   recurringPattern: string;
+  draftCampaignId?: string | null;
 }): CampaignDraftSnapshot => ({
+  draftCampaignId: state.draftCampaignId ?? null,
   title: state.title,
   message: state.message,
   primaryLink: state.primaryLink,
@@ -204,6 +208,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
   const [flashSaleExpiresTime, setFlashSaleExpiresTime] = useState(scheduleDefaults.flashSaleExpiresTime);
   const [flashSaleUrgencyText, setFlashSaleUrgencyText] = useState('⏰ Limited time offer!');
   const [recurringPattern, setRecurringPattern] = useState('');
+  const [draftCampaignId, setDraftCampaignId] = useState<string | null>(null);
 
   const resetCampaignState = useCallback(() => {
     const defaults = getDefaultCampaignScheduleDefaults();
@@ -228,11 +233,13 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     setFlashSaleExpiresTime(defaults.flashSaleExpiresTime);
     setFlashSaleUrgencyText('⏰ Limited time offer!');
     setRecurringPattern('');
+    setDraftCampaignId(null);
     primaryLinkInitializedRef.current = false;
     skipPrimaryLinkDefaultRef.current = false;
   }, []);
 
   const applyDraft = useCallback((draft: CampaignDraftSnapshot) => {
+    setDraftCampaignId(draft.draftCampaignId ?? null);
     setTitle(draft.title);
     setMessage(draft.message);
     setPrimaryLink(draft.primaryLink);
@@ -355,6 +362,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
             flashSaleExpiresTime,
             flashSaleUrgencyText,
             recurringPattern,
+            draftCampaignId,
           }),
         );
 
@@ -396,6 +404,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     flashSaleExpiresTime,
     flashSaleUrgencyText,
     recurringPattern,
+    draftCampaignId,
   ]);
 
   useEffect(() => {
@@ -476,6 +485,8 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     setFlashSaleUrgencyText,
     recurringPattern,
     setRecurringPattern,
+    draftCampaignId,
+    setDraftCampaignId,
   };
 
   useEffect(() => {

@@ -9,6 +9,7 @@ export type CampaignDraftActionButton = {
 };
 
 export type CampaignDraftSnapshot = {
+  draftCampaignId?: string | null;
   title: string;
   message: string;
   primaryLink: string;

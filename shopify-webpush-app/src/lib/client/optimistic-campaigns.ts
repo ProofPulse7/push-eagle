@@ -454,6 +454,25 @@ export const patchOptimisticCampaign = (
   });
 };
 
+export const removeOptimisticCampaign = (
+  queryClient: QueryClient,
+  shop: string,
+  campaignId: string,
+) => {
+  removePinnedCampaign(shop, campaignId);
+
+  queryClient.setQueryData(queryKeys.campaigns(shop), (current: { ok?: boolean; campaigns?: unknown[] } | undefined) => {
+    const currentList = Array.isArray(current?.campaigns)
+      ? current.campaigns.map((item) => normalizeCampaignRecord(shop, item as Record<string, unknown>))
+      : [];
+
+    return {
+      ok: true,
+      campaigns: currentList.filter((item) => String(item.id) !== campaignId),
+    };
+  });
+};
+
 export const bumpDashboardCampaignSent = (queryClient: QueryClient, shop: string) => {
   queryClient.setQueryData(queryKeys.dashboardSummary(shop), (current: Record<string, unknown> | undefined) => {
     const campaignStatsRaw = (current?.campaignStats ?? {}) as Record<string, unknown>;

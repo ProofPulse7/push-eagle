@@ -8,6 +8,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useCampaignState, clearCampaignDraft } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
 import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
+import { saveCampaignDraft } from '@/lib/client/campaign-save-draft';
 import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
 import {
   clearWizardLaunchMediaCache,
@@ -28,62 +29,6 @@ import { IOSPreview } from '@/components/composer/previews/ios-preview';
 import { AndroidPreview } from '@/components/composer/previews/android-preview';
 import { WindowsPreview } from '@/components/composer/previews/windows-preview';
 import { MacOSPreview } from '@/components/composer/previews/macos-preview';
-
-const sanitizeMediaUrl = (value: string | null | undefined): string | null => {
-    const trimmed = value?.trim();
-    if (!trimmed) {
-        return null;
-    }
-
-    if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
-        return null;
-    }
-
-    return trimmed;
-};
-
-const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ''));
-    reader.onerror = () => reject(new Error('Failed to read image blob.'));
-    reader.readAsDataURL(blob);
-});
-
-const resolveCampaignMediaUrl = async (sourceUrl: string | null | undefined, shopDomain: string): Promise<string | null> => {
-    const direct = sanitizeMediaUrl(sourceUrl);
-    if (direct) {
-        return direct;
-    }
-
-    const value = sourceUrl?.trim();
-    if (!value) {
-        return null;
-    }
-
-    let dataUrl = value;
-    if (value.startsWith('blob:')) {
-        const response = await fetch(value);
-        const blob = await response.blob();
-        dataUrl = await blobToDataUrl(blob);
-    }
-
-    if (!dataUrl.startsWith('data:image/')) {
-        return null;
-    }
-
-    const uploadResponse = await fetch('/api/media/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shopDomain, dataUrl }),
-    });
-
-    const uploadPayload = await parseApiResponse(uploadResponse);
-    if (!uploadResponse.ok || !uploadPayload.json?.ok || !uploadPayload.json?.asset?.url) {
-        throw new Error(buildResponseError('Failed to upload campaign image.', uploadPayload));
-    }
-
-    return String(uploadPayload.json.asset.url);
-};
 
 const parseApiResponse = async (response: Response): Promise<{ json: any | null; text: string }> => {
     const text = await response.text();
@@ -137,6 +82,7 @@ export default function ScheduleCampaignPage() {
         flashSaleExpiresAt,
         flashSaleExpiresTime,
         flashSaleUrgencyText,
+        draftCampaignId,
     } = useCampaignState();
     const [isSaving, setIsSaving] = useState(false);
     const [isLaunching, setIsLaunching] = useState(false);
@@ -259,8 +205,8 @@ export default function ScheduleCampaignPage() {
 
             const isScheduled = sendingOption === 'schedule';
             const launchStatus = isScheduled ? 'scheduled' : 'queued';
-
-            const optimisticId = crypto.randomUUID();
+            const launchingExistingDraft = Boolean(draftCampaignId);
+            const optimisticId = draftCampaignId ?? crypto.randomUUID();
 
             const deliveryPayload = {
                 sendingOption: isScheduled ? 'schedule' as const : 'now' as const,
@@ -294,7 +240,7 @@ export default function ScheduleCampaignPage() {
                 iconUrl: launchMedia.iconUrl ?? logo.preview,
             };
 
-            prependOptimisticCampaign(queryClient, shopDomain, {
+            const optimisticCampaign = {
                 id: optimisticId,
                 title: title || 'Untitled Campaign',
                 body: message || '',
@@ -312,7 +258,13 @@ export default function ScheduleCampaignPage() {
                 target_recipient_count: segmentSubscriberCount,
                 click_count: 0,
                 revenue_cents: 0,
-            });
+            };
+
+            if (launchingExistingDraft) {
+                patchOptimisticCampaign(queryClient, shopDomain, optimisticId, optimisticCampaign);
+            } else {
+                prependOptimisticCampaign(queryClient, shopDomain, optimisticCampaign);
+            }
 
             if (launchStatus === 'queued') {
                 bumpDashboardCampaignSent(queryClient, shopDomain);
@@ -352,6 +304,7 @@ export default function ScheduleCampaignPage() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             shopDomain,
+                            campaignId: draftCampaignId ?? undefined,
                             title: title || 'Untitled Campaign',
                             body: message || ' ',
                             targetUrl: primaryLink || '',
@@ -382,7 +335,7 @@ export default function ScheduleCampaignPage() {
 
                     const cachedMedia = await cacheLaunchMedia(shopDomain, campaignId, resolvedMedia);
 
-                    replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, {
+                    const launchedCampaign = {
                         id: campaignId,
                         title: title || 'Untitled Campaign',
                         body: message || '',
@@ -400,7 +353,13 @@ export default function ScheduleCampaignPage() {
                         target_recipient_count: resolvedTargetCount,
                         click_count: 0,
                         revenue_cents: 0,
-                    });
+                    };
+
+                    if (launchingExistingDraft) {
+                        patchOptimisticCampaign(queryClient, shopDomain, campaignId, launchedCampaign);
+                    } else {
+                        replaceOptimisticCampaignId(queryClient, shopDomain, optimisticId, launchedCampaign);
+                    }
 
                     clearWizardLaunchMediaCache(shopDomain);
                     void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
@@ -438,41 +397,33 @@ export default function ScheduleCampaignPage() {
                 throw new Error('Open Push Eagle from Shopify Admin before saving drafts.');
             }
 
-            const [iconUrl, windowsImageUrl, macosImageUrl, androidImageUrl] = await Promise.all([
-                resolveCampaignMediaUrl(logo.preview, shopDomain),
-                resolveCampaignMediaUrl(windowsHero.preview, shopDomain),
-                resolveCampaignMediaUrl(macHero.preview, shopDomain),
-                resolveCampaignMediaUrl(androidHero.preview, shopDomain),
-            ]);
-
-            const response = await fetch('/api/campaigns', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
+            const { campaignsHref } = await saveCampaignDraft(
+                {
                     shopDomain,
-                    title: title || 'Untitled Campaign',
-                    body: message || '',
-                    targetUrl: primaryLink || null,
-                    iconUrl,
-                    imageUrl: macosImageUrl,
-                    windowsImageUrl,
-                    macosImageUrl,
-                    androidImageUrl,
-                    actionButtons: actionButtons
-                        .filter((button) => button.title?.trim() && button.link?.trim())
-                        .map((button) => ({ title: button.title.trim(), link: button.link.trim() })),
+                    draftCampaignId,
+                    title,
+                    message,
+                    primaryLink,
                     segmentId,
-                    status: 'draft',
-                }),
-            });
-
-            const payload = await parseApiResponse(response);
-            const result = payload.json;
-            if (!response.ok || !result?.ok) {
-                throw new Error(buildResponseError('Failed to save draft.', payload));
-            }
+                    actionButtons,
+                    logoPreview: logo.preview,
+                    windowsHeroPreview: windowsHero.preview,
+                    macHeroPreview: macHero.preview,
+                    androidHeroPreview: androidHero.preview,
+                    sendingOption,
+                    scheduledDate,
+                    scheduledTime,
+                    smartDeliver,
+                    flashSaleEnabled,
+                    flashSaleDiscountPercent,
+                    flashSaleOriginalPrice,
+                    flashSaleSalePrice,
+                    flashSaleExpiresAt,
+                    flashSaleExpiresTime,
+                    flashSaleUrgencyText,
+                },
+                queryClient,
+            );
 
             toast({
                 title: "Draft Saved!",

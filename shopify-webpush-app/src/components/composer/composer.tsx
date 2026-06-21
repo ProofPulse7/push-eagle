@@ -311,14 +311,7 @@ export function Composer() {
                     </div>
                 </div>
                 <div className="shrink-0 p-4 border-t bg-card flex justify-end items-center">
-                    <ComposerActions
-                        title={title}
-                        primaryLink={primaryLink}
-                        message={message}
-                        logo={logo}
-                        macHero={macHero}
-                        onContinueClick={validateForm}
-                    />
+                    <ComposerActions onContinueClick={validateForm} />
                 </div>
             </div>
 

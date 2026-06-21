@@ -9,7 +9,7 @@ import type { DateRange } from "react-day-picker";
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge";
-import { PlusCircle, Rocket, Users, Calendar, Hash, Copy, CheckCircle, Clock, AlertCircle, ChevronDown, Loader2 } from "lucide-react"
+import { PlusCircle, Rocket, Users, Calendar, Hash, Copy, CheckCircle, Clock, AlertCircle, ChevronDown, Loader2, Pencil, Trash2 } from "lucide-react"
 import { Card, CardContent } from "../ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Skeleton } from "../ui/skeleton";
@@ -19,7 +19,10 @@ import { applyLaunchMediaToCampaign } from '@/lib/client/campaign-launch-media-c
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { formatCampaignScheduleLabel } from '@/lib/client/campaign-schedule';
-import { duplicateCampaignToWizard } from '@/lib/client/campaign-duplicate';
+import { duplicateCampaignToWizard, editDraftCampaignToWizard } from '@/lib/client/campaign-duplicate';
+import { removeOptimisticCampaign } from '@/lib/client/optimistic-campaigns';
+import { queryKeys } from '@/lib/client/query-keys';
+import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 
 type Campaign = {
@@ -130,6 +133,7 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
 export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined }) {
     const shopDomain = useShopDomain();
     const router = useRouter();
+    const queryClient = useQueryClient();
     const { toast } = useToast();
     const searchParams = useSearchParams();
     const { data, isLoading, isError, error: queryError } = useCampaigns();
@@ -138,7 +142,16 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
         initialTab === 'scheduled' || initialTab === 'draft' ? initialTab : 'sent',
     );
     const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+    const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+    const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
     const [visibleCount, setVisibleCount] = useState(CAMPAIGNS_PAGE_SIZE);
+
+    useEffect(() => {
+        const tab = searchParams.get('tab');
+        if (tab === 'scheduled' || tab === 'draft') {
+            setActiveTab(tab);
+        }
+    }, [searchParams]);
 
     const campaigns = useMemo(() => {
         if (!Array.isArray(data?.campaigns)) {
@@ -225,6 +238,69 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             });
         } finally {
             setDuplicatingId(null);
+        }
+    };
+
+    const handleEditDraft = async (campaignId: string) => {
+        if (!shopDomain) {
+            toast({
+                variant: 'destructive',
+                title: 'Edit failed',
+                description: 'Open Push Eagle from Shopify Admin before editing drafts.',
+            });
+            return;
+        }
+
+        setEditingDraftId(campaignId);
+        try {
+            const { detailsHref } = await editDraftCampaignToWizard(shopDomain, campaignId);
+            router.push(detailsHref);
+        } catch (error) {
+            toast({
+                variant: 'destructive',
+                title: 'Edit failed',
+                description: error instanceof Error ? error.message : 'Failed to open draft campaign.',
+            });
+        } finally {
+            setEditingDraftId(null);
+        }
+    };
+
+    const handleDeleteDraft = async (campaignId: string) => {
+        if (!shopDomain) {
+            toast({
+                variant: 'destructive',
+                title: 'Delete failed',
+                description: 'Open Push Eagle from Shopify Admin before deleting drafts.',
+            });
+            return;
+        }
+
+        setDeletingDraftId(campaignId);
+        try {
+            const response = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}?shop=${encodeURIComponent(shopDomain)}`, {
+                method: 'DELETE',
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload?.ok) {
+                throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to delete draft.');
+            }
+
+            removeOptimisticCampaign(queryClient, shopDomain, campaignId);
+            void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shopDomain) });
+
+            toast({
+                title: 'Draft deleted',
+                description: 'The draft campaign has been removed.',
+            });
+        } catch (error) {
+            toast({
+                variant: 'destructive',
+                title: 'Delete failed',
+                description: error instanceof Error ? error.message : 'Failed to delete draft campaign.',
+            });
+        } finally {
+            setDeletingDraftId(null);
         }
     };
 
@@ -346,7 +422,11 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                     <div className="flex flex-col">
                                         <div className="flex items-center gap-2 mb-1">
                                             <h3 className="font-semibold text-base line-clamp-1" title={campaign.name}>
-                                                <Link href={`/campaigns/${campaign.id}/results`} className="hover:underline">{campaign.name}</Link>
+                                                {campaign.status === 'Draft' ? (
+                                                    <span>{campaign.name}</span>
+                                                ) : (
+                                                    <Link href={`/campaigns/${campaign.id}/results`} className="hover:underline">{campaign.name}</Link>
+                                                )}
                                             </h3>
                                             {getStatusBadge(campaign.status)}
                                         </div>
@@ -394,21 +474,56 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                     ) : null}
                                     <div className="flex items-center gap-1.5"><Hash className="h-3 w-3" /><span>ID: {campaign.id}</span></div>
                                 </div>
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="mt-2 sm:mt-0 self-end sm:self-center"
-                                    disabled={duplicatingId === campaign.id}
-                                    onClick={() => void handleDuplicateCampaign(campaign.id)}
-                                >
-                                    {duplicatingId === campaign.id ? (
-                                        <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                <div className="flex items-center gap-2 mt-2 sm:mt-0 self-end sm:self-center">
+                                    {campaign.status === 'Draft' ? (
+                                        <>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                disabled={editingDraftId === campaign.id || deletingDraftId === campaign.id}
+                                                onClick={() => void handleEditDraft(campaign.id)}
+                                            >
+                                                {editingDraftId === campaign.id ? (
+                                                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                                ) : (
+                                                    <Pencil className="mr-2 h-3 w-3" />
+                                                )}
+                                                Edit
+                                            </Button>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                className="text-destructive hover:text-destructive"
+                                                disabled={editingDraftId === campaign.id || deletingDraftId === campaign.id}
+                                                onClick={() => void handleDeleteDraft(campaign.id)}
+                                            >
+                                                {deletingDraftId === campaign.id ? (
+                                                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                                ) : (
+                                                    <Trash2 className="mr-2 h-3 w-3" />
+                                                )}
+                                                Delete
+                                            </Button>
+                                        </>
                                     ) : (
-                                        <Copy className="mr-2 h-3 w-3" />
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={duplicatingId === campaign.id}
+                                            onClick={() => void handleDuplicateCampaign(campaign.id)}
+                                        >
+                                            {duplicatingId === campaign.id ? (
+                                                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                            ) : (
+                                                <Copy className="mr-2 h-3 w-3" />
+                                            )}
+                                            Duplicate
+                                        </Button>
                                     )}
-                                    Duplicate
-                                </Button>
+                                </div>
                             </div>
                         </div>
                     </Card>

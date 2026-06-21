@@ -171,6 +171,7 @@ export const buildDraftFromCampaign = (campaign: DuplicateCampaignRecord): Campa
     }));
 
   return {
+    draftCampaignId: null,
     title: String(campaign.title ?? ''),
     message,
     primaryLink: String(pick(campaign.target_url, campaign.targetUrl) ?? ''),
@@ -221,5 +222,36 @@ export const duplicateCampaignToWizard = async (shopDomain: string, campaignId: 
     editorHref: `/campaigns/new/editor?shop=${encodeURIComponent(shopDomain)}`,
     scheduleHref: `/campaigns/new/schedule?shop=${encodeURIComponent(shopDomain)}`,
     scheduledAt,
+  };
+};
+
+export const editDraftCampaignToWizard = async (shopDomain: string, campaignId: string) => {
+  const response = await fetch(
+    `/api/campaigns/${encodeURIComponent(campaignId)}?shop=${encodeURIComponent(shopDomain)}`,
+  );
+  const payload = await response.json();
+
+  if (!response.ok || !payload?.ok || !payload?.campaign) {
+    throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to load draft campaign.');
+  }
+
+  const campaign = payload.campaign as DuplicateCampaignRecord;
+  if (String(campaign.status ?? '').toLowerCase() !== 'draft') {
+    throw new Error('Only draft campaigns can be edited.');
+  }
+
+  const draft = {
+    ...buildDraftFromCampaign(campaign),
+    draftCampaignId: campaignId,
+  };
+
+  clearWizardLaunchMediaCache(shopDomain);
+  writeCampaignDraft(shopDomain, draft);
+
+  return {
+    draft,
+    detailsHref: `/campaigns/new/details?shop=${encodeURIComponent(shopDomain)}`,
+    editorHref: `/campaigns/new/editor?shop=${encodeURIComponent(shopDomain)}`,
+    scheduleHref: `/campaigns/new/schedule?shop=${encodeURIComponent(shopDomain)}`,
   };
 };

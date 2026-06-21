@@ -2,10 +2,33 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { API_KV_TTL, invalidateShopDashboardCaches, withShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
-import { createCampaign, listCampaigns } from '@/lib/server/data/store';
+import { createCampaign, deleteDraftCampaign, listCampaigns, updateCampaignDraft } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
+import { getNeonSql } from '@/lib/integrations/database/neon';
+import { upsertCampaignDeliveryOptions } from '@/lib/server/campaigns/delivery-options';
 
 export const runtime = 'nodejs';
+
+const flashSaleConfigSchema = z
+  .object({
+    discountPercent: z.number().optional(),
+    originalPrice: z.number().optional(),
+    salePrice: z.number().optional(),
+    expiresAt: z.string().optional().nullable(),
+    urgencyText: z.string().optional(),
+  })
+  .optional()
+  .nullable();
+
+const deliverySchema = z
+  .object({
+    sendingOption: z.enum(['now', 'schedule']).default('now'),
+    scheduledAt: z.string().optional().nullable(),
+    smartDeliver: z.boolean().optional(),
+    flashSaleEnabled: z.boolean().optional(),
+    flashSaleConfig: flashSaleConfigSchema,
+  })
+  .optional();
 
 const createCampaignSchema = z.object({
   shopDomain: z.string().optional(),
@@ -21,6 +44,7 @@ const createCampaignSchema = z.object({
   segmentId: z.string().optional().nullable(),
   status: z.enum(['draft', 'scheduled', 'sent']).optional(),
   scheduledAt: z.string().optional().nullable(),
+  delivery: deliverySchema,
 });
 
 const transformCampaign = (campaign: any) => ({
@@ -90,6 +114,17 @@ export async function POST(request: Request) {
       status: body.status,
       scheduledAt: body.scheduledAt,
     });
+
+    if (body.delivery) {
+      const sql = getNeonSql();
+      await upsertCampaignDeliveryOptions(sql, String(campaign.id), shopDomain, {
+        sendingOption: body.delivery.sendingOption ?? 'now',
+        scheduledAt: body.delivery.scheduledAt ?? null,
+        smartDeliver: Boolean(body.delivery.smartDeliver),
+        flashSaleEnabled: Boolean(body.delivery.flashSaleEnabled),
+        flashSaleConfig: body.delivery.flashSaleConfig ?? null,
+      });
+    }
 
     void invalidateShopDashboardCaches(shopDomain);
 

@@ -7344,6 +7344,83 @@ export const createCampaign = async (input: CreateCampaignInput) => {
   return campaignRows[0];
 };
 
+export const updateCampaignDraft = async (input: CreateCampaignInput & { campaignId: string }) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const existing = await getCampaignById(input.shopDomain, input.campaignId);
+  if (!existing) {
+    throw new Error('Campaign not found.');
+  }
+
+  if (String(existing.status ?? '').toLowerCase() !== 'draft') {
+    throw new Error('Only draft campaigns can be updated.');
+  }
+
+  const listImageUrl =
+    pickCampaignBarImageUrl({
+      imageUrl: input.imageUrl ?? null,
+      windowsImageUrl: input.windowsImageUrl ?? null,
+      macosImageUrl: input.macosImageUrl ?? null,
+      androidImageUrl: input.androidImageUrl ?? null,
+    }) ??
+    input.imageUrl ??
+    input.macosImageUrl ??
+    input.windowsImageUrl ??
+    input.androidImageUrl ??
+    null;
+
+  const campaignRows = await sql`
+    UPDATE campaigns
+    SET
+      title = ${input.title},
+      body = ${input.body},
+      target_url = ${input.targetUrl ?? null},
+      icon_url = ${input.iconUrl ?? null},
+      image_url = ${listImageUrl},
+      windows_image_url = ${input.windowsImageUrl ?? null},
+      macos_image_url = ${input.macosImageUrl ?? null},
+      android_image_url = ${input.androidImageUrl ?? null},
+      action_buttons = ${JSON.stringify(input.actionButtons ?? [])}::jsonb,
+      segment_id = ${input.segmentId ?? null},
+      scheduled_at = ${input.scheduledAt ? new Date(input.scheduledAt) : null},
+      updated_at = NOW()
+    WHERE id = ${input.campaignId}
+      AND shop_domain = ${input.shopDomain}
+      AND status = 'draft'
+    RETURNING *
+  `;
+
+  if (!campaignRows[0]) {
+    throw new Error('Failed to update draft campaign.');
+  }
+
+  return campaignRows[0];
+};
+
+export const deleteDraftCampaign = async (shopDomain: string, campaignId: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const existing = await getCampaignById(shopDomain, campaignId);
+  if (!existing) {
+    throw new Error('Campaign not found.');
+  }
+
+  if (String(existing.status ?? '').toLowerCase() !== 'draft') {
+    throw new Error('Only draft campaigns can be deleted.');
+  }
+
+  await sql`
+    DELETE FROM campaigns
+    WHERE id = ${campaignId}
+      AND shop_domain = ${shopDomain}
+      AND status = 'draft'
+  `;
+
+  return { ok: true as const };
+};
+
 export const listCampaigns = async (shopDomain: string, limit = 50) => {
   await ensureSchema();
   const sql = getNeonSql();
