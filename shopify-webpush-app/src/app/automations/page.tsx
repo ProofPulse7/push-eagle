@@ -19,11 +19,12 @@ import { useAutomationsOverview, useAutomationStats } from '@/hooks/queries/use-
 import { toggleAutomationRuleEnabled } from '@/hooks/use-automation-rule-toggle';
 import { readPendingAutomationEnabled } from '@/lib/client/optimistic-automations';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
-import { useShopReady } from '@/hooks/use-shop-ready';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 import { normalizeAutomationRules } from '@/lib/client/normalize-automation-rule';
 import { queryKeys } from '@/lib/client/query-keys';
 import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
 import { readAutomationStatsFromCache } from '@/lib/client/automation-stats-cache';
+import { prefetchAutomationRulesCache } from '@/lib/client/cached-json-storage';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { AutomationStats } from '@/components/automations/automation-stats';
 import { DateRangePicker } from '@/components/analytics/date-range-picker';
@@ -157,7 +158,7 @@ const getActionButtonClassName = (enabled: boolean) =>
         : 'h-8 rounded-lg bg-violet-600 px-3 text-xs font-semibold text-white hover:bg-violet-600/90';
 
 export default function AutomationsPage() {
-    const { shop: activeShopDomain, isReady: shopReady } = useShopReady();
+    const activeShopDomain = useShopDomain();
     const { atLimit } = useImpressionLimit();
     const queryClient = useQueryClient();
     const router = useRouter();
@@ -199,6 +200,8 @@ export default function AutomationsPage() {
         if (!activeShopDomain) {
             return;
         }
+
+        void prefetchAutomationRulesCache(activeShopDomain);
 
         for (const ruleKey of ['welcome_subscriber', 'cart_abandonment_30m'] as const) {
             const href = `${automationDefinitions[ruleKey].href}?shop=${encodeURIComponent(activeShopDomain)}`;
@@ -250,7 +253,7 @@ export default function AutomationsPage() {
     const statsLoading = Boolean(activeShopDomain) && isLoading && !effectiveOverview;
     const showStatsRefresh = (isFetching && Boolean(effectiveOverview)) || (isStatsFetching && Boolean(effectiveStats));
     const loadError =
-        shopReady && !activeShopDomain
+        !activeShopDomain
             ? 'Missing shop context. Open the app from Shopify so automation data can load for the current store.'
             : isError
               ? queryError instanceof Error

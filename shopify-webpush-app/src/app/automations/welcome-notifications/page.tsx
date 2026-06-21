@@ -5,16 +5,16 @@ import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, TabletSmartphone, Zap } from 'lucide-react';
 
+import { AutomationFlowStepsSkeleton } from '@/components/automations/automation-flow-steps-skeleton';
 import { AutomationRuleStatusBadge, AutomationRuleToggleButton } from '@/components/automations/automation-rule-toggle';
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
 import { FlowStats } from '@/components/automations/flow-stats';
 import { Button } from '@/components/ui/button';
 import {
-  applyPendingFlowStepStates,
   createDebouncedAutomationStepsSaver,
-  stepEnabledFromConfig,
 } from '@/lib/client/automation-flow-steps';
 import { resolveAutomationRuleEnabled, useAutomationRuleToggle } from '@/hooks/use-automation-rule-toggle';
+import { useAutomationFlowRules } from '@/hooks/use-automation-flow-rules';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,8 +24,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useCachedJson } from '@/hooks/use-cached-json';
 import { useSettings } from '@/context/settings-context';
+import { mergeFlowNotificationsFromSteps } from '@/lib/client/automation-flow-notification-merge';
 import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
 
 type NotificationPreviewData = {
@@ -167,111 +167,86 @@ export default function WelcomeNotificationsPage() {
   const shopDomain = queryShop || settingsShop || '';
 
   const [previewDevice, setPreviewDevice] = useState<'windows' | 'macos' | 'android' | 'ios'>('android');
-  const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
+  const [notifications, setNotifications] = useState<FlowNotification[] | null>(null);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
   const [ruleEnabled, setRuleEnabled] = useState(false);
   const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
 
-  const overviewUrl = shopDomain ? '/api/automations/overview?shop=' + encodeURIComponent(shopDomain) : '';
-  const rulesUrl = shopDomain ? '/api/automations/rules?shop=' + encodeURIComponent(shopDomain) : '';
-
-  const { data: overviewPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; impressions?: number; clicks?: number; revenueCents?: number; enabled?: boolean }> }>({
-    cacheKey: `welcome-overview:${shopDomain}`,
-    url: overviewUrl,
-    enabled: Boolean(shopDomain),
+  const {
+    rule,
+    overviewPayload,
+    flowConfigReady,
+    flowConfigLoading,
+  } = useAutomationFlowRules({
+    shopDomain,
+    ruleKey: 'welcome_subscriber',
+    rulesCacheKey: `welcome-rules:${shopDomain}`,
+    overviewCacheKey: `welcome-overview:${shopDomain}`,
   });
 
-  const { data: rulesPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; enabled?: boolean; config?: { steps?: Record<string, WelcomeRuleStepConfig> } }> }>({
-    cacheKey: `welcome-rules:${shopDomain}`,
-    url: rulesUrl,
-    enabled: Boolean(shopDomain),
-  });
+  const resolvedNotifications = useMemo(() => {
+    if (!flowConfigReady || !shopDomain) {
+      return null;
+    }
+
+    const merged = mergeFlowNotificationsFromSteps(
+      flowData.notifications as FlowNotification[],
+      rule?.config?.steps as Record<string, WelcomeRuleStepConfig> | undefined,
+      shopDomain,
+      'welcome_subscriber',
+      delayMinutesToLabel,
+      delayLabelToMinutes,
+    );
+
+    if (displaySiteName === 'Your store') {
+      return merged;
+    }
+
+    return merged.map((item) => ({
+      ...item,
+      notification: {
+        ...item.notification,
+        siteName: displaySiteName,
+      },
+    }));
+  }, [displaySiteName, flowConfigReady, rule, shopDomain]);
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
   }, []);
 
+  const displayNotifications = notifications ?? resolvedNotifications;
+
   useEffect(() => {
-    if (displaySiteName === 'Your store') {
+    if (!resolvedNotifications) {
       return;
     }
 
-    setNotifications((current) =>
-      current.map((item) => ({
-        ...item,
-        notification: {
-          ...item.notification,
-          siteName: displaySiteName,
-        },
-      })),
-    );
-  }, [displaySiteName]);
+    setNotifications(resolvedNotifications);
+  }, [resolvedNotifications]);
 
   useEffect(() => {
     if (!overviewPayload?.ok) return;
-    const rule = (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber');
-    if (!rule) return;
-    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+    const overviewRule = (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber');
+    if (!overviewRule) return;
+    setRuleStats({
+      impressions: overviewRule.impressions ?? 0,
+      clicks: overviewRule.clicks ?? 0,
+      revenueCents: overviewRule.revenueCents ?? 0,
+    });
   }, [overviewPayload]);
 
   useEffect(() => {
     if (!shopDomain) return;
-    setNotifications((current) => applyPendingFlowStepStates(shopDomain, 'welcome_subscriber', current));
-  }, [shopDomain]);
-
-  useEffect(() => {
-    if (!shopDomain) return;
-    const apiRule = rulesPayload?.ok
-      ? (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber')
-      : undefined;
-    const apiOverviewRule = overviewPayload?.ok
-      ? (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber')
-      : undefined;
     setRuleEnabled(
       resolveAutomationRuleEnabled(
         shopDomain,
         'welcome_subscriber',
         queryClient,
-        apiRule?.enabled ?? apiOverviewRule?.enabled,
+        rule?.enabled,
       ),
     );
-  }, [overviewPayload, queryClient, rulesPayload, shopDomain]);
-
-  useEffect(() => {
-    if (!rulesPayload?.ok) return;
-    const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber');
-    if (!rule) return;
-
-    const steps = rule.config?.steps;
-    if (!steps) return;
-
-    setNotifications((current) =>
-      applyPendingFlowStepStates(
-        shopDomain,
-        'welcome_subscriber',
-        current.map((item) => {
-          const step = steps[item.id] ?? {};
-          return {
-            ...item,
-            delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
-            status: stepEnabledFromConfig(step.enabled),
-            notification: {
-              ...item.notification,
-              title: step.title ?? item.notification.title,
-              message: step.body ?? item.notification.message,
-              targetUrl: step.targetUrl ?? item.notification.targetUrl,
-              iconUrl: step.iconUrl ?? item.notification.iconUrl,
-              heroUrl: step.imageUrl ?? item.notification.heroUrl,
-              windowsImageUrl: step.windowsImageUrl ?? item.notification.windowsImageUrl ?? item.notification.heroUrl,
-              macosImageUrl: step.macosImageUrl ?? item.notification.macosImageUrl ?? item.notification.heroUrl,
-              androidImageUrl: step.androidImageUrl ?? item.notification.androidImageUrl ?? item.notification.heroUrl,
-              actionButtons: step.actionButtons ?? item.notification.actionButtons,
-            },
-          };
-        }),
-      ),
-    );
-  }, [rulesPayload, shopDomain]);
+  }, [queryClient, rule?.enabled, shopDomain]);
 
   const saveWelcomeConfig = useMemo(
     () =>
@@ -284,7 +259,9 @@ export default function WelcomeNotificationsPage() {
   );
 
   const handleStatusChange = (id: string, checked: boolean) => {
-    const updatedNotifications: FlowNotification[] = notifications.map((item) =>
+    const base = notifications ?? resolvedNotifications;
+    if (!base) return;
+    const updatedNotifications: FlowNotification[] = base.map((item) =>
       item.id === id ? { ...item, status: (checked ? 'Active' : 'Inactive') as 'Active' | 'Inactive' } : item,
     );
     setNotifications(updatedNotifications);
@@ -292,7 +269,9 @@ export default function WelcomeNotificationsPage() {
   };
 
   const handleDelayChange = (id: string, delayLabel: string) => {
-    const updatedNotifications = notifications.map((item) =>
+    const base = notifications ?? resolvedNotifications;
+    if (!base) return;
+    const updatedNotifications = base.map((item) =>
       item.id === id ? { ...item, delay: delayLabel } : item,
     );
     setNotifications(updatedNotifications);
@@ -368,21 +347,27 @@ export default function WelcomeNotificationsPage() {
           </div>
           <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />
           <div className="w-full flex flex-col items-center">
-            {notifications.map((step, index) => (
-              <Fragment key={step.id}>
-                <div className="w-full">
-                  <FlowNotificationCard
-                    step={step}
-                    previewDevice={previewDevice}
-                    onStatusChange={handleStatusChange}
-                    onDelayChange={handleDelayChange}
-                    automationName="welcome-notifications"
-                    shopDomain={shopDomain}
-                  />
-                </div>
-                {index < notifications.length - 1 && <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />}
-              </Fragment>
-            ))}
+            {flowConfigLoading || !displayNotifications ? (
+              <AutomationFlowStepsSkeleton count={flowData.notifications.length} />
+            ) : (
+              displayNotifications.map((step, index) => (
+                <Fragment key={step.id}>
+                  <div className="w-full">
+                    <FlowNotificationCard
+                      step={step}
+                      previewDevice={previewDevice}
+                      onStatusChange={handleStatusChange}
+                      onDelayChange={handleDelayChange}
+                      automationName="welcome-notifications"
+                      shopDomain={shopDomain}
+                    />
+                  </div>
+                  {index < displayNotifications.length - 1 && (
+                    <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />
+                  )}
+                </Fragment>
+              ))
+            )}
           </div>
         </div>
       </div>

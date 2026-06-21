@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { prefetchAppPages } from '@/hooks/queries/use-app-queries';
+import { prefetchAutomationRulesCache } from '@/lib/client/cached-json-storage';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
 const ROUTES = [
@@ -40,6 +41,7 @@ export function BackgroundRoutePrefetcher() {
 
     const startTimer = window.setTimeout(() => {
       void prefetchAppPages(queryClient, shop);
+      void prefetchAutomationRulesCache(shop);
 
       let index = 0;
       const scheduleNext = () => {
