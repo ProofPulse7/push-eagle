@@ -271,6 +271,7 @@ export const purgeShopGdprData = async (shopDomainInput: string) => {
   const sql = getNeonSql();
   await ensureGdprSchema();
   await sql`DELETE FROM gdpr_data_exports WHERE shop_domain = ${shopDomain}`;
+  await sql`DELETE FROM merchant_billing WHERE shop_domain = ${shopDomain}`;
   await sql`DELETE FROM merchants WHERE shop_domain = ${shopDomain}`;
 
   return {

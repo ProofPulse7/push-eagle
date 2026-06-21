@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { enqueueIngestionJob, processIngestionJob } from '@/lib/server/data/store';
 import { extractShopDomain, parseShopDomain } from '@/lib/server/shop-context';
+import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
 
 export const runtime = 'nodejs';
 
@@ -20,11 +21,12 @@ const schema = z.object({
   metadata: z.record(z.any()).optional().nullable(),
 });
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+const buildCorsHeaders = (origin: string | null) => ({
+  'Access-Control-Allow-Origin': origin || '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Domain',
-};
+  Vary: 'Origin',
+});
 
 const getRequestIp = (request: Request) => {
   const forwarded = request.headers.get('x-forwarded-for') ?? '';
@@ -53,21 +55,32 @@ const deriveExternalId = (shopDomain: string, body: z.infer<typeof schema>) => {
   return null;
 };
 
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: corsHeaders });
+export async function OPTIONS(request: Request) {
+  const origin = request.headers.get('origin');
+  return new NextResponse(null, { status: 204, headers: buildCorsHeaders(origin) });
 }
 
 export async function POST(request: Request) {
+  const origin = request.headers.get('origin');
+
   try {
     const url = new URL(request.url);
     const body = schema.parse(await request.json());
     const shopDomain = body.shopDomain ? parseShopDomain(body.shopDomain) : extractShopDomain(request);
 
+    const auth = await verifyStorefrontRequest(request, shopDomain);
+    if (!auth.ok) {
+      return NextResponse.json(
+        { ok: false, error: 'Unauthorized pixel event request.' },
+        { status: 401, headers: buildCorsHeaders(origin) },
+      );
+    }
+
     const externalId = deriveExternalId(shopDomain, body);
     if (!externalId) {
       return NextResponse.json(
         { ok: false, error: 'Unable to derive externalId from pixel payload.' },
-        { status: 400, headers: corsHeaders },
+        { status: 400, headers: buildCorsHeaders(origin) },
       );
     }
 
@@ -102,20 +115,20 @@ export async function POST(request: Request) {
     });
 
     if (!jobId) {
-      return NextResponse.json({ ok: true, queued: false, duplicate: true }, { headers: corsHeaders });
+      return NextResponse.json({ ok: true, queued: false, duplicate: true }, { headers: buildCorsHeaders(origin) });
     }
 
     if (url.searchParams.get('sync') === '1') {
       const processed = await processIngestionJob(jobId);
-      return NextResponse.json({ ok: true, queued: true, sync: true, jobId, ...processed }, { headers: corsHeaders });
+      return NextResponse.json({ ok: true, queued: true, sync: true, jobId, ...processed }, { headers: buildCorsHeaders(origin) });
     }
 
-    return NextResponse.json({ ok: true, queued: true, jobId }, { headers: corsHeaders });
+    return NextResponse.json({ ok: true, queued: true, jobId }, { headers: buildCorsHeaders(origin) });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to ingest web pixel event.';
     return NextResponse.json(
       { ok: false, error: message },
-      { status: 400, headers: corsHeaders },
+      { status: 400, headers: buildCorsHeaders(origin) },
     );
   }
 }

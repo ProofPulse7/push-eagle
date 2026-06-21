@@ -6,7 +6,7 @@
   data-push-eagle-root
   data-enabled="true"
   data-mode="{{ block.settings.mode }}"
-  data-app-url="https://push-eagle-dashboard.vercel.app"
+  data-app-url="{{ block.settings.app_url | default: 'https://push-eagle-dashboard.vercel.app' | strip }}"
   data-shop-domain="{{ shop.permanent_domain }}"
   data-shopify-shop-id="{{ shop.id }}"
   data-shopify-shop-name="{{ shop.name | escape }}"
@@ -126,6 +126,17 @@
         { "value": "browser", "label": "Browser native dialog" }
       ],
       "default": "custom"
+    },
+    {
+      "type": "header",
+      "content": "App connection"
+    },
+    {
+      "type": "text",
+      "id": "app_url",
+      "label": "Push Eagle dashboard URL",
+      "info": "Leave the default unless Shopify support asks you to change it.",
+      "default": "https://push-eagle-dashboard.vercel.app"
     },
     {
       "type": "header",

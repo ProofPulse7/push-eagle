@@ -78,9 +78,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const authenticated =
-    request.cookies.get('pe_authenticated')?.value === '1' ||
-    request.nextUrl.searchParams.get('from_sso') === '1';
+  const authenticated = request.cookies.get('pe_authenticated')?.value === '1';
 
   if (!authenticated) {
     return buildConnectRedirect(request, shop);

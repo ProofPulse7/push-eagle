@@ -5,7 +5,7 @@ Push Eagle uses **two public URLs** that work together:
 | Role | Vercel project | URL | What it does |
 |------|----------------|-----|--------------|
 | **Web app** (Next.js) | `push-eagle-dashboard` | `https://push-eagle-dashboard.vercel.app` | Merchant dashboard UI, plans, automations, business webhooks, app proxy APIs. **Edit `shopify-webpush-app/` → push here.** |
-| **Shopify app** (Remix) | `push-eagle` | `https://push-eagle.vercel.app` | Shopify OAuth, session storage, GDPR compliance webhooks, connection between Shopify and the web app. **Edit `app/` + `shopify.app.toml` → push here.** |
+| **Shopify app** (Remix) | `push-eagle` | `https://push-eagle.vercel.app` | Shopify OAuth, session storage, and SSO bridge to the dashboard. **Edit `app/` + `shopify.app.toml` → push here.** |
 
 Merchants open the app from Shopify Admin at:
 
@@ -143,7 +143,10 @@ To update production Partner Dashboard config (application URL, redirects, webho
 | `NEON_DATABASE_URL` | Same Neon URL as Remix `DATABASE_URL` |
 | `SHOPIFY_SESSION_DATABASE_URL` | Same Neon URL (reads `public.Session`) |
 | `SHOPIFY_DASHBOARD_SSO_SECRET` | Same value as on Remix project |
-| `SHOPIFY_BILLING_TEST` | `true` on dev stores — **required here for test plan checkout** (not in `shopify.app.toml`) |
+| `SHOPIFY_SCOPES` | Same as `shopify.app.toml` scopes |
+| `RESEND_API_KEY` | Transactional email for GDPR data request delivery |
+| `GDPR_EXPORT_FROM_EMAIL` | `support@push-eagle.com` (verified sender in Resend) |
+| `SHOPIFY_BILLING_TEST` | `true` on dev/preview only — **must be unset/false in production** |
 
 **Important:** `NEXT_PUBLIC_APP_URL` and `SHOPIFY_APP_URL` must be the **dashboard** URL. `SHOPIFY_ROOT_APP_URL` must be the **Remix** URL.
 

@@ -4,10 +4,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { env } from '@/lib/config/env';
-import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { getRequestGeo } from '@/lib/server/request-geo';
 import { upsertSubscriberToken } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
+import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
 
 export const runtime = 'nodejs';
 
@@ -36,25 +36,9 @@ const appOrigin = (() => {
   }
 })();
 
-const isTrustedRequest = (request: Request) => {
-  const url = new URL(request.url);
-  const hasProxySignature = url.searchParams.has('signature');
-
-  if (hasProxySignature) {
-    return verifyShopifyAppProxySignature(url.searchParams);
-  }
-
-  const origin = request.headers.get('origin');
-  if (!origin) {
-    return false;
-  }
-
-  if (appOrigin && origin === appOrigin) {
-    return true;
-  }
-
-  // Allow direct storefront fallback calls (custom domains and myshopify domains).
-  return /^https:\/\/[a-z0-9.-]+$/i.test(origin);
+const isTrustedRequest = async (request: Request, shopDomain: string) => {
+  const auth = await verifyStorefrontRequest(request, shopDomain);
+  return auth.ok;
 };
 
 const buildCorsHeaders = (origin: string | null) => ({
@@ -113,13 +97,14 @@ export async function OPTIONS(request: Request) {
 export async function POST(request: Request) {
   try {
     const origin = request.headers.get('origin');
-    if (!isTrustedRequest(request)) {
+    const body = schema.parse(await request.json());
+    const shopDomain = parseShopDomain(body.shopDomain);
+
+    if (!(await isTrustedRequest(request, shopDomain))) {
       return NextResponse.json({ ok: false, error: 'Unauthorized token registration request.' }, { status: 401, headers: buildCorsHeaders(getCorsOrigin(origin)) });
     }
 
     const url = new URL(request.url);
-    const body = schema.parse(await request.json());
-    const shopDomain = parseShopDomain(body.shopDomain);
 
     if (url.searchParams.has('shop')) {
       const proxiedShopDomain = parseShopDomain(url.searchParams.get('shop'));

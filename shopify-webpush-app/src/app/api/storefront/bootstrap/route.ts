@@ -5,6 +5,7 @@ import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { getMerchantCapabilitySnapshot, getOptInSettings, processDueAutomationJobsForShop } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
+import { verifyStorefrontBootstrapRequest } from '@/lib/server/storefront-request-auth';
 import { getAnonymousExternalId, getCustomerExternalId } from '@/lib/server/storefront-identity';
 
 export const runtime = 'nodejs';
@@ -43,13 +44,16 @@ export async function GET(request: Request) {
 
   try {
     const url = new URL(request.url);
-
-    // Signature verification is best-effort only: the bootstrap response contains
-    // non-sensitive public data (popup styling, Firebase config). A hard 401 would
-    // silently fall back to hardcoded defaults on the storefront, which is worse.
-    const signatureValid = verifyShopifyAppProxySignature(url.searchParams);
-
     const shopDomain = parseShopDomain(url.searchParams.get('shop'));
+
+    const auth = await verifyStorefrontBootstrapRequest(request, shopDomain);
+    if (!auth.ok) {
+      const errResponse = NextResponse.json({ ok: false, error: 'Unauthorized storefront bootstrap request.' }, { status: 401 });
+      addCorsHeaders(errResponse, origin);
+      return errResponse;
+    }
+
+    const signatureValid = verifyShopifyAppProxySignature(url.searchParams);
     const requestedExternalIdRaw = String(url.searchParams.get('externalId') ?? '').trim();
     const requestedExternalId = /^[a-z0-9:_-]{8,128}$/i.test(requestedExternalIdRaw)
       ? requestedExternalIdRaw

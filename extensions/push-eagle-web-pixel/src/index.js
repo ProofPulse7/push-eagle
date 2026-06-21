@@ -175,8 +175,73 @@ const getPrivacySnapshot = (init) => {
   return snapshot;
 };
 
-register(() => {
-  // Temporary no-op mode: storefront script + cart webhook pipeline are the
-  // source of truth for automation triggering. This avoids strict pixel runtime
-  // crashes like "Cannot read properties of null (reading 'flags')".
+register(({ analytics, settings, init }) => {
+  if (!analytics || typeof analytics.subscribe !== 'function') {
+    return;
+  }
+
+  const privacySnapshot = getPrivacySnapshot(init);
+  if (!privacySnapshot) {
+    return;
+  }
+
+  const initialShopDomain = getShopDomain(init);
+  const endpointPath = normalizePath(settings?.endpointPath);
+
+  const send = async (eventName, event) => {
+    const eventType = mapEventType(eventName);
+    const shopDomain = initialShopDomain || getShopDomainFromEvent(event);
+    if (!eventType || !shopDomain) {
+      return;
+    }
+
+    const cartToken = getCartToken(event);
+    const clientId = toStringSafe(event?.clientId);
+    const externalId = cartToken
+      ? `cart:${shopDomain}:${cartToken}`
+      : clientId
+        ? `px:${shopDomain}:${clientId}`
+        : null;
+
+    if (!externalId) {
+      return;
+    }
+
+    const payload = {
+      shopDomain,
+      externalId,
+      clientId,
+      eventName,
+      eventType,
+      pageUrl: getPageUrl(event),
+      productId: getProductId(event),
+      cartToken,
+      metadata: {
+        id: toStringSafe(event?.id),
+        sequenceIndex: typeof event?.seq === 'number' ? event.seq : null,
+        timestamp: toStringSafe(event?.timestamp),
+        orderId: getOrderId(event),
+        checkoutTotalPriceCents: getCheckoutTotalAmount(event),
+      },
+    };
+
+    try {
+      await fetch(endpointPath, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shop-Domain': shopDomain,
+        },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      });
+    } catch (_error) {
+      // Best-effort delivery in strict pixel sandbox.
+    }
+  };
+
+  subscribeSafely(analytics, 'page_viewed', (event) => send('page_viewed', event));
+  subscribeSafely(analytics, 'product_viewed', (event) => send('product_viewed', event));
+  subscribeSafely(analytics, 'checkout_started', (event) => send('checkout_started', event));
+  subscribeSafely(analytics, 'checkout_completed', (event) => send('checkout_completed', event));
 });

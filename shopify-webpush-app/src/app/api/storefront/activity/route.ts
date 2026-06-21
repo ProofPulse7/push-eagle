@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { processDueAutomationJobsForShop, recordSubscriberActivity } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
+import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
 
 export const runtime = 'nodejs';
 
@@ -16,20 +17,32 @@ const schema = z.object({
   metadata: z.record(z.any()).optional().nullable(),
 });
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+const buildCorsHeaders = (origin: string | null) => ({
+  'Access-Control-Allow-Origin': origin || '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Domain',
-};
+  Vary: 'Origin',
+});
 
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: corsHeaders });
+export async function OPTIONS(request: Request) {
+  const origin = request.headers.get('origin');
+  return new NextResponse(null, { status: 204, headers: buildCorsHeaders(origin) });
 }
 
 export async function POST(request: Request) {
+  const origin = request.headers.get('origin');
+
   try {
     const body = schema.parse(await request.json());
     const shopDomain = parseShopDomain(body.shopDomain);
+
+    const auth = await verifyStorefrontRequest(request, shopDomain);
+    if (!auth.ok) {
+      return NextResponse.json(
+        { ok: false, error: 'Unauthorized storefront activity request.' },
+        { status: 401, headers: buildCorsHeaders(origin) },
+      );
+    }
 
     const result = await recordSubscriberActivity({
       shopDomain,
@@ -43,9 +56,9 @@ export async function POST(request: Request) {
 
     void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
 
-    return NextResponse.json({ ok: true, ...result }, { headers: corsHeaders });
+    return NextResponse.json({ ok: true, ...result }, { headers: buildCorsHeaders(origin) });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to record subscriber activity.';
-    return NextResponse.json({ ok: false, error: message }, { status: 400, headers: corsHeaders });
+    return NextResponse.json({ ok: false, error: message }, { status: 400, headers: buildCorsHeaders(origin) });
   }
 }
