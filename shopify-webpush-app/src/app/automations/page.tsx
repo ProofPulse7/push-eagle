@@ -24,7 +24,6 @@ import { normalizeAutomationRules } from '@/lib/client/normalize-automation-rule
 import { queryKeys } from '@/lib/client/query-keys';
 import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
 import { readAutomationStatsFromCache } from '@/lib/client/automation-stats-cache';
-import { prefetchAutomationRulesCache } from '@/lib/client/cached-json-storage';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { AutomationStats } from '@/components/automations/automation-stats';
 import { DateRangePicker } from '@/components/analytics/date-range-picker';
@@ -200,8 +199,6 @@ export default function AutomationsPage() {
         if (!activeShopDomain) {
             return;
         }
-
-        void prefetchAutomationRulesCache(activeShopDomain);
 
         for (const ruleKey of ['welcome_subscriber', 'cart_abandonment_30m'] as const) {
             const href = `${automationDefinitions[ruleKey].href}?shop=${encodeURIComponent(activeShopDomain)}`;

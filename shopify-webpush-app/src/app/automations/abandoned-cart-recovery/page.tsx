@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Zap } from 'lucide-react';
 
-import { AutomationFlowStepsSkeleton } from '@/components/automations/automation-flow-steps-skeleton';
 import { AutomationRuleStatusBadge, AutomationRuleToggleButton } from '@/components/automations/automation-rule-toggle';
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -18,11 +17,12 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
 import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
-import { useAutomationFlowRules } from '@/hooks/use-automation-flow-rules';
+import { useCachedJson } from '@/hooks/use-cached-json';
 import {
+  applyPendingFlowStepStates,
   createDebouncedAutomationStepsSaver,
+  stepEnabledFromConfig,
 } from '@/lib/client/automation-flow-steps';
-import { mergeFlowNotificationsFromSteps } from '@/lib/client/automation-flow-notification-merge';
 import { resolveAutomationRuleEnabled, useAutomationRuleToggle } from '@/hooks/use-automation-rule-toggle';
 import { formatCurrency } from '@/lib/utils';
 
@@ -239,86 +239,107 @@ export default function AbandonedCartPage() {
   const shopDomain = queryShop || settingsShop || '';
 
   const [previewDevice, setPreviewDevice] = useState<'windows' | 'macos' | 'android' | 'ios'>('android');
-  const [notifications, setNotifications] = useState<FlowNotification[] | null>(null);
+  const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [showReminderStats, setShowReminderStats] = useState(true);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
   const [ruleEnabled, setRuleEnabled] = useState(false);
 
-  const {
-    rule,
-    overviewPayload,
-    flowConfigReady,
-    flowConfigLoading,
-  } = useAutomationFlowRules({
-    shopDomain,
-    ruleKey: 'cart_abandonment_30m',
-    rulesCacheKey: `cart-rules:${shopDomain}`,
-    overviewCacheKey: `cart-overview:${shopDomain}`,
+  const overviewUrl = shopDomain ? `/api/automations/overview?shop=${encodeURIComponent(shopDomain)}` : '';
+  const rulesUrl = shopDomain ? `/api/automations/rules?shop=${encodeURIComponent(shopDomain)}` : '';
+
+  const { data: overviewPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; impressions?: number; clicks?: number; revenueCents?: number; enabled?: boolean }> }>({
+    cacheKey: `cart-overview:${shopDomain}`,
+    url: overviewUrl,
+    enabled: Boolean(shopDomain),
   });
 
-  const resolvedNotifications = useMemo(() => {
-    if (!flowConfigReady || !shopDomain) {
-      return null;
-    }
-
-    const merged = mergeFlowNotificationsFromSteps(
-      flowData.notifications as FlowNotification[],
-      rule?.config?.steps as Record<string, CartRuleStepConfig> | undefined,
-      shopDomain,
-      'cart_abandonment_30m',
-      delayMinutesToLabel,
-      delayLabelToMinutes,
-    );
-
-    if (displaySiteName === 'Your store') {
-      return merged;
-    }
-
-    return merged.map((item) => ({
-      ...item,
-      notification: {
-        ...item.notification,
-        siteName: displaySiteName,
-      },
-    }));
-  }, [displaySiteName, flowConfigReady, rule, shopDomain]);
+  const { data: rulesPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; enabled?: boolean; config?: { steps?: Record<string, CartRuleStepConfig> } }> }>({
+    cacheKey: `cart-rules:${shopDomain}`,
+    url: rulesUrl,
+    enabled: Boolean(shopDomain),
+  });
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
   }, []);
 
-  const displayNotifications = notifications ?? resolvedNotifications;
-
   useEffect(() => {
-    if (!resolvedNotifications) {
+    if (displaySiteName === 'Your store') {
       return;
     }
 
-    setNotifications(resolvedNotifications);
-  }, [resolvedNotifications]);
+    setNotifications((current) =>
+      current.map((item) => ({
+        ...item,
+        notification: {
+          ...item.notification,
+          siteName: displaySiteName,
+        },
+      })),
+    );
+  }, [displaySiteName]);
 
   useEffect(() => {
     if (!overviewPayload?.ok) return;
-    const overviewRule = (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
-    if (!overviewRule) return;
-    setRuleStats({
-      impressions: overviewRule.impressions ?? 0,
-      clicks: overviewRule.clicks ?? 0,
-      revenueCents: overviewRule.revenueCents ?? 0,
-    });
+    const rule = (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
+    if (!rule) return;
+    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
   }, [overviewPayload]);
 
   useEffect(() => {
     if (!shopDomain) return;
+    setNotifications((current) => applyPendingFlowStepStates(shopDomain, 'cart_abandonment_30m', current));
+  }, [shopDomain]);
+
+  useEffect(() => {
+    if (!shopDomain) return;
+    const apiRule = rulesPayload?.ok
+      ? (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m')
+      : undefined;
+    const apiOverviewRule = overviewPayload?.ok
+      ? (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m')
+      : undefined;
     setRuleEnabled(
       resolveAutomationRuleEnabled(
         shopDomain,
         'cart_abandonment_30m',
         queryClient,
-        rule?.enabled,
+        apiRule?.enabled ?? apiOverviewRule?.enabled,
       ),
     );
-  }, [queryClient, rule?.enabled, shopDomain]);
+  }, [overviewPayload, queryClient, rulesPayload, shopDomain]);
+
+  useEffect(() => {
+    if (!rulesPayload?.ok) return;
+    const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
+    if (!rule) return;
+
+    const steps = rule.config?.steps;
+    if (!steps) return;
+
+    setNotifications((current) =>
+      applyPendingFlowStepStates(
+        shopDomain,
+        'cart_abandonment_30m',
+        current.map((item) => {
+          const step = steps[item.id] ?? {};
+          return {
+            ...item,
+            delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
+            status: stepEnabledFromConfig(step.enabled),
+            notification: {
+              ...item.notification,
+              title: step.title ?? item.notification.title,
+              message: step.body ?? item.notification.message,
+              iconUrl: step.iconUrl ?? item.notification.iconUrl,
+              heroUrl: step.imageUrl ?? item.notification.heroUrl,
+              actionButtons: step.actionButtons ?? item.notification.actionButtons,
+            },
+          };
+        }),
+      ),
+    );
+  }, [rulesPayload, shopDomain]);
 
   const saveCartConfig = useMemo(
     () =>
@@ -331,9 +352,7 @@ export default function AbandonedCartPage() {
   );
 
   const handleStatusChange = (id: string, checked: boolean) => {
-    const base = notifications ?? resolvedNotifications;
-    if (!base) return;
-    const updatedNotifications = base.map((item) =>
+    const updatedNotifications = notifications.map((item) =>
       item.id === id ? { ...item, status: (checked ? 'Active' : 'Inactive') as 'Active' | 'Inactive' } : item,
     );
     setNotifications(updatedNotifications);
@@ -341,9 +360,7 @@ export default function AbandonedCartPage() {
   };
 
   const handleDelayChange = (id: string, delayLabel: string) => {
-    const base = notifications ?? resolvedNotifications;
-    if (!base) return;
-    const updatedNotifications = base.map((item) =>
+    const updatedNotifications = notifications.map((item) =>
       item.id === id ? { ...item, delay: delayLabel } : item,
     );
     setNotifications(updatedNotifications);
@@ -354,9 +371,7 @@ export default function AbandonedCartPage() {
     setRuleEnabled(toggleRuleEnabled(ruleEnabled));
   };
 
-  const isFlowActive = Boolean(
-    ruleEnabled && displayNotifications?.some((item) => item.status === 'Active'),
-  );
+  const isFlowActive = ruleEnabled && notifications.some((item) => item.status === 'Active');
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">
@@ -446,7 +461,7 @@ export default function AbandonedCartPage() {
                 </Alert>
               )}
 
-              {ruleEnabled && !flowConfigLoading && displayNotifications && !isFlowActive && (
+              {ruleEnabled && !isFlowActive && (
                 <Alert className="w-full mb-8">
                   <AlertTitle>No reminders are active</AlertTitle>
                   <AlertDescription>
@@ -466,28 +481,22 @@ export default function AbandonedCartPage() {
               <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />
 
               <div className="w-full flex flex-col items-center">
-                {flowConfigLoading || !displayNotifications ? (
-                  <AutomationFlowStepsSkeleton count={flowData.notifications.length} />
-                ) : (
-                  displayNotifications.map((step, index) => (
-                    <Fragment key={step.id}>
-                      <div className="w-full">
-                        <FlowNotificationCard
-                          step={step}
-                          previewDevice={previewDevice}
-                          onStatusChange={handleStatusChange}
-                          onDelayChange={handleDelayChange}
-                          automationName="abandoned-cart-recovery"
-                          shopDomain={shopDomain}
-                        />
-                        {showReminderStats && <ReminderStats stats={step.stats} />}
-                      </div>
-                      {index < displayNotifications.length - 1 && (
-                        <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />
-                      )}
-                    </Fragment>
-                  ))
-                )}
+                {notifications.map((step, index) => (
+                  <Fragment key={step.id}>
+                    <div className="w-full">
+                      <FlowNotificationCard
+                        step={step}
+                        previewDevice={previewDevice}
+                        onStatusChange={handleStatusChange}
+                        onDelayChange={handleDelayChange}
+                        automationName="abandoned-cart-recovery"
+                        shopDomain={shopDomain}
+                      />
+                      {showReminderStats && <ReminderStats stats={step.stats} />}
+                    </div>
+                    {index < notifications.length - 1 && <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />}
+                  </Fragment>
+                ))}
               </div>
             </div>
           </TabsContent>

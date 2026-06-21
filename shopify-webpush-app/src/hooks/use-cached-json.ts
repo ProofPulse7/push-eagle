@@ -9,24 +9,6 @@ type CachedEnvelope<T> = {
 
 const getStorageKey = (cacheKey: string) => `pe-cache:${cacheKey}`;
 
-const readSyncCache = <T>(storageKey: string): T | null => {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  try {
-    const cachedRaw = localStorage.getItem(storageKey);
-    if (!cachedRaw) {
-      return null;
-    }
-
-    const parsed = JSON.parse(cachedRaw) as CachedEnvelope<T>;
-    return parsed?.data ?? null;
-  } catch {
-    return null;
-  }
-};
-
 export const useCachedJson = <T>(input: {
   cacheKey: string;
   url: string;
@@ -34,18 +16,10 @@ export const useCachedJson = <T>(input: {
   refreshMs?: number;
 }) => {
   const { cacheKey, url, enabled = true, refreshMs = 0 } = input;
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(Boolean(enabled));
+
   const storageKey = useMemo(() => getStorageKey(cacheKey), [cacheKey]);
-
-  const [data, setData] = useState<T | null>(() =>
-    enabled && cacheKey ? readSyncCache<T>(getStorageKey(cacheKey)) : null,
-  );
-  const [loading, setLoading] = useState(() => {
-    if (!enabled) {
-      return false;
-    }
-
-    return readSyncCache<T>(getStorageKey(cacheKey)) == null;
-  });
 
   useEffect(() => {
     if (!enabled) {
@@ -55,12 +29,18 @@ export const useCachedJson = <T>(input: {
 
     let cancelled = false;
 
-    const cached = readSyncCache<T>(storageKey);
-    if (cached != null) {
-      setData(cached);
-      setLoading(false);
-    } else {
-      setLoading(true);
+    // Serve cached data instantly, then revalidate in background.
+    try {
+      const cachedRaw = localStorage.getItem(storageKey);
+      if (cachedRaw) {
+        const parsed = JSON.parse(cachedRaw) as CachedEnvelope<T>;
+        if (parsed?.data != null) {
+          setData(parsed.data);
+          setLoading(false);
+        }
+      }
+    } catch {
+      // Ignore malformed cache entries.
     }
 
     const fetchFresh = async () => {

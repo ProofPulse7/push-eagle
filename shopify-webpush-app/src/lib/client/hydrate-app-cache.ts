@@ -3,7 +3,6 @@ import type { QueryClient } from '@tanstack/react-query';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { mergeCampaignsFromCache } from '@/lib/client/optimistic-campaigns';
 import { mergeAutomationOverviewPayload } from '@/lib/client/optimistic-automations';
-import { hydrateMerchantDisplayFormat } from '@/lib/merchant';
 import { queryKeys } from '@/lib/client/query-keys';
 
 export type AppBootstrapPayload = {
@@ -33,11 +32,6 @@ export const hydrateAppCache = (
   payload: AppBootstrapPayload,
 ) => {
   const shopDomain = payload.shopDomain || shop;
-
-  hydrateMerchantDisplayFormat(
-    shopDomain,
-    String(payload.merchantOverview?.currencyCode ?? ''),
-  );
 
   queryClient.setQueryData(queryKeys.merchantOverview(shopDomain), {
     ok: true,
