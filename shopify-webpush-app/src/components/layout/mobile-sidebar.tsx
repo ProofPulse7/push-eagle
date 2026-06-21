@@ -16,8 +16,7 @@ import {
 } from 'lucide-react';
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
-import { useShopDomain } from '@/hooks/use-shop-domain';
-import { buildNewCampaignHref } from '@/lib/client/start-new-campaign';
+import { appendFreshCampaignWizardParam } from '@/lib/client/campaign-wizard-fresh';
 
 const NavLogo = (props: React.SVGProps<SVGSVGElement>) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" {...props}>
@@ -27,8 +26,6 @@ const NavLogo = (props: React.SVGProps<SVGSVGElement>) => (
 
 
 export function MobileSidebar() {
-  const shopDomain = useShopDomain();
-
   return (
     <div className="flex h-full max-h-screen flex-col bg-card text-card-foreground">
        <div className="flex h-16 shrink-0 items-center border-b px-6">
@@ -40,7 +37,7 @@ export function MobileSidebar() {
 
       <div className="flex-1 overflow-auto p-4">
         <Button asChild className="w-full">
-            <Link href={buildNewCampaignHref(shopDomain)}>
+            <Link href={appendFreshCampaignWizardParam('/campaigns/new/details')}>
                 <Plus className="h-4 w-4" />
                 New Campaign
             </Link>

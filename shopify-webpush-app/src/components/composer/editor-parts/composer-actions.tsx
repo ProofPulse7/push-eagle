@@ -50,14 +50,6 @@ export const ComposerActions = ({
     } = useCampaignState();
     const [isSending, setIsSending] = useState(false);
 
-    useEffect(() => {
-        const queryShop = new URLSearchParams(window.location.search).get('shop');
-        const scheduleHref = queryShop
-            ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
-            : '/campaigns/new/schedule';
-        router.prefetch(scheduleHref);
-    }, [router]);
-
     const buildDraftInput = (): SaveCampaignDraftInput => ({
         shopDomain: shopDomain || '',
         draftCampaignId,
@@ -101,7 +93,7 @@ export const ComposerActions = ({
                 url: primaryLink,
                 icon: logo.preview,
                 image: macHero.preview,
-            });
+            }, shopDomain || undefined);
             toast({
                 title: "Preview Sent!",
                 description: "Check your device for the notification.",
@@ -168,14 +160,24 @@ export const ComposerActions = ({
 
     const handleContinue = () => {
         const isFormValid = onContinueClick();
-        if (isFormValid) {
-            const queryShop = new URLSearchParams(window.location.search).get('shop');
-            const scheduleHref = queryShop
-                ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
-                : '/campaigns/new/schedule';
-            router.push(scheduleHref);
+        if (!isFormValid) {
+            return;
         }
+
+        const queryShop = new URLSearchParams(window.location.search).get('shop');
+        const scheduleHref = queryShop
+            ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
+            : '/campaigns/new/schedule';
+        router.push(scheduleHref);
     };
+
+    useEffect(() => {
+        const queryShop = new URLSearchParams(window.location.search).get('shop');
+        const scheduleHref = queryShop
+            ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
+            : '/campaigns/new/schedule';
+        router.prefetch(scheduleHref);
+    }, [router]);
 
     return (
         <div className="flex items-center gap-2">

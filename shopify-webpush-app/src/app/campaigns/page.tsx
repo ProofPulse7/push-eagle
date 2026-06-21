@@ -14,14 +14,14 @@ import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
-import { useShopReady } from '@/hooks/use-shop-ready';
-import { buildNewCampaignHref } from '@/lib/client/start-new-campaign';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 import { queryKeys } from '@/lib/client/query-keys';
+import { appendFreshCampaignWizardParam } from '@/lib/client/campaign-wizard-fresh';
 
 export default function CampaignsPage() {
   const [date, setDate] = useState<DateRange | undefined>(undefined);
   const { atLimit } = useImpressionLimit();
-  const { shop, isReady, isResolving } = useShopReady();
+  const shop = useShopDomain();
   const queryClient = useQueryClient();
   const cachedData = shop ? queryClient.getQueryData<{ campaigns?: unknown[] }>(queryKeys.campaigns(shop)) : undefined;
   const { data, isLoading, isError, error, refetch, isFetching } = useCampaigns();
@@ -33,7 +33,7 @@ export default function CampaignsPage() {
       : 'Failed to load campaigns.'
     : null;
   const showInitialLoad = Boolean(shop) && isLoading && !effectiveData;
-  const showSessionWarning = isReady && !shop;
+  const showSessionWarning = !shop && !isLoading;
   const hasCachedOrLiveData = Boolean(effectiveData) || Boolean(shop);
 
   return (
@@ -73,7 +73,7 @@ export default function CampaignsPage() {
                 <p className="text-muted-foreground">View and manage your past and current campaigns.</p>
               </div>
               <Button asChild disabled={atLimit} title={atLimit ? 'Monthly impression limit reached.' : undefined}>
-                <Link href={atLimit ? '/plans' : buildNewCampaignHref(shop)} prefetch>
+                <Link href={atLimit ? '/plans' : appendFreshCampaignWizardParam('/campaigns/new/details')} prefetch>
                   <PlusCircle className="mr-2 h-4 w-4" />
                   {atLimit ? 'Upgrade to send' : 'New Campaign'}
                 </Link>

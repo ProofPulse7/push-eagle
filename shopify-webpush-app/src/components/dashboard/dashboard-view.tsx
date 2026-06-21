@@ -11,13 +11,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDashboardSummary } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
-import { useShopReady } from '@/hooks/use-shop-ready';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 import { BASIC_PLAN } from '@/lib/client/billing-plans';
-import { buildNewCampaignHref } from '@/lib/client/start-new-campaign';
+import { appendFreshCampaignWizardParam } from '@/lib/client/campaign-wizard-fresh';
 import { formatCurrency } from '@/lib/utils';
 
 export function DashboardView() {
-  const { shop: shopDomain, isResolving } = useShopReady();
+  const shopDomain = useShopDomain();
   const { atLimit } = useImpressionLimit();
   const { data, isLoading, isError, error } = useDashboardSummary();
 
@@ -71,7 +71,7 @@ export function DashboardView() {
 
   return (
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-6">
-      {!isResolving && !shopDomain ? (
+      {!shopDomain ? (
         <Alert>
           <AlertTitle>Connect your store</AlertTitle>
           <AlertDescription>
@@ -103,7 +103,7 @@ export function DashboardView() {
             <Link href="/campaigns">View Campaigns</Link>
           </Button>
           <Button asChild disabled={atLimit} title={atLimit ? 'Monthly impression limit reached. Upgrade on Plans.' : undefined}>
-            <Link href={atLimit ? '/plans' : buildNewCampaignHref(shopDomain)}>
+            <Link href={atLimit ? '/plans' : appendFreshCampaignWizardParam('/campaigns/new/details')}>
               <Send className="mr-2 h-4 w-4" />
               {atLimit ? 'Upgrade to send' : 'Create Campaign'}
             </Link>

@@ -5290,7 +5290,7 @@ export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) =
       email = COALESCE(${input.email ?? null}, email),
       primary_domain = COALESCE(${input.primaryDomain ?? null}, primary_domain),
       myshopify_domain = COALESCE(${input.myshopifyDomain ?? null}, myshopify_domain),
-      currency_code = COALESCE(${input.currencyCode ?? null}, currency_code),
+      currency_code = COALESCE(currency_code, ${input.currencyCode ?? null}),
       timezone = COALESCE(${input.timezone ?? null}, timezone),
       plan_name = COALESCE(${input.planName ?? null}, plan_name),
       owner_name = COALESCE(${input.ownerName ?? null}, owner_name),
