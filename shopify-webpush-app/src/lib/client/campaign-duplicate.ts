@@ -211,21 +211,24 @@ const buildWizardLinks = (shopDomain: string) => ({
   scheduleHref: `/campaigns/new/schedule?shop=${encodeURIComponent(shopDomain)}`,
 });
 
-const hydrateDraftWizard = async (
-  shopDomain: string,
-  campaignId: string,
-  draft: CampaignDraftSnapshot,
-) => {
-  clearWizardLaunchMediaCache(shopDomain);
-  writeCampaignDraft(shopDomain, draft);
-
-  await prepareWizardLaunchMedia(shopDomain, {
+const stageDraftWizardMedia = (shopDomain: string, draft: CampaignDraftSnapshot) => {
+  void prepareWizardLaunchMedia(shopDomain, {
     imageUrl: draft.macHero.preview ?? draft.windowsHero.preview ?? draft.androidHero.preview,
     windowsImageUrl: draft.windowsHero.preview,
     macosImageUrl: draft.macHero.preview,
     androidImageUrl: draft.androidHero.preview,
     iconUrl: draft.logo.preview,
   }).catch(() => undefined);
+};
+
+const hydrateDraftWizard = (
+  shopDomain: string,
+  campaignId: string,
+  draft: CampaignDraftSnapshot,
+) => {
+  clearWizardLaunchMediaCache(shopDomain);
+  writeCampaignDraft(shopDomain, draft);
+  stageDraftWizardMedia(shopDomain, draft);
 
   return {
     draft,
@@ -234,10 +237,81 @@ const hydrateDraftWizard = async (
   };
 };
 
+const resolveSyncDraftSnapshot = (
+  shopDomain: string,
+  campaignId: string,
+  listCampaign?: Record<string, unknown> | null,
+): CampaignDraftSnapshot | null => {
+  const cachedSnapshot = findCachedDraftWizardSnapshot(shopDomain, campaignId);
+  if (cachedSnapshot) {
+    return buildDraftSnapshotFromSaveInput(cachedSnapshot, campaignId);
+  }
+
+  const pinnedSnapshot = readOptimisticCampaignSnapshot(shopDomain, campaignId);
+  if (pinnedSnapshot && String(pinnedSnapshot.status ?? 'draft').toLowerCase() === 'draft') {
+    const enriched = applyLaunchMediaToCampaign(shopDomain, pinnedSnapshot);
+    return {
+      ...buildDraftFromCampaign(enriched as DuplicateCampaignRecord),
+      draftCampaignId: resolvePersistedDraftCampaignId(shopDomain, campaignId),
+    };
+  }
+
+  if (listCampaign && String(listCampaign.status ?? '').toLowerCase() === 'draft') {
+    const enriched = applyLaunchMediaToCampaign(shopDomain, listCampaign);
+    return {
+      ...buildDraftFromCampaign(enriched as DuplicateCampaignRecord),
+      draftCampaignId: resolvePersistedDraftCampaignId(shopDomain, campaignId),
+    };
+  }
+
+  return null;
+};
+
+export const beginEditDraftCampaign = (
+  shopDomain: string,
+  campaignId: string,
+  listCampaign?: Record<string, unknown> | null,
+) => {
+  const draft = resolveSyncDraftSnapshot(shopDomain, campaignId, listCampaign);
+  const detailsHref = buildWizardLinks(shopDomain).detailsHref;
+
+  if (draft) {
+    hydrateDraftWizard(shopDomain, campaignId, draft);
+  }
+
+  return {
+    detailsHref,
+    hadSyncDraft: Boolean(draft),
+    hadWizardSnapshot: Boolean(findCachedDraftWizardSnapshot(shopDomain, campaignId)),
+  };
+};
+
+export const refreshEditDraftCampaignInBackground = async (
+  shopDomain: string,
+  campaignId: string,
+  options?: { hadSyncDraft?: boolean; hadWizardSnapshot?: boolean },
+) => {
+  if (options?.hadWizardSnapshot) {
+    return;
+  }
+
+  const maxAttempts = options?.hadSyncDraft ? 1 : 3;
+  const campaign = await fetchDraftCampaignWithRetry(shopDomain, campaignId, maxAttempts);
+  if (String(campaign.status ?? '').toLowerCase() !== 'draft') {
+    throw new Error('Only draft campaigns can be edited.');
+  }
+
+  const draft = {
+    ...buildDraftFromCampaign(campaign as DuplicateCampaignRecord),
+    draftCampaignId: resolvePersistedDraftCampaignId(shopDomain, campaignId),
+  };
+  hydrateDraftWizard(shopDomain, campaignId, draft);
+};
+
 export const duplicateCampaignToWizard = async (shopDomain: string, campaignId: string) => {
   const campaign = await fetchDraftCampaignWithRetry(shopDomain, campaignId, 1);
   const draft = buildDraftFromCampaign(campaign as DuplicateCampaignRecord);
-  const hydrated = await hydrateDraftWizard(shopDomain, campaignId, draft);
+  const hydrated = hydrateDraftWizard(shopDomain, campaignId, draft);
 
   const scheduledAt = buildCampaignDateTime(
     new Date(draft.scheduledDate ?? Date.now()),
@@ -251,31 +325,14 @@ export const duplicateCampaignToWizard = async (shopDomain: string, campaignId: 
 };
 
 export const editDraftCampaignToWizard = async (shopDomain: string, campaignId: string) => {
-  const cachedSnapshot = findCachedDraftWizardSnapshot(shopDomain, campaignId);
-  if (cachedSnapshot) {
-    const draft = buildDraftSnapshotFromSaveInput(cachedSnapshot, campaignId);
-    return hydrateDraftWizard(shopDomain, campaignId, draft);
+  const began = beginEditDraftCampaign(shopDomain, campaignId);
+  if (!began.hadSyncDraft) {
+    await refreshEditDraftCampaignInBackground(shopDomain, campaignId, began);
   }
 
-  const pinnedSnapshot = readOptimisticCampaignSnapshot(shopDomain, campaignId);
-  if (pinnedSnapshot && String(pinnedSnapshot.status ?? 'draft').toLowerCase() === 'draft') {
-    const enriched = applyLaunchMediaToCampaign(shopDomain, pinnedSnapshot);
-    const draft = {
-      ...buildDraftFromCampaign(enriched as DuplicateCampaignRecord),
-      draftCampaignId: resolvePersistedDraftCampaignId(shopDomain, campaignId),
-    };
-    return hydrateDraftWizard(shopDomain, campaignId, draft);
-  }
-
-  const campaign = await fetchDraftCampaignWithRetry(shopDomain, campaignId);
-  if (String(campaign.status ?? '').toLowerCase() !== 'draft') {
-    throw new Error('Only draft campaigns can be edited.');
-  }
-
-  const draft = {
-    ...buildDraftFromCampaign(campaign as DuplicateCampaignRecord),
-    draftCampaignId: resolvePersistedDraftCampaignId(shopDomain, campaignId),
+  return {
+    ...buildWizardLinks(shopDomain),
+    campaignId: resolvePersistedDraftCampaignId(shopDomain, campaignId),
+    detailsHref: began.detailsHref,
   };
-
-  return hydrateDraftWizard(shopDomain, campaignId, draft);
 };

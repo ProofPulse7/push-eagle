@@ -8,7 +8,7 @@ import { Slider } from '@/components/ui/slider';
 import { Check, Info, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BUSINESS_TIERS, BASIC_PLAN } from '@/lib/client/billing-plans';
-import { useBillingStatus, useConfirmBilling } from '@/hooks/queries/use-billing';
+import { useBillingStatus, useConfirmBilling, useSubscribePlan } from '@/hooks/queries/use-billing';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
 import { ImpressionUsageBar } from '@/components/billing/impression-usage-bar';
@@ -99,6 +99,7 @@ export function PlansPageContent() {
   const searchParams = useSearchParams();
   const { data, isFetching } = useBillingStatus({ refetchOnMount: false, reconcile: false });
   const confirmBilling = useConfirmBilling();
+  const subscribePlan = useSubscribePlan();
   const [tierIndex, setTierIndex] = useState(0);
   const [pendingPlan, setPendingPlan] = useState<PendingPlanKey | null>(null);
 
@@ -197,11 +198,50 @@ export function PlansPageContent() {
     (window.top ?? window).location.assign(checkoutUrl);
   };
 
-  const handleSubscribeBasic = () => startShopifyCheckout('basic');
+  const handleSubscribeBasic = () => {
+    if (!shop) {
+      toast({
+        variant: 'destructive',
+        title: 'Missing shop',
+        description: 'Open Push Eagle from Shopify admin, then try again.',
+      });
+      return;
+    }
+
+    if (isCurrentBasic) {
+      return;
+    }
+
+    const wasOnPaidPlan = isOnPaidPlan;
+    subscribePlan.mutate(
+      {
+        planKey: 'basic',
+        host: host ?? undefined,
+        embedded: embedded ?? undefined,
+      },
+      {
+        onSuccess: () => {
+          toast({
+            title: wasOnPaidPlan ? 'Switched to Basic' : 'Basic plan active',
+            description: wasOnPaidPlan
+              ? 'Your paid Shopify subscription was cancelled. You will not be charged going forward.'
+              : 'Your free Basic plan is active.',
+          });
+        },
+        onError: (error) => {
+          toast({
+            variant: 'destructive',
+            title: 'Could not update plan',
+            description: error instanceof Error ? error.message : 'Try again in a moment.',
+          });
+        },
+      },
+    );
+  };
   const handleSubscribeBusiness = () => startShopifyCheckout('business', selectedTier.id);
 
   const basicButtonLabel = useMemo(() => {
-    if (pendingPlan === 'basic') {
+    if (subscribePlan.isPending && subscribePlan.variables?.planKey === 'basic') {
       return isOnPaidPlan ? 'Updating plan…' : 'Activating…';
     }
     if (isCurrentBasic) {
@@ -211,7 +251,7 @@ export function PlansPageContent() {
       return 'Switch to free plan';
     }
     return 'Activate free plan';
-  }, [billingStatus, isCurrentBasic, isOnPaidPlan, pendingPlan]);
+  }, [isCurrentBasic, isOnPaidPlan, subscribePlan.isPending, subscribePlan.variables?.planKey]);
 
   const businessButtonLabel = useMemo(() => {
     const pendingKey: PendingPlanKey = `business:${selectedTier.id}`;
@@ -245,10 +285,10 @@ export function PlansPageContent() {
 
       <ImpressionUsageBar />
 
-      {billingStatus === 'pending' ? (
+      {billingStatus === 'pending' && currentPlanKey !== 'basic' ? (
         <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
-          Your Push Eagle plan is not active yet. Activate the free Basic plan, or choose Business to approve billing
-          in Shopify before sending notifications.
+          Your Business plan is waiting for approval in Shopify. Complete billing there, or switch to
+          the free Basic plan to start sending notifications right away.
         </p>
       ) : null}
 
@@ -271,7 +311,10 @@ export function PlansPageContent() {
             <Button
               className="w-full pe-pressable"
               variant={isCurrentBasic ? 'secondary' : 'default'}
-              disabled={isCurrentBasic || pendingPlan === 'basic'}
+              disabled={
+                isCurrentBasic ||
+                (subscribePlan.isPending && subscribePlan.variables?.planKey === 'basic')
+              }
               onClick={handleSubscribeBasic}
             >
               {basicButtonLabel}

@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
+import { BASIC_PLAN } from '@/lib/client/billing-plans';
 import { queryKeys } from '@/lib/client/query-keys';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
@@ -65,6 +66,37 @@ export function useSubscribePlan() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopDomain: shop, ...body }),
       }),
+    onMutate: async (body) => {
+      if (body.planKey !== 'basic' || !shop) {
+        return undefined;
+      }
+
+      await queryClient.cancelQueries({ queryKey: queryKeys.billingStatus(shop) });
+      const previous = queryClient.getQueryData<{ ok?: boolean; billing?: Record<string, unknown> }>(
+        queryKeys.billingStatus(shop),
+      );
+      const currentBilling = previous?.billing ?? {};
+      const optimisticBilling = {
+        ...currentBilling,
+        shopDomain: shop,
+        planKey: 'basic',
+        tierId: null,
+        status: 'active',
+        priceUsd: BASIC_PLAN.priceUsd,
+        impressionLimit: BASIC_PLAN.impressions,
+        shopifySubscriptionId: null,
+      };
+
+      patchBillingCache(queryClient, shop, optimisticBilling);
+      return { previous };
+    },
+    onError: (_error, body, context) => {
+      if (body.planKey !== 'basic' || !shop || !context?.previous) {
+        return;
+      }
+
+      queryClient.setQueryData(queryKeys.billingStatus(shop), context.previous);
+    },
     onSuccess: (result) => {
       if (result?.billing && typeof result.billing === 'object') {
         patchBillingCache(queryClient, shop, result.billing as Record<string, unknown>);

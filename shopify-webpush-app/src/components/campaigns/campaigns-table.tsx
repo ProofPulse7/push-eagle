@@ -19,7 +19,11 @@ import { applyLaunchMediaToCampaign } from '@/lib/client/campaign-launch-media-c
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { formatCampaignScheduleLabel } from '@/lib/client/campaign-schedule';
-import { duplicateCampaignToWizard, editDraftCampaignToWizard } from '@/lib/client/campaign-duplicate';
+import {
+    beginEditDraftCampaign,
+    duplicateCampaignToWizard,
+    refreshEditDraftCampaignInBackground,
+} from '@/lib/client/campaign-duplicate';
 import { removeOptimisticCampaign } from '@/lib/client/optimistic-campaigns';
 import { queryKeys } from '@/lib/client/query-keys';
 import { useQueryClient } from '@tanstack/react-query';
@@ -146,7 +150,6 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
         initialTab === 'scheduled' || initialTab === 'draft' ? initialTab : 'sent',
     );
     const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
-    const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
     const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
     const [visibleCount, setVisibleCount] = useState(CAMPAIGNS_PAGE_SIZE);
 
@@ -245,7 +248,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
         }
     };
 
-    const handleEditDraft = async (campaignId: string) => {
+    const handleEditDraft = (campaignId: string) => {
         if (!shopDomain) {
             toast({
                 variant: 'destructive',
@@ -255,19 +258,24 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             return;
         }
 
-        setEditingDraftId(campaignId);
-        try {
-            const { detailsHref } = await editDraftCampaignToWizard(shopDomain, campaignId);
-            router.push(detailsHref);
-        } catch (error) {
-            toast({
-                variant: 'destructive',
-                title: 'Edit failed',
-                description: error instanceof Error ? error.message : 'Failed to open draft campaign.',
-            });
-        } finally {
-            setEditingDraftId(null);
-        }
+        const rawCampaign = Array.isArray(effectiveData?.campaigns)
+            ? (effectiveData.campaigns as Record<string, unknown>[]).find(
+                  (campaign) => String(campaign.id) === campaignId,
+              )
+            : undefined;
+
+        const began = beginEditDraftCampaign(shopDomain, campaignId, rawCampaign);
+        router.push(began.detailsHref);
+
+        void refreshEditDraftCampaignInBackground(shopDomain, campaignId, began).catch((error) => {
+            if (!began.hadSyncDraft) {
+                toast({
+                    variant: 'destructive',
+                    title: 'Edit failed',
+                    description: error instanceof Error ? error.message : 'Failed to open draft campaign.',
+                });
+            }
+        });
     };
 
     const handleDeleteDraft = async (campaignId: string) => {
@@ -485,14 +493,10 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                                 type="button"
                                                 variant="outline"
                                                 size="sm"
-                                                disabled={editingDraftId === campaign.id || deletingDraftId === campaign.id}
-                                                onClick={() => void handleEditDraft(campaign.id)}
+                                                disabled={deletingDraftId === campaign.id}
+                                                onClick={() => handleEditDraft(campaign.id)}
                                             >
-                                                {editingDraftId === campaign.id ? (
-                                                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                                                ) : (
-                                                    <Pencil className="mr-2 h-3 w-3" />
-                                                )}
+                                                <Pencil className="mr-2 h-3 w-3" />
                                                 Edit
                                             </Button>
                                             <Button
@@ -500,7 +504,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                                 variant="outline"
                                                 size="sm"
                                                 className="text-destructive hover:text-destructive"
-                                                disabled={editingDraftId === campaign.id || deletingDraftId === campaign.id}
+                                                disabled={deletingDraftId === campaign.id}
                                                 onClick={() => void handleDeleteDraft(campaign.id)}
                                             >
                                                 {deletingDraftId === campaign.id ? (

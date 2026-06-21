@@ -90,7 +90,7 @@ export const incrementBillingImpressions = async (shopDomain: string, delta: num
       ${BASIC_PLAN.key},
       ${BASIC_PLAN.impressions},
       ${BASIC_PLAN.priceUsd},
-      'pending',
+      'active',
       ${periodStart},
       ${periodEnd},
       ${delta}
@@ -182,7 +182,7 @@ export const getMerchantBilling = async (
         NULL,
         ${BASIC_PLAN.impressions},
         ${BASIC_PLAN.priceUsd},
-        'pending',
+        'active',
         ${periodStart},
         ${periodEnd},
         0
@@ -198,6 +198,23 @@ export const getMerchantBilling = async (
   }
 
   let row = rows[0] as Record<string, unknown>;
+  if (
+    row &&
+    String(row.status) === 'pending' &&
+    String(row.plan_key) === 'basic' &&
+    !row.shopify_subscription_id
+  ) {
+    const activated = await sql`
+      UPDATE merchant_billing
+      SET status = 'active', updated_at = NOW()
+      WHERE shop_domain = ${shopDomain} AND status = 'pending' AND plan_key = 'basic'
+      RETURNING *
+    `;
+    if (activated[0]) {
+      row = activated[0] as Record<string, unknown>;
+    }
+  }
+
   row = await syncPeriodIfNeeded(shopDomain, row);
 
   let impressionsUsed = Number(row.impressions_used ?? 0);
@@ -292,7 +309,10 @@ export const upsertMerchantBilling = async (input: {
       tier_id = EXCLUDED.tier_id,
       impression_limit = EXCLUDED.impression_limit,
       price_usd = EXCLUDED.price_usd,
-      shopify_subscription_id = COALESCE(EXCLUDED.shopify_subscription_id, merchant_billing.shopify_subscription_id),
+      shopify_subscription_id = CASE
+        WHEN EXCLUDED.plan_key = 'basic' AND EXCLUDED.shopify_subscription_id IS NULL THEN NULL
+        ELSE COALESCE(EXCLUDED.shopify_subscription_id, merchant_billing.shopify_subscription_id)
+      END,
       status = EXCLUDED.status,
       period_start = EXCLUDED.period_start,
       period_end = EXCLUDED.period_end,
