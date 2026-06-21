@@ -2,7 +2,7 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import { buildCampaignDateTime } from '@/lib/client/campaign-schedule';
 import { parseApiResponse } from '@/lib/client/api-response';
-import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
+import { cacheLaunchMedia, stageLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
 import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import {
   prependOptimisticCampaign,
@@ -190,12 +190,12 @@ export const saveCampaignDraftInstantly = (
     prependOptimisticCampaign(queryClient, input.shopDomain, optimisticCampaign);
   }
 
+  stageLaunchMedia(input.shopDomain, optimisticId, launchMedia);
   void cacheLaunchMedia(input.shopDomain, optimisticId, launchMedia).catch(() => undefined);
   cacheDraftWizardSnapshot(input.shopDomain, optimisticId, {
     ...input,
     draftCampaignId: isUpdate ? input.draftCampaignId ?? optimisticId : optimisticId,
   });
-  void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(input.shopDomain) });
 
   return {
     campaignsHref: `/campaigns?shop=${encodeURIComponent(input.shopDomain)}&tab=draft`,
@@ -295,6 +295,20 @@ export const runBackgroundCampaignDraftSave = async (
     onError?.(normalized);
     throw normalized;
   }
+};
+
+export const commitCampaignDraftSave = (
+  input: SaveCampaignDraftInput,
+  queryClient: QueryClient,
+  options?: {
+    onNavigate?: (campaignsHref: string) => void;
+    onError?: (error: Error) => void;
+  },
+): SaveCampaignDraftInstantResult => {
+  const result = saveCampaignDraftInstantly(input, queryClient);
+  options?.onNavigate?.(result.campaignsHref);
+  void runBackgroundCampaignDraftSave(input, queryClient, result.optimisticId, options?.onError);
+  return result;
 };
 
 /** @deprecated Use saveCampaignDraftInstantly + runBackgroundCampaignDraftSave */

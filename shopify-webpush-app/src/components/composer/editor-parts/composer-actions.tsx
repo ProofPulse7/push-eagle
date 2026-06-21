@@ -9,8 +9,7 @@ import { handleSendLivePreview } from '@/lib/notification-service';
 import { useCampaignState, clearCampaignDraft } from '@/context/campaign-context';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import {
-  runBackgroundCampaignDraftSave,
-  saveCampaignDraftInstantly,
+  commitCampaignDraftSave,
   type SaveCampaignDraftInput,
 } from '@/lib/client/campaign-save-draft';
 
@@ -132,22 +131,23 @@ export const ComposerActions = ({
 
         try {
             const draftInput = buildDraftInput();
-            const { campaignsHref, optimisticId } = saveCampaignDraftInstantly(draftInput, queryClient);
 
-            toast({
-                title: "Draft Saved!",
-                description: "Your campaign has been saved as a draft.",
-            });
-
-            clearCampaignDraft(shopDomain);
-            router.push(campaignsHref);
-
-            void runBackgroundCampaignDraftSave(draftInput, queryClient, optimisticId, (error) => {
-                toast({
-                    variant: 'destructive',
-                    title: 'Draft save failed',
-                    description: error.message,
-                });
+            commitCampaignDraftSave(draftInput, queryClient, {
+                onNavigate: (campaignsHref) => {
+                    toast({
+                        title: "Draft Saved!",
+                        description: "Your campaign has been saved as a draft.",
+                    });
+                    clearCampaignDraft(shopDomain);
+                    router.push(campaignsHref);
+                },
+                onError: (error) => {
+                    toast({
+                        variant: 'destructive',
+                        title: 'Draft save failed',
+                        description: error.message,
+                    });
+                },
             });
         } catch (error) {
             toast({

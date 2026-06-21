@@ -82,6 +82,26 @@ export const cacheLaunchMedia = async (
   return cached;
 };
 
+export const stageLaunchMedia = (shop: string, campaignId: string, media: LaunchMediaCache) => {
+  if (typeof window === 'undefined' || !shop.trim() || !campaignId) {
+    return;
+  }
+
+  const staged: LaunchMediaCache = {
+    imageUrl: media.imageUrl ?? media.macosImageUrl ?? media.windowsImageUrl ?? media.androidImageUrl ?? null,
+    windowsImageUrl: media.windowsImageUrl ?? null,
+    macosImageUrl: media.macosImageUrl ?? null,
+    androidImageUrl: media.androidImageUrl ?? null,
+    iconUrl: media.iconUrl ?? null,
+  };
+
+  try {
+    sessionStorage.setItem(mediaKey(shop, campaignId), JSON.stringify(staged));
+  } catch {
+    // Ignore storage quota errors.
+  }
+};
+
 export const readLaunchMedia = (shop: string, campaignId: string): LaunchMediaCache | null => {
   if (typeof window === 'undefined' || !shop.trim() || !campaignId) {
     return null;

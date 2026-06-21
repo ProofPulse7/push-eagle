@@ -136,7 +136,11 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
     const queryClient = useQueryClient();
     const { toast } = useToast();
     const searchParams = useSearchParams();
+    const cachedData = shopDomain
+        ? queryClient.getQueryData<{ campaigns?: unknown[] }>(queryKeys.campaigns(shopDomain))
+        : undefined;
     const { data, isLoading, isError, error: queryError } = useCampaigns();
+    const effectiveData = data ?? cachedData;
     const initialTab = searchParams.get('tab');
     const [activeTab, setActiveTab] = useState(
         initialTab === 'scheduled' || initialTab === 'draft' ? initialTab : 'sent',
@@ -154,14 +158,14 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
     }, [searchParams]);
 
     const campaigns = useMemo(() => {
-        if (!Array.isArray(data?.campaigns)) {
+        if (!Array.isArray(effectiveData?.campaigns)) {
             return [];
         }
 
-        return (data.campaigns as Record<string, unknown>[]).map((campaign) =>
+        return (effectiveData.campaigns as Record<string, unknown>[]).map((campaign) =>
             mapApiCampaign(shopDomain, campaign),
         );
-    }, [data, shopDomain]);
+    }, [effectiveData, shopDomain]);
 
     const error = isError
         ? queryError instanceof Error
@@ -169,7 +173,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
             : 'Failed to load campaigns.'
         : null;
 
-    const loading = isLoading && campaigns.length === 0 && !data;
+    const loading = isLoading && campaigns.length === 0 && !effectiveData;
     
     const filteredCampaigns = useMemo(() => {
         let tabFiltered;
