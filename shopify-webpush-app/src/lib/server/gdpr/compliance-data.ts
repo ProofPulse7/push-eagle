@@ -265,6 +265,7 @@ export const purgeShopGdprData = async (shopDomainInput: string) => {
   const shopDomain = parseShopDomain(shopDomainInput);
 
   await invalidateStoredShopifyAccessToken(shopDomain);
+  await deleteShopifyStoreCredentials(shopDomain);
   await purgeStalePrismaSessionForShop(shopDomain);
 
   const sql = getNeonSql();

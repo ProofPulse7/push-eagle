@@ -434,11 +434,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                                     <div className="flex flex-col">
                                         <div className="flex items-center gap-2 mb-1">
                                             <h3 className="font-semibold text-base line-clamp-1" title={campaign.name}>
-                                                {campaign.status === 'Draft' ? (
-                                                    <span>{campaign.name}</span>
-                                                ) : (
-                                                    <Link href={`/campaigns/${campaign.id}/results`} className="hover:underline">{campaign.name}</Link>
-                                                )}
+                                                <span>{campaign.name}</span>
                                             </h3>
                                             {getStatusBadge(campaign.status)}
                                         </div>

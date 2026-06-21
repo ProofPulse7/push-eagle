@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
 import { registerWebhookEvent } from '@/lib/server/data/store';
 import { exportCustomerGdprData, storeGdprDataExport } from '@/lib/server/gdpr/compliance-data';
+import { deliverGdprDataRequestExport } from '@/lib/server/gdpr/deliver-export';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -55,10 +56,19 @@ export async function POST(req: Request) {
       payload: exportPayload,
     });
 
+    const delivery = await deliverGdprDataRequestExport({
+      shopDomain,
+      exportId: stored.exportId,
+      customer: payload.customer ?? {},
+      payload: exportPayload,
+    });
+
     console.info('[gdpr] customers/data_request export stored', {
       shopDomain,
       exportId: stored.exportId,
       customerId: payload.customer?.id ?? null,
+      delivered: delivery.delivered,
+      recipient: 'recipient' in delivery ? delivery.recipient : null,
       recordCounts: {
         shopifyCustomers: exportPayload.shopifyCustomers.length,
         subscribers: exportPayload.subscribers.length,
@@ -71,6 +81,7 @@ export async function POST(req: Request) {
       shopDomain,
       exported: true,
       exportId: stored.exportId,
+      delivered: delivery.delivered,
     });
   } catch (error) {
     const message =

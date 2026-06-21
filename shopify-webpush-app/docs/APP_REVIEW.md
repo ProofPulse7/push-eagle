@@ -6,7 +6,7 @@ Use this document for **Partner Dashboard → App submission → Testing instruc
 
 - **Regular app** (not a Sales Channel or Payment Gateway)
 - **Standalone** (`embedded = false`) — merchants open the web dashboard from Shopify Admin
-- **Application URL:** `https://push-eagle-dashboard.vercel.app/dashboard`
+- **Application URL:** `https://push-eagle-dashboard.vercel.app/api/auth/connect`
 - **OAuth backend:** `https://push-eagle.vercel.app` (handles install only; merchants use the dashboard UI)
 
 ## Test store credentials
@@ -71,15 +71,17 @@ Scopes **not** requested: `read_all_orders`, `write_payment_mandate`, checkout e
 | Shopify checkout | Does not bypass checkout; tracks events only |
 | Theme app extensions | Storefront opt-in via theme embed (no manual theme code edits) |
 | GDPR webhooks | `customers/data_request`, `customers/redact`, `shop/redact` on dashboard |
+| GDPR customer data requests | Export stored and emailed to the shop contact email when `RESEND_API_KEY` is set in production |
 | Session tokens | Standalone app uses OAuth + SSO cookies (not embedded App Bridge) |
 | Factual data | Revenue uses shop currency from Shopify; stats from database |
 
 ## Production checklist
 
-- [ ] Partner Dashboard **Application URL** = `https://push-eagle-dashboard.vercel.app/dashboard`
+- [ ] Partner Dashboard **Application URL** = `https://push-eagle-dashboard.vercel.app/api/auth/connect`
 - [ ] Partner Dashboard **Privacy URL** = `https://push-eagle-dashboard.vercel.app/privacy`
 - [ ] Partner Dashboard **Terms URL** = `https://push-eagle-dashboard.vercel.app/terms`
-- [ ] Production Vercel: `SHOPIFY_BILLING_TEST` is **not** `true`
+- [ ] Production Vercel (dashboard): `SHOPIFY_BILLING_TEST` is **not** `true`
+- [ ] Production Vercel (dashboard): `RESEND_API_KEY` set for GDPR export email delivery
 - [ ] Run `shopify app deploy` after `shopify.app.toml` changes
 - [ ] Paste test credentials and this walkthrough into the submission form
 

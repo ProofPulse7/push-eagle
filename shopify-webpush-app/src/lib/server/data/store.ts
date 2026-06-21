@@ -7515,46 +7515,6 @@ export const getCampaignStats = async (shopDomain: string, from?: Date | null, t
   };
 };
 
-export const getCampaignResults = async (shopDomain: string, campaignId: string) => {
-  await ensureSchema();
-  const sql = getNeonSql();
-
-  const campaign = await getCampaignById(shopDomain, campaignId);
-  if (!campaign) {
-    return null;
-  }
-
-  const clickRows = await sql`
-    SELECT
-      LPAD(EXTRACT(HOUR FROM clicked_at)::TEXT, 2, '0') || 'h' AS hour,
-      COUNT(*)::BIGINT AS clicks
-    FROM campaign_clicks
-    WHERE shop_domain = ${shopDomain}
-      AND campaign_id = ${campaignId}
-    GROUP BY 1
-    ORDER BY 1 ASC
-  `;
-
-  const platformRows = await sql`
-    SELECT
-      LOWER(COALESCE(NULLIF(s.platform, ''), NULLIF(s.device_context ->> 'osName', ''), 'unknown')) AS platform,
-      COUNT(*)::BIGINT AS clicks
-    FROM campaign_clicks c
-    LEFT JOIN subscribers s ON s.id = c.subscriber_id
-    WHERE c.shop_domain = ${shopDomain}
-      AND c.campaign_id = ${campaignId}
-    GROUP BY 1
-    ORDER BY 2 DESC
-    LIMIT 8
-  `;
-
-  return {
-    campaign,
-    performanceOverTime: clickRows.map((row) => ({ hour: String(row.hour), clicks: Number(row.clicks ?? 0) })),
-    platformPerformance: platformRows.map((row) => ({ platform: String(row.platform), clicks: Number(row.clicks ?? 0) })),
-  };
-};
-
 export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, to?: Date | null) => {
   await ensureSchema();
   const sql = getNeonSql();

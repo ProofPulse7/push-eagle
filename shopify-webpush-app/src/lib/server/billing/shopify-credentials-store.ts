@@ -101,3 +101,12 @@ export const markShopifyStoreCredentialsInvalid = async (shopDomain: string) => 
     WHERE shop_domain = ${shopDomain.trim().toLowerCase()}
   `;
 };
+
+export const deleteShopifyStoreCredentials = async (shopDomain: string) => {
+  await ensureShopifyCredentialsTable();
+  const sql = getNeonSql();
+  await sql`
+    DELETE FROM shopify_store_credentials
+    WHERE shop_domain = ${shopDomain.trim().toLowerCase()}
+  `;
+};

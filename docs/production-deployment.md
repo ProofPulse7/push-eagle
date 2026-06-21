@@ -9,7 +9,7 @@ Push Eagle uses **two public URLs** that work together:
 
 Merchants open the app from Shopify Admin at:
 
-**Application URL:** `https://push-eagle-dashboard.vercel.app/dashboard` (`embedded = false`)
+**Application URL:** `https://push-eagle-dashboard.vercel.app/api/auth/connect` (`embedded = false`)
 
 **App Review testing guide:** see [`shopify-webpush-app/docs/APP_REVIEW.md`](./shopify-webpush-app/docs/APP_REVIEW.md) for reviewer credentials template and walkthrough.
 
@@ -18,7 +18,9 @@ The Remix app at `push-eagle.vercel.app` is the **backend** — merchants do not
 ## How the two apps connect
 
 ```
-Shopify Admin → push-eagle-dashboard.vercel.app/dashboard  (web app UI)
+Shopify Admin → push-eagle-dashboard.vercel.app/api/auth/connect  (fast auth entry)
+                      ↓ (sets cookies or OAuth)
+              push-eagle-dashboard.vercel.app/dashboard      (merchant UI)
                       ↓ (no valid token)
               push-eagle.vercel.app/app                      (Shopify OAuth)
                       ↓ (OAuth + session saved to Neon)
@@ -26,8 +28,8 @@ Shopify Admin → push-eagle-dashboard.vercel.app/dashboard  (web app UI)
 ```
 
 1. Merchant clicks **Apps → Push Eagle** in Shopify Admin.
-2. Shopify loads `https://push-eagle-dashboard.vercel.app/dashboard`.
-3. If OAuth is needed, the dashboard sends them to `https://push-eagle.vercel.app/app?shop=...`.
+2. Shopify loads `https://push-eagle-dashboard.vercel.app/api/auth/connect`.
+3. Connect sets auth cookies or sends the merchant to `https://push-eagle.vercel.app/app?shop=...` for OAuth.
 4. Remix completes OAuth, saves the offline token to Neon, syncs merchant data, then SSO-redirects to the dashboard.
 5. Dashboard reads the token from Neon and shows plans, campaigns, etc.
 
@@ -110,11 +112,11 @@ To update production Partner Dashboard config (application URL, redirects, webho
 
 | Setting | Value |
 |---------|-------|
-| Application URL | `https://push-eagle-dashboard.vercel.app/dashboard` |
+| Application URL | `https://push-eagle-dashboard.vercel.app/api/auth/connect` |
 | Embedded | `false` |
 | OAuth redirect URLs | `https://push-eagle.vercel.app/auth/*` only |
 | Business webhooks | `https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/*` |
-| GDPR compliance webhooks | `https://push-eagle.vercel.app/webhooks/*` |
+| GDPR compliance webhooks | `https://push-eagle-dashboard.vercel.app/api/shopify/webhooks/*` |
 | App proxy | `https://push-eagle-dashboard.vercel.app/api/storefront` |
 
 ## Vercel env — Shopify app (`push-eagle.vercel.app`)
