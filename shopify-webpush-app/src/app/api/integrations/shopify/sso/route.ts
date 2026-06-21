@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
+import { applyPeAuthCookies } from '@/lib/server/auth/pe-auth-cookies';
 import { ensureMerchantAccount } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
@@ -73,20 +74,7 @@ export async function GET(request: Request) {
     }
 
     const response = NextResponse.redirect(redirectUrl, { status: 302 });
-    response.cookies.set('pe_shop', shopDomain, {
-      path: '/',
-      maxAge: 60 * 60 * 24 * 30,
-      sameSite: 'lax',
-      secure: true,
-    });
-    response.cookies.set('pe_authenticated', '1', {
-      path: '/',
-      maxAge: 60 * 60 * 24 * 30,
-      sameSite: 'lax',
-      secure: true,
-      httpOnly: true,
-    });
-    return response;
+    return applyPeAuthCookies(response, shopDomain);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid SSO request.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

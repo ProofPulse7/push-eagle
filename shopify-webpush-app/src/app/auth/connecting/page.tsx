@@ -1,52 +1,45 @@
-'use client';
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+type AuthConnectingPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
 
-import { AppSetupScreen } from '@/components/ui/loading-ui';
+const pickParam = (value: string | string[] | undefined) =>
+  Array.isArray(value) ? value[0] : value;
 
-export default function AuthConnectingPage() {
-  const searchParams = useSearchParams();
-  const [error, setError] = useState<string | null>(null);
+export default async function AuthConnectingPage({ searchParams }: AuthConnectingPageProps) {
+  const params = await searchParams;
+  const shop = pickParam(params.shop);
 
-  const connectUrl = useMemo(() => {
-    const url = new URL('/api/auth/connect', window.location.origin);
-    const shop = searchParams.get('shop');
-    const returnTo = searchParams.get('return_to');
-    const host = searchParams.get('host');
-    const embedded = searchParams.get('embedded');
+  if (!shop) {
+    return (
+      <main className="flex min-h-screen items-center justify-center p-6 text-center text-sm text-muted-foreground">
+        Missing shop. Open Push Eagle from Shopify Admin.
+      </main>
+    );
+  }
 
-    if (shop) {
-      url.searchParams.set('shop', shop);
-    }
-    if (returnTo) {
-      url.searchParams.set('return_to', returnTo);
-    }
-    if (host) {
-      url.searchParams.set('host', host);
-    }
-    if (embedded) {
-      url.searchParams.set('embedded', embedded);
-    }
+  const headerList = await headers();
+  const host = headerList.get('x-forwarded-host') ?? headerList.get('host') ?? 'localhost';
+  const protocol = headerList.get('x-forwarded-proto') ?? 'https';
+  const connectUrl = new URL('/api/auth/connect', `${protocol}://${host}`);
 
-    return url.toString();
-  }, [searchParams]);
+  connectUrl.searchParams.set('shop', shop);
 
-  useEffect(() => {
-    if (!searchParams.get('shop')) {
-      setError('Missing shop. Open Push Eagle from Shopify Admin.');
-      return;
-    }
+  const returnTo = pickParam(params.return_to);
+  const adminHost = pickParam(params.host);
+  const embedded = pickParam(params.embedded);
 
-    window.location.replace(connectUrl);
-  }, [connectUrl, searchParams]);
+  if (returnTo) {
+    connectUrl.searchParams.set('return_to', returnTo);
+  }
+  if (adminHost) {
+    connectUrl.searchParams.set('host', adminHost);
+  }
+  if (embedded) {
+    connectUrl.searchParams.set('embedded', embedded);
+  }
 
-  return (
-    <AppSetupScreen
-      progress={35}
-      stepLabel="Connecting your Shopify store…"
-      error={error}
-      onRetry={error ? () => window.location.replace(connectUrl) : undefined}
-    />
-  );
+  redirect(connectUrl.toString());
 }

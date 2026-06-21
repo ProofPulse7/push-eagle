@@ -14,6 +14,7 @@ export const hasWarmShopCache = (queryClient: QueryClient, shop: string) => {
     queryKeys.merchantOverview(shop),
     queryKeys.campaigns(shop),
     queryKeys.automationsOverview(shop),
+    queryKeys.automationStats(shop, 'all', 'all'),
     queryKeys.privacy(shop),
     queryKeys.attribution(shop),
     queryKeys.branding(shop),

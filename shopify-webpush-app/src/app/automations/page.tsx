@@ -26,6 +26,8 @@ import {
 } from '@/lib/client/optimistic-automations';
 import { queryKeys } from '@/lib/client/query-keys';
 import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
+import { readAutomationStatsFromCache } from '@/lib/client/automation-stats-cache';
+import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { AutomationStats } from '@/components/automations/automation-stats';
 import { DateRangePicker } from '@/components/analytics/date-range-picker';
 import { Badge } from '@/components/ui/badge';
@@ -162,18 +164,46 @@ export default function AutomationsPage() {
     const { atLimit } = useImpressionLimit();
     const queryClient = useQueryClient();
     const [date, setDate] = useState<DateRange | undefined>(undefined);
+    const statsRange = useMemo(() => {
+        if (!date?.from && !date?.to) {
+            return { fromIso: 'all', toIso: 'all' };
+        }
+
+        const range = resolveAnalyticsDateRange({
+            from: date.from,
+            to: date.to ?? date.from,
+        });
+        return { fromIso: range.fromIso, toIso: range.toIso };
+    }, [date?.from, date?.to]);
+
+    const cachedOverview = activeShopDomain
+        ? queryClient.getQueryData<{ rules?: unknown[]; totals?: Record<string, unknown> }>(
+              queryKeys.automationsOverview(activeShopDomain),
+          )
+        : undefined;
     const { data, isLoading, isFetching, isError, error: queryError } = useAutomationsOverview();
-    const { data: statsData } = useAutomationStats(date?.from, date?.to);
+    const { data: statsData, isFetching: isStatsFetching } = useAutomationStats(date?.from, date?.to);
+    const effectiveOverview = data ?? cachedOverview;
+    const effectiveStats =
+        statsData ??
+        (activeShopDomain
+            ? readAutomationStatsFromCache(
+                  queryClient,
+                  activeShopDomain,
+                  statsRange.fromIso,
+                  statsRange.toIso,
+              )
+            : undefined);
     const [error, setError] = useState<string | null>(null);
     const statsPeriodLabel = formatCampaignDateRangeLabel(date);
 
     const visibleRuleKeysSet = useMemo(() => new Set<RuleKey>(visibleRuleKeys), []);
 
     const { rules } = useMemo(() => {
-        const overviewRules = normalizeAutomationRules(data?.rules).filter((rule) =>
+        const overviewRules = normalizeAutomationRules(effectiveOverview?.rules).filter((rule) =>
             visibleRuleKeysSet.has(rule.ruleKey as RuleKey),
         );
-        const statsRules = normalizeAutomationRules(statsData?.rules);
+        const statsRules = normalizeAutomationRules(effectiveStats?.rules);
         const statsByRuleKey = new Map(
             statsRules.map((rule) => [rule.ruleKey, rule]),
         );
@@ -201,9 +231,10 @@ export default function AutomationsPage() {
         }) as AutomationRule[];
 
         return { rules: mergedRules };
-    }, [data, statsData, visibleRuleKeysSet]);
+    }, [effectiveOverview, effectiveStats, visibleRuleKeysSet]);
 
-    const statsLoading = isLoading && !data;
+    const statsLoading = Boolean(activeShopDomain) && isLoading && !effectiveOverview;
+    const showStatsRefresh = (isFetching && Boolean(effectiveOverview)) || (isStatsFetching && Boolean(effectiveStats));
     const loadError =
         !activeShopDomain
             ? 'Missing shop context. Open the app from Shopify so automation data can load for the current store.'
@@ -273,8 +304,8 @@ export default function AutomationsPage() {
         <PageLoadingShell
             title="Automations"
             isLoading={statsLoading}
-            hasData={Boolean(activeShopDomain) || Boolean(data)}
-            isFetching={isFetching && Boolean(data)}
+            hasData={Boolean(activeShopDomain) || Boolean(effectiveOverview) || Boolean(loadError)}
+            isFetching={showStatsRefresh}
             error={loadError}
         >
         <div className="min-h-full bg-slate-50/80 p-4 sm:p-6 md:p-8">
@@ -298,7 +329,7 @@ export default function AutomationsPage() {
                     <AutomationStats date={date} />
                 </section>
 
-                {loadError && !data ? (
+                {loadError && !effectiveOverview ? (
                     <Card className="rounded-2xl border-red-200 bg-red-50 shadow-sm">
                         <CardContent className="p-6 text-sm text-destructive">{loadError}</CardContent>
                     </Card>

@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 
 import { buildShopifyAppConnectUrl } from '@/lib/server/billing/shopify-connect-url';
-import { requireShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
-import { buildDashboardSsoRedirectUrl } from '@/lib/server/shopify/dashboard-sso';
+import { getShopifyOfflineAccessToken } from '@/lib/server/billing/shopify-session';
+import { buildAuthenticatedAppRedirect } from '@/lib/server/auth/pe-auth-cookies';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -44,25 +44,19 @@ export async function GET(request: Request) {
       .toLowerCase();
 
     if (authenticated && cookieShop === shopDomain) {
-      const destination = new URL(redirectPath.startsWith('/') ? redirectPath : '/dashboard', requestUrl.origin);
-      destination.searchParams.set('shop', shopDomain);
-      return NextResponse.redirect(destination, { status: 302 });
+      return buildAuthenticatedAppRedirect(requestUrl, shopDomain, redirectPath, { host, embedded });
     }
 
-    try {
-      await requireShopifyOfflineAccessToken(shopDomain);
-      const ssoUrl = buildDashboardSsoRedirectUrl(requestUrl.origin, shopDomain, redirectPath, {
-        host,
-        embedded,
-      });
-      return NextResponse.redirect(ssoUrl, { status: 302 });
-    } catch {
-      const oauthUrl = new URL(buildShopifyAppConnectUrl(shopDomain, { host, embedded }));
-      if (returnTo) {
-        oauthUrl.searchParams.set('return_to', returnTo);
-      }
-      return NextResponse.redirect(oauthUrl.toString(), { status: 302 });
+    const token = await getShopifyOfflineAccessToken(shopDomain);
+    if (token) {
+      return buildAuthenticatedAppRedirect(requestUrl, shopDomain, redirectPath, { host, embedded });
     }
+
+    const oauthUrl = new URL(buildShopifyAppConnectUrl(shopDomain, { host, embedded }));
+    if (returnTo) {
+      oauthUrl.searchParams.set('return_to', returnTo);
+    }
+    return NextResponse.redirect(oauthUrl.toString(), { status: 302 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to connect store.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

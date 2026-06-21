@@ -29,7 +29,7 @@ const pickShop = (request: NextRequest) =>
   null;
 
 const buildConnectRedirect = (request: NextRequest, shop: string) => {
-  const connectUrl = new URL('/auth/connecting', request.url);
+  const connectUrl = new URL('/api/auth/connect', request.url);
   connectUrl.searchParams.set('shop', shop);
 
   const host = request.nextUrl.searchParams.get('host');

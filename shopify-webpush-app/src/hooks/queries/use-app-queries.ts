@@ -12,6 +12,7 @@ import {
 import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { fetchJsonWithRetry, fetchJsonWithShopRetry } from '@/lib/client/background-save';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
+import { readAutomationStatsFromCache } from '@/lib/client/automation-stats-cache';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
 import { mergeAutomationsFromCache } from '@/lib/client/optimistic-automations';
 import { mergeSegmentsFromCache } from '@/lib/client/optimistic-segments';
@@ -129,9 +130,9 @@ export function useAutomationStats(from?: Date, to?: Date) {
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
     refetchOnMount: false,
-    initialData: () =>
-      queryClient.getQueryData<Record<string, unknown>>(queryKeys.automationStats(shop, fromIso, toIso)),
-    placeholderData: (previous) => previous,
+    initialData: () => readAutomationStatsFromCache(queryClient, shop, fromIso, toIso),
+    placeholderData: (previous) =>
+      previous ?? readAutomationStatsFromCache(queryClient, shop, fromIso, toIso),
   });
 }
 
@@ -594,6 +595,18 @@ export async function prefetchAppPages(queryClient: QueryClient, shop: string) {
         }>('/api/automations/overview', shop);
         return mergeAutomationsFromCache(queryClient, shop, fresh);
       }),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.automationStats(shop, 'all', 'all'), async () => {
+        const params = new URLSearchParams({ shop });
+        return fetchJson<Record<string, unknown>>(`/api/automations/stats?${params.toString()}`);
+      }),
+    () => {
+      const { fromIso, toIso } = resolveAnalyticsDateRange();
+      return prefetchIfMissing(queryClient, queryKeys.automationStats(shop, fromIso, toIso), async () => {
+        const params = new URLSearchParams({ shop, from: fromIso, to: toIso });
+        return fetchJson<Record<string, unknown>>(`/api/automations/stats?${params.toString()}`);
+      });
+    },
     () =>
       prefetchIfMissing(queryClient, queryKeys.segments(shop), async () => {
         const fresh = await fetchJsonWithShop<{ segments: unknown[] }>('/api/segments', shop);
