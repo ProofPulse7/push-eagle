@@ -68,6 +68,7 @@ export const invalidateShopDashboardCaches = async (shopDomain: string) => {
     invalidateShopApiKvCache(shopDomain, 'campaigns'),
     invalidateShopApiKvCache(shopDomain, 'campaign-audience'),
     invalidateShopApiKvCache(shopDomain, 'subscribers-overview'),
+    invalidateShopApiKvCache(shopDomain, 'subscriber-growth:all'),
     invalidateShopApiKvCache(shopDomain, 'automations-overview'),
   ]);
 };

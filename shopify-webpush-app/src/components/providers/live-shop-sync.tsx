@@ -6,37 +6,15 @@ import { useQueryClient } from '@tanstack/react-query';
 import { prefetchAppBootstrap, prefetchCampaignsList, prefetchDashboardSummary } from '@/lib/client/query-fetchers';
 import { queryKeys } from '@/lib/client/query-keys';
 import {
-  getSubscriberPollIntervalMs,
   EARLY_SUBSCRIBER_SYNC_MAX,
+  getSubscriberPollIntervalMs,
+  invalidateSubscriberQueries,
   NORMAL_SUBSCRIBER_POLL_MS,
   readCachedSubscriberCount,
   syncSubscriberCountFromServer,
 } from '@/lib/client/subscriber-count-sync';
 import { broadcastShopSync, subscribeShopSync } from '@/lib/client/shop-sync-bus';
 import { useShopDomain } from '@/hooks/use-shop-domain';
-
-/** Invalidate only queries that currently have mounted observers (avoids Missing queryFn errors). */
-const invalidateActiveShopQueries = (
-  queryClient: ReturnType<typeof useQueryClient>,
-  shop: string,
-  scopes: Array<'subscribers' | 'dashboard' | 'bootstrap'>,
-) => {
-  if (scopes.includes('bootstrap')) {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.bootstrap(shop), refetchType: 'active' });
-  }
-
-  if (scopes.includes('dashboard')) {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary(shop), refetchType: 'active' });
-  }
-
-  if (scopes.includes('subscribers') || scopes.includes('dashboard')) {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.subscribersOverview(shop), refetchType: 'active' });
-    void queryClient.invalidateQueries({
-      queryKey: ['pe', shop, 'subscribers', 'list'],
-      refetchType: 'active',
-    });
-  }
-};
 
 const refreshSubscriberData = async (
   queryClient: ReturnType<typeof useQueryClient>,
@@ -47,10 +25,9 @@ const refreshSubscriberData = async (
 
   if (changed) {
     broadcastShopSync(shop, { type: 'subscribers' });
-  }
-
-  if (options?.fullRefresh || (changed && next < EARLY_SUBSCRIBER_SYNC_MAX)) {
-    invalidateActiveShopQueries(queryClient, shop, ['subscribers', 'dashboard']);
+    invalidateSubscriberQueries(queryClient, shop);
+  } else if (options?.fullRefresh) {
+    invalidateSubscriberQueries(queryClient, shop);
   }
 
   return { changed, next };
@@ -73,7 +50,7 @@ export function LiveShopSync() {
 
     const unsubscribe = subscribeShopSync(shop, (event) => {
       if (event.type === 'all') {
-        invalidateActiveShopQueries(queryClient, shop, ['bootstrap', 'dashboard', 'subscribers']);
+        invalidateSubscriberQueries(queryClient, shop, { includeBootstrap: true });
         return;
       }
 
@@ -87,7 +64,10 @@ export function LiveShopSync() {
         return;
       }
 
-      invalidateActiveShopQueries(queryClient, shop, ['dashboard']);
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.dashboardSummary(shop),
+        refetchType: 'active',
+      });
     });
 
     const runSubscriberPoll = async () => {

@@ -1,12 +1,13 @@
 import type { QueryClient } from '@tanstack/react-query';
 
 import { fetchJsonWithShop } from '@/lib/client/api-fetch';
+import { EARLY_SUBSCRIBER_SYNC_MAX } from '@/lib/constants/subscriber-sync';
 import type { AppBootstrapPayload } from '@/lib/client/hydrate-app-cache';
 import type { DashboardSummaryPayload } from '@/lib/client/query-fetchers';
 import { queryKeys } from '@/lib/client/query-keys';
 
 /** While below this count, poll the server frequently so new opt-ins appear instantly. */
-export const EARLY_SUBSCRIBER_SYNC_MAX = 5;
+export { EARLY_SUBSCRIBER_SYNC_MAX } from '@/lib/constants/subscriber-sync';
 export const EARLY_SUBSCRIBER_POLL_MS = 2_000;
 export const NORMAL_SUBSCRIBER_POLL_MS = 30_000;
 
@@ -51,10 +52,111 @@ export const readCachedSubscriberCount = (queryClient: QueryClient, shop: string
   return 0;
 };
 
+const applySubscriberKpiPatch = (
+  kpis: Record<string, unknown>,
+  totalSubscribers: number,
+  incrementNewLast7Days?: number,
+) => ({
+  ...kpis,
+  totalSubscribers,
+  activeSubscribers: totalSubscribers,
+  ...(incrementNewLast7Days && incrementNewLast7Days > 0
+    ? {
+        newSubscribersLast7Days:
+          Number(kpis.newSubscribersLast7Days ?? 0) + incrementNewLast7Days,
+      }
+    : {}),
+});
+
+export const bumpSubscriberGrowthCharts = (
+  queryClient: QueryClient,
+  shop: string,
+  delta: number,
+) => {
+  if (delta <= 0) {
+    return;
+  }
+
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const growthQueries = queryClient.getQueryCache().findAll({
+    queryKey: ['pe', shop, 'subscribers', 'growth'],
+  });
+
+  for (const query of growthQueries) {
+    queryClient.setQueryData(query.queryKey, (current) => {
+      if (!current || typeof current !== 'object') {
+        return current;
+      }
+
+      const payload = current as Record<string, unknown>;
+      if (!payload.ok || !Array.isArray(payload.points)) {
+        return current;
+      }
+
+      const points = (payload.points as Array<{ date?: string; subscribers?: number }>).map((point) => ({
+        date: String(point.date ?? ''),
+        subscribers: Number(point.subscribers ?? 0),
+      }));
+
+      const todayIndex = points.findIndex((point) => point.date.startsWith(todayKey));
+      if (todayIndex >= 0) {
+        points[todayIndex] = {
+          ...points[todayIndex],
+          subscribers: points[todayIndex].subscribers + delta,
+        };
+      } else {
+        points.push({ date: todayKey, subscribers: delta });
+      }
+
+      return {
+        ...payload,
+        points,
+        totalNewSubscribers: Number(payload.totalNewSubscribers ?? 0) + delta,
+      };
+    });
+  }
+};
+
+/** Refetch subscriber stats, graphs, and lists that are currently mounted. */
+export const invalidateSubscriberQueries = (
+  queryClient: QueryClient,
+  shop: string,
+  options?: { includeBootstrap?: boolean },
+) => {
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.subscribersOverview(shop),
+    refetchType: 'active',
+  });
+  void queryClient.invalidateQueries({
+    queryKey: ['pe', shop, 'subscribers', 'growth'],
+    refetchType: 'active',
+  });
+  void queryClient.invalidateQueries({
+    queryKey: ['pe', shop, 'subscribers', 'list'],
+    refetchType: 'active',
+  });
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.dashboardSummary(shop),
+    refetchType: 'active',
+  });
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.merchantOverview(shop),
+    refetchType: 'active',
+  });
+
+  if (options?.includeBootstrap) {
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.bootstrap(shop),
+      refetchType: 'active',
+    });
+  }
+};
+
 export const patchSubscriberCountAcrossApp = (
   queryClient: QueryClient,
   shop: string,
   totalSubscribers: number,
+  options?: { incrementNewLast7Days?: number },
 ) => {
   queryClient.setQueryData(queryKeys.merchantOverview(shop), (current) => {
     if (!current || typeof current !== 'object') {
@@ -72,11 +174,11 @@ export const patchSubscriberCountAcrossApp = (
       return current;
     }
 
-    return {
-      ...(current as Record<string, unknown>),
+    return applySubscriberKpiPatch(
+      current as Record<string, unknown>,
       totalSubscribers,
-      activeSubscribers: totalSubscribers,
-    };
+      options?.incrementNewLast7Days,
+    );
   });
 
   queryClient.setQueryData(queryKeys.dashboardSummary(shop), (current) => {
@@ -91,11 +193,11 @@ export const patchSubscriberCountAcrossApp = (
         ...summary.overview,
         subscriberCount: totalSubscribers,
       },
-      subscriberKpis: {
-        ...summary.subscriberKpis,
+      subscriberKpis: applySubscriberKpiPatch(
+        summary.subscriberKpis,
         totalSubscribers,
-        activeSubscribers: totalSubscribers,
-      },
+        options?.incrementNewLast7Days,
+      ),
     };
   });
 
@@ -111,17 +213,17 @@ export const patchSubscriberCountAcrossApp = (
         ...bootstrap.merchantOverview,
         subscriberCount: totalSubscribers,
       },
-      subscriberKpis: {
-        ...bootstrap.subscriberKpis,
+      subscriberKpis: applySubscriberKpiPatch(
+        bootstrap.subscriberKpis,
         totalSubscribers,
-        activeSubscribers: totalSubscribers,
-      },
+        options?.incrementNewLast7Days,
+      ),
       subscriberOverview: bootstrap.subscriberOverview
-        ? {
-            ...bootstrap.subscriberOverview,
+        ? applySubscriberKpiPatch(
+            bootstrap.subscriberOverview,
             totalSubscribers,
-            activeSubscribers: totalSubscribers,
-          }
+            options?.incrementNewLast7Days,
+          )
         : bootstrap.subscriberOverview,
     };
   });
@@ -141,7 +243,13 @@ export const syncSubscriberCountFromServer = async (
     const next = Number(payload.totalSubscribers ?? payload.activeSubscribers ?? previous);
 
     if (next !== previous) {
-      patchSubscriberCountAcrossApp(queryClient, shop, next);
+      const delta = Math.max(0, next - previous);
+      patchSubscriberCountAcrossApp(queryClient, shop, next, {
+        incrementNewLast7Days: delta > 0 ? delta : undefined,
+      });
+      if (delta > 0) {
+        bumpSubscriberGrowthCharts(queryClient, shop, delta);
+      }
     }
 
     return { previous, next, changed: next !== previous };

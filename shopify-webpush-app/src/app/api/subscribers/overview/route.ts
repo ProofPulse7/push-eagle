@@ -1,39 +1,52 @@
 import { NextResponse } from 'next/server';
 
 import { API_KV_TTL, withShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
-import { getSubscriberBreakdown, getSubscriberKpis, getSubscriberLocationBreakdown } from '@/lib/server/data/store';
+import { EARLY_SUBSCRIBER_SYNC_MAX } from '@/lib/constants/subscriber-sync';
+import { countActiveDeliverableSubscribers, getSubscriberBreakdown, getSubscriberKpis, getSubscriberLocationBreakdown } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
 
+const loadSubscriberOverview = async (shopDomain: string) => {
+  const [kpis, breakdown, locations] = await Promise.all([
+    getSubscriberKpis(shopDomain),
+    getSubscriberBreakdown(shopDomain),
+    getSubscriberLocationBreakdown(shopDomain),
+  ]);
+
+  return {
+    ok: true as const,
+    shopDomain,
+    ...kpis,
+    browsers: breakdown.browsers,
+    platforms: breakdown.platforms,
+    countries: locations.countries,
+    cities: locations.cities,
+  };
+};
+
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const payload = await withShopApiKvCache(
-      shopDomain,
-      'subscribers-overview',
-      API_KV_TTL.subscribersOverview,
-      async () => {
-        const [kpis, breakdown, locations] = await Promise.all([
-          getSubscriberKpis(shopDomain),
-          getSubscriberBreakdown(shopDomain),
-          getSubscriberLocationBreakdown(shopDomain),
-        ]);
+    const liveCount = await countActiveDeliverableSubscribers(shopDomain);
 
-        return {
-          ok: true as const,
-          shopDomain,
-          ...kpis,
-          browsers: breakdown.browsers,
-          platforms: breakdown.platforms,
-          countries: locations.countries,
-          cities: locations.cities,
-        };
-      },
-    );
+    const payload =
+      liveCount < EARLY_SUBSCRIBER_SYNC_MAX
+        ? await loadSubscriberOverview(shopDomain)
+        : await withShopApiKvCache(
+            shopDomain,
+            'subscribers-overview',
+            API_KV_TTL.subscribersOverview,
+            () => loadSubscriberOverview(shopDomain),
+          );
 
     return NextResponse.json(payload, {
-      headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=300' },
+      headers: {
+        'Cache-Control':
+          liveCount < EARLY_SUBSCRIBER_SYNC_MAX
+            ? 'private, no-store'
+            : 'private, max-age=60, stale-while-revalidate=300',
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch subscriber overview.';

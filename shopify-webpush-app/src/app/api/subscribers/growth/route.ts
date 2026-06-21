@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 
 import { API_KV_TTL, withShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
-import { getSubscriberGrowth } from '@/lib/server/data/store';
+import { EARLY_SUBSCRIBER_SYNC_MAX } from '@/lib/constants/subscriber-sync';
+import { countActiveDeliverableSubscribers, getSubscriberGrowth } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -21,24 +22,31 @@ export async function GET(request: Request) {
       ? 'subscriber-growth:all'
       : `subscriber-growth:${(from ?? now).toISOString().slice(0, 10)}:${to.toISOString().slice(0, 10)}`;
 
-    const payload = await withShopApiKvCache(
-      shopDomain,
-      cacheScope,
-      API_KV_TTL.subscribersOverview,
-      async () => {
-        const growth = await getSubscriberGrowth(shopDomain, from, to);
-        return {
-          ok: true as const,
-          shopDomain,
-          from: growth.from.toISOString(),
-          to: growth.to.toISOString(),
-          ...growth,
-        };
-      },
-    );
+    const liveCount = await countActiveDeliverableSubscribers(shopDomain);
+
+    const loadGrowth = async () => {
+      const growth = await getSubscriberGrowth(shopDomain, from, to);
+      return {
+        ok: true as const,
+        shopDomain,
+        from: growth.from.toISOString(),
+        to: growth.to.toISOString(),
+        ...growth,
+      };
+    };
+
+    const payload =
+      liveCount < EARLY_SUBSCRIBER_SYNC_MAX
+        ? await loadGrowth()
+        : await withShopApiKvCache(shopDomain, cacheScope, API_KV_TTL.subscribersOverview, loadGrowth);
 
     return NextResponse.json(payload, {
-      headers: { 'Cache-Control': 'private, max-age=120, stale-while-revalidate=600' },
+      headers: {
+        'Cache-Control':
+          liveCount < EARLY_SUBSCRIBER_SYNC_MAX
+            ? 'private, no-store'
+            : 'private, max-age=120, stale-while-revalidate=600',
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch subscriber growth.';
