@@ -8,7 +8,7 @@ import {
   useRef,
   useCallback,
 } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useSettings } from '@/context/settings-context';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import {
@@ -18,10 +18,11 @@ import {
   type CampaignDraftSnapshot,
 } from '@/lib/client/campaign-draft-storage';
 import {
-  clearWizardLaunchMediaCache,
-  prepareWizardLaunchMedia,
-  readPersistableImageSource,
-} from '@/lib/client/campaign-wizard-media';
+  FRESH_CAMPAIGN_QUERY_PARAM,
+  isCampaignWizardRoute,
+  isCampaignWizardStepPath,
+} from '@/lib/client/campaign-wizard-routes';
+import { clearWizardLaunchMediaCache, readPersistableImageSource } from '@/lib/client/campaign-wizard-media';
 import {
   isMyshopifyHost,
   normalizeMerchantWebsiteUrl,
@@ -179,6 +180,7 @@ export function useCampaignState() {
 export function CampaignStateProvider({ children }: { children: ReactNode }) {
   const shop = useShopDomain();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const prevPathRef = useRef(pathname);
   const blobUrlsRef = useRef<Set<string>>(new Set());
   const primaryLinkInitializedRef = useRef(false);
@@ -270,20 +272,39 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!shop || didHydrateDraftRef.current || !pathname.startsWith('/campaigns/new')) {
+    if (!shop || !isCampaignWizardRoute(pathname)) {
+      return;
+    }
+
+    if (searchParams.get(FRESH_CAMPAIGN_QUERY_PARAM) === '1') {
+      clearCampaignDraft(shop);
+      clearWizardLaunchMediaCache(shop);
+      resetCampaignState();
+      if (settingsLogo.preview) {
+        setLogo({
+          file: null,
+          preview: settingsLogo.preview,
+          originalPreview: settingsLogo.originalPreview ?? null,
+        });
+      }
+      return;
+    }
+
+    if (didHydrateDraftRef.current) {
       return;
     }
 
     didHydrateDraftRef.current = true;
+
     const draft = readCampaignDraft(shop);
     if (draft) {
       applyDraft(draft);
     }
-  }, [shop, pathname, applyDraft]);
+  }, [shop, pathname, applyDraft, resetCampaignState, searchParams, settingsLogo.preview, settingsLogo.originalPreview]);
 
   useEffect(() => {
-    const wasInWizard = prevPathRef.current.startsWith('/campaigns/new');
-    const inWizard = pathname.startsWith('/campaigns/new');
+    const wasInWizard = isCampaignWizardRoute(prevPathRef.current);
+    const inWizard = isCampaignWizardRoute(pathname);
 
     if (wasInWizard && !inWizard) {
       if (shop) {
@@ -293,7 +314,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
       resetCampaignState();
     }
 
-    if (inWizard && !wasInWizard) {
+    if (inWizard && !wasInWizard && searchParams.get(FRESH_CAMPAIGN_QUERY_PARAM) !== '1') {
       const draft = shop ? readCampaignDraft(shop) : null;
       if (draft) {
         applyDraft(draft);
@@ -310,10 +331,10 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     }
 
     prevPathRef.current = pathname;
-  }, [pathname, shop, applyDraft, resetCampaignState, settingsLogo.preview, settingsLogo.originalPreview]);
+  }, [pathname, shop, applyDraft, resetCampaignState, searchParams, settingsLogo.preview, settingsLogo.originalPreview]);
 
   useEffect(() => {
-    if (!shop || !pathname.startsWith('/campaigns/new')) {
+    if (!shop || !isCampaignWizardStepPath(pathname)) {
       return;
     }
 
@@ -365,14 +386,6 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
             draftCampaignId,
           }),
         );
-
-        void prepareWizardLaunchMedia(shop, {
-          imageUrl: persistedMacHero.preview ?? persistedWindowsHero.preview ?? persistedAndroidHero.preview,
-          windowsImageUrl: persistedWindowsHero.preview,
-          macosImageUrl: persistedMacHero.preview,
-          androidImageUrl: persistedAndroidHero.preview,
-          iconUrl: persistedLogo.preview,
-        }).catch(() => undefined);
       })();
     }, 150);
 

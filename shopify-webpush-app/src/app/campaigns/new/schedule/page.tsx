@@ -163,26 +163,6 @@ export default function ScheduleCampaignPage() {
         };
     }, [queryClient, shopDomain, segmentId]);
 
-    useEffect(() => {
-        if (!shopDomain) {
-            return;
-        }
-
-        void prepareWizardLaunchMedia(shopDomain, {
-            imageUrl: macHero.preview ?? windowsHero.preview ?? androidHero.preview,
-            windowsImageUrl: windowsHero.preview,
-            macosImageUrl: macHero.preview,
-            androidImageUrl: androidHero.preview,
-            iconUrl: logo.preview,
-        }).catch(() => undefined);
-    }, [
-        shopDomain,
-        logo.preview,
-        windowsHero.preview,
-        macHero.preview,
-        androidHero.preview,
-    ]);
-    
     const handleLaunchCampaign = async () => {
         setIsLaunching(true);
         try {

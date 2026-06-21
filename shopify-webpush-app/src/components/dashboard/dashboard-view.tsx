@@ -13,6 +13,7 @@ import { useDashboardSummary } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { BASIC_PLAN } from '@/lib/client/billing-plans';
+import { buildNewCampaignHref } from '@/lib/client/campaign-wizard-routes';
 import { formatCurrency } from '@/lib/utils';
 
 export function DashboardView() {
@@ -102,7 +103,7 @@ export function DashboardView() {
             <Link href="/campaigns">View Campaigns</Link>
           </Button>
           <Button asChild disabled={atLimit} title={atLimit ? 'Monthly impression limit reached. Upgrade on Plans.' : undefined}>
-            <Link href={atLimit ? '/plans' : '/campaigns/new'}>
+            <Link href={atLimit ? '/plans' : buildNewCampaignHref(shopDomain)}>
               <Send className="mr-2 h-4 w-4" />
               {atLimit ? 'Upgrade to send' : 'Create Campaign'}
             </Link>

@@ -24,7 +24,7 @@ import {
     duplicateCampaignToWizard,
     refreshEditDraftCampaignInBackground,
 } from '@/lib/client/campaign-duplicate';
-import { removeOptimisticCampaign } from '@/lib/client/optimistic-campaigns';
+import { buildNewCampaignHref } from '@/lib/client/campaign-wizard-routes';
 import { queryKeys } from '@/lib/client/query-keys';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
@@ -345,7 +345,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                         <h3 className="text-xl font-semibold mb-2">{title}</h3>
                         <p className="text-muted-foreground mb-6">{description}</p>
                         <Button asChild>
-                            <Link href="/campaigns/new">
+                            <Link href={buildNewCampaignHref(shop)}>
                                 <PlusCircle className="mr-2 h-4 w-4" />
                                 New Campaign
                             </Link>

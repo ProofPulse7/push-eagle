@@ -15,6 +15,7 @@ import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-l
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { buildNewCampaignHref } from '@/lib/client/campaign-wizard-routes';
 import { queryKeys } from '@/lib/client/query-keys';
 
 export default function CampaignsPage() {
@@ -72,7 +73,7 @@ export default function CampaignsPage() {
                 <p className="text-muted-foreground">View and manage your past and current campaigns.</p>
               </div>
               <Button asChild disabled={atLimit} title={atLimit ? 'Monthly impression limit reached.' : undefined}>
-                <Link href={atLimit ? '/plans' : '/campaigns/new/details'} prefetch>
+                <Link href={atLimit ? '/plans' : buildNewCampaignHref(shop)} prefetch>
                   <PlusCircle className="mr-2 h-4 w-4" />
                   {atLimit ? 'Upgrade to send' : 'New Campaign'}
                 </Link>

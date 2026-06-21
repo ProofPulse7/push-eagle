@@ -2,7 +2,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { handleSendLivePreview } from '@/lib/notification-service';
@@ -50,6 +50,18 @@ export const ComposerActions = ({
     } = useCampaignState();
     const [isSending, setIsSending] = useState(false);
 
+    const scheduleHref = useMemo(
+        () =>
+            shopDomain
+                ? `/campaigns/new/schedule?shop=${encodeURIComponent(shopDomain)}`
+                : '/campaigns/new/schedule',
+        [shopDomain],
+    );
+
+    useEffect(() => {
+        router.prefetch(scheduleHref);
+    }, [router, scheduleHref]);
+
     const buildDraftInput = (): SaveCampaignDraftInput => ({
         shopDomain: shopDomain || '',
         draftCampaignId,
@@ -87,13 +99,16 @@ export const ComposerActions = ({
 
         setIsSending(true);
         try {
-            await handleSendLivePreview({
-                title: title,
-                body: message,
-                url: primaryLink,
-                icon: logo.preview,
-                image: macHero.preview,
-            });
+            await handleSendLivePreview(
+                {
+                    title: title,
+                    body: message,
+                    url: primaryLink,
+                    icon: logo.preview,
+                    image: macHero.preview,
+                },
+                shopDomain || undefined,
+            );
             toast({
                 title: "Preview Sent!",
                 description: "Check your device for the notification.",
@@ -159,14 +174,11 @@ export const ComposerActions = ({
     };
 
     const handleContinue = () => {
-        const isFormValid = onContinueClick();
-        if (isFormValid) {
-            const queryShop = new URLSearchParams(window.location.search).get('shop');
-            const scheduleHref = queryShop
-                ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
-                : '/campaigns/new/schedule';
-            router.push(scheduleHref);
+        if (!onContinueClick()) {
+            return;
         }
+
+        router.push(scheduleHref);
     };
 
     return (

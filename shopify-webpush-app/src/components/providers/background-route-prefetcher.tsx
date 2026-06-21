@@ -19,6 +19,7 @@ const ROUTES = [
   '/settings',
   '/campaigns/new/details',
   '/campaigns/new/editor',
+  '/campaigns/new/schedule',
 ] as const;
 
 /**
