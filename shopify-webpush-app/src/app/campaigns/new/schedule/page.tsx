@@ -84,7 +84,6 @@ export default function ScheduleCampaignPage() {
         flashSaleUrgencyText,
         draftCampaignId,
     } = useCampaignState();
-    const [isSaving, setIsSaving] = useState(false);
     const [isLaunching, setIsLaunching] = useState(false);
     const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('windows');
     const [segmentDisplayName, setSegmentDisplayName] = useState('All Subscribers');
@@ -400,52 +399,56 @@ export default function ScheduleCampaignPage() {
             return;
         }
 
-        setIsSaving(true);
+        try {
+            const draftInput = {
+                shopDomain,
+                draftCampaignId,
+                title,
+                message,
+                primaryLink,
+                segmentId,
+                actionButtons,
+                logoPreview: logo.preview,
+                windowsHeroPreview: windowsHero.preview,
+                macHeroPreview: macHero.preview,
+                androidHeroPreview: androidHero.preview,
+                sendingOption,
+                scheduledDate,
+                scheduledTime,
+                smartDeliver,
+                flashSaleEnabled,
+                flashSaleDiscountPercent,
+                flashSaleOriginalPrice,
+                flashSaleSalePrice,
+                flashSaleExpiresAt,
+                flashSaleExpiresTime,
+                flashSaleUrgencyText,
+            };
 
-        const draftInput = {
-            shopDomain,
-            draftCampaignId,
-            title,
-            message,
-            primaryLink,
-            segmentId,
-            actionButtons,
-            logoPreview: logo.preview,
-            windowsHeroPreview: windowsHero.preview,
-            macHeroPreview: macHero.preview,
-            androidHeroPreview: androidHero.preview,
-            sendingOption,
-            scheduledDate,
-            scheduledTime,
-            smartDeliver,
-            flashSaleEnabled,
-            flashSaleDiscountPercent,
-            flashSaleOriginalPrice,
-            flashSaleSalePrice,
-            flashSaleExpiresAt,
-            flashSaleExpiresTime,
-            flashSaleUrgencyText,
-        };
+            const { campaignsHref, optimisticId } = saveCampaignDraftInstantly(draftInput, queryClient);
 
-        const { campaignsHref, optimisticId } = saveCampaignDraftInstantly(draftInput, queryClient);
+            toast({
+                title: "Draft Saved!",
+                description: "Your campaign has been saved as a draft.",
+            });
 
-        toast({
-            title: "Draft Saved!",
-            description: "Your campaign has been saved as a draft.",
-        });
+            clearCampaignDraft(shopDomain);
+            router.push(campaignsHref);
 
-        clearCampaignDraft(shopDomain);
-        clearWizardLaunchMediaCache(shopDomain);
-        router.push(campaignsHref);
-        setIsSaving(false);
-
-        void runBackgroundCampaignDraftSave(draftInput, queryClient, optimisticId, (error) => {
+            void runBackgroundCampaignDraftSave(draftInput, queryClient, optimisticId, (error) => {
+                toast({
+                    variant: 'destructive',
+                    title: 'Draft save failed',
+                    description: error.message,
+                });
+            });
+        } catch (error) {
             toast({
                 variant: 'destructive',
                 title: 'Draft save failed',
-                description: error.message,
+                description: error instanceof Error ? error.message : 'Unexpected error while saving draft.',
             });
-        });
+        }
     };
 
     const renderPreview = () => {
@@ -566,14 +569,14 @@ export default function ScheduleCampaignPage() {
                 </div>
             </div>
              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={handleSaveDraft} disabled={isSaving}>
-                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                    {isSaving ? 'Saving...' : 'Save as Draft'}
+                <Button variant="outline" onClick={handleSaveDraft}>
+                    <Save className="mr-2 h-4 w-4" />
+                    Save as Draft
                 </Button>
                 <Button 
                     size="lg" 
                     onClick={handleLaunchCampaign} 
-                    disabled={isSaving || isLaunching || !title || !primaryLink}
+                    disabled={isLaunching || !title || !primaryLink}
                 >
                     {isLaunching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
                     {isLaunching

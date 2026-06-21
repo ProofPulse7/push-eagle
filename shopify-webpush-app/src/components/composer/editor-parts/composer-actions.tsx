@@ -13,7 +13,6 @@ import {
   saveCampaignDraftInstantly,
   type SaveCampaignDraftInput,
 } from '@/lib/client/campaign-save-draft';
-import { clearWizardLaunchMediaCache } from '@/lib/client/campaign-wizard-media';
 
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Save, Eye, Loader2 } from "lucide-react";
@@ -51,7 +50,6 @@ export const ComposerActions = ({
         draftCampaignId,
     } = useCampaignState();
     const [isSending, setIsSending] = useState(false);
-    const [isSaving, setIsSaving] = useState(false);
 
     const buildDraftInput = (): SaveCampaignDraftInput => ({
         shopDomain: shopDomain || '',
@@ -132,28 +130,32 @@ export const ComposerActions = ({
             return;
         }
 
-        setIsSaving(true);
+        try {
+            const draftInput = buildDraftInput();
+            const { campaignsHref, optimisticId } = saveCampaignDraftInstantly(draftInput, queryClient);
 
-        const draftInput = buildDraftInput();
-        const { campaignsHref, optimisticId } = saveCampaignDraftInstantly(draftInput, queryClient);
+            toast({
+                title: "Draft Saved!",
+                description: "Your campaign has been saved as a draft.",
+            });
 
-        toast({
-            title: "Draft Saved!",
-            description: "Your campaign has been saved as a draft.",
-        });
+            clearCampaignDraft(shopDomain);
+            router.push(campaignsHref);
 
-        clearCampaignDraft(shopDomain);
-        clearWizardLaunchMediaCache(shopDomain);
-        router.push(campaignsHref);
-        setIsSaving(false);
-
-        void runBackgroundCampaignDraftSave(draftInput, queryClient, optimisticId, (error) => {
+            void runBackgroundCampaignDraftSave(draftInput, queryClient, optimisticId, (error) => {
+                toast({
+                    variant: 'destructive',
+                    title: 'Draft save failed',
+                    description: error.message,
+                });
+            });
+        } catch (error) {
             toast({
                 variant: 'destructive',
                 title: 'Draft save failed',
-                description: error.message,
+                description: error instanceof Error ? error.message : 'Unexpected error while saving draft.',
             });
-        });
+        }
     };
 
     const handleContinue = () => {
@@ -169,11 +171,11 @@ export const ComposerActions = ({
 
     return (
         <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={onSaveDraft} disabled={isSaving || isSending}>
-                {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                {isSaving ? 'Saving...' : 'Save as Draft'}
+            <Button variant="outline" onClick={onSaveDraft} disabled={isSending}>
+                <Save className="mr-2 h-4 w-4" />
+                Save as Draft
             </Button>
-            <Button variant="outline" onClick={onSendPreview} disabled={isSending || isSaving}>
+            <Button variant="outline" onClick={onSendPreview} disabled={isSending}>
                 {isSending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
@@ -181,7 +183,7 @@ export const ComposerActions = ({
                 )}
                 {isSending ? 'Sending...' : 'See live preview'}
             </Button>
-            <Button onClick={handleContinue} disabled={isSaving}>
+            <Button onClick={handleContinue}>
                 Continue
                 <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
