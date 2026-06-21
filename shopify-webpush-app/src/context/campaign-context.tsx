@@ -8,7 +8,7 @@ import {
   useRef,
   useCallback,
 } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useSettings } from '@/context/settings-context';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import {
@@ -177,11 +177,18 @@ export function useCampaignState() {
   return context;
 }
 
+const readClientSearchParams = () => {
+  if (typeof window === 'undefined') {
+    return new URLSearchParams();
+  }
+
+  return new URLSearchParams(window.location.search);
+};
+
 export function CampaignStateProvider({ children }: { children: ReactNode }) {
   const shop = useShopDomain();
   const pathname = usePathname();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const prevPathRef = useRef(pathname);
   const blobUrlsRef = useRef<Set<string>>(new Set());
   const primaryLinkInitializedRef = useRef(false);
@@ -287,6 +294,8 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    const searchParams = readClientSearchParams();
+
     if (searchParams.get('new') === '1') {
       beginFreshCampaignSession(shop);
       resetCampaignState();
@@ -309,7 +318,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     if (draft) {
       applyDraft(draft);
     }
-  }, [shop, pathname, searchParams, applyDraft, applyDefaultLogo, resetCampaignState, router]);
+  }, [shop, pathname, applyDraft, applyDefaultLogo, resetCampaignState, router]);
 
   useEffect(() => {
     const wasWizardStep = isCampaignWizardStep(prevPathRef.current);
@@ -324,7 +333,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
       didHydrateDraftRef.current = false;
     }
 
-    if (inWizardStep && !wasWizardStep && searchParams.get('new') !== '1') {
+    if (inWizardStep && !wasWizardStep && readClientSearchParams().get('new') !== '1') {
       const draft = shop ? readCampaignDraft(shop) : null;
       if (draft) {
         applyDraft(draft);
@@ -336,7 +345,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     }
 
     prevPathRef.current = pathname;
-  }, [pathname, shop, applyDraft, applyDefaultLogo, resetCampaignState, searchParams]);
+  }, [pathname, shop, applyDraft, applyDefaultLogo, resetCampaignState]);
 
   useEffect(() => {
     if (!shop || !isCampaignWizardStep(pathname)) {
