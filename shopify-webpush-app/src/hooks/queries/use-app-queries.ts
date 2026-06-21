@@ -308,9 +308,17 @@ export function useThemeEmbedStatus() {
         themeEditorUrl?: string | null;
       }>('/api/theme/embed-status', shop),
     enabled: Boolean(shop),
-    staleTime: 60_000,
-    refetchOnMount: true,
+    staleTime: 0,
+    refetchOnMount: 'always',
     refetchOnWindowFocus: true,
+    refetchIntervalInBackground: true,
+    refetchInterval: (query) => {
+      const status = query.state.data;
+      if (status?.ok && status.checkAvailable && !status.enabled) {
+        return 3_000;
+      }
+      return false;
+    },
   });
 }
 
