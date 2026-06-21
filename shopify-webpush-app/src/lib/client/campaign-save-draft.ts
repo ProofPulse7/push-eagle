@@ -8,9 +8,11 @@ import {
   prependOptimisticCampaign,
   patchOptimisticCampaign,
   replaceOptimisticCampaignId,
-  removeOptimisticCampaign,
 } from '@/lib/client/optimistic-campaigns';
-import { queryKeys } from '@/lib/client/query-keys';
+import {
+  cacheDraftWizardSnapshot,
+  migrateDraftWizardSnapshot,
+} from '@/lib/client/campaign-draft-cache';
 import {
   buildMergedLaunchMedia,
   prepareWizardLaunchMedia,
@@ -188,6 +190,10 @@ export const saveCampaignDraftInstantly = (
   }
 
   void cacheLaunchMedia(input.shopDomain, optimisticId, launchMedia).catch(() => undefined);
+  cacheDraftWizardSnapshot(input.shopDomain, optimisticId, {
+    ...input,
+    draftCampaignId: isUpdate ? input.draftCampaignId ?? optimisticId : optimisticId,
+  });
   void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(input.shopDomain) });
 
   return {
@@ -269,16 +275,21 @@ export const runBackgroundCampaignDraftSave = async (
 
     if (isUpdate) {
       patchOptimisticCampaign(queryClient, input.shopDomain, campaignId, savedCampaign);
+      cacheDraftWizardSnapshot(input.shopDomain, campaignId, {
+        ...input,
+        draftCampaignId: campaignId,
+      });
     } else {
       replaceOptimisticCampaignId(queryClient, input.shopDomain, optimisticId, savedCampaign);
+      migrateDraftWizardSnapshot(input.shopDomain, optimisticId, campaignId);
+      cacheDraftWizardSnapshot(input.shopDomain, campaignId, {
+        ...input,
+        draftCampaignId: campaignId,
+      });
     }
 
     void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(input.shopDomain) });
   } catch (error) {
-    if (!isUpdate) {
-      removeOptimisticCampaign(queryClient, input.shopDomain, optimisticId);
-    }
-
     const normalized = error instanceof Error ? error : new Error('Failed to save draft.');
     onError?.(normalized);
     throw normalized;

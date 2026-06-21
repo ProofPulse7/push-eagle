@@ -147,8 +147,7 @@ export async function POST(request: Request) {
             status = 'queued',
             sent_at = NOW(),
             target_recipient_count = ${recipientCount},
-            scheduled_at = NULL,
-            updated_at = NOW()
+            scheduled_at = NULL
           WHERE id = ${campaignId}
             AND shop_domain = ${shopDomain}
             AND status = 'draft'
@@ -276,8 +275,7 @@ export async function POST(request: Request) {
           status = 'scheduled',
           scheduled_at = ${delivery.scheduledAt ? new Date(delivery.scheduledAt) : null},
           sent_at = NULL,
-          target_recipient_count = ${recipientCount},
-          updated_at = NOW()
+          target_recipient_count = ${recipientCount}
         WHERE id = ${campaignId}
           AND shop_domain = ${shopDomain}
           AND status = 'draft'

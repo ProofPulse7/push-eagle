@@ -5,7 +5,15 @@ import {
   getDefaultCampaignScheduleDefaults,
   splitCampaignDateTime,
 } from '@/lib/client/campaign-schedule';
-import { clearWizardLaunchMediaCache } from '@/lib/client/campaign-wizard-media';
+import {
+  buildDraftSnapshotFromSaveInput,
+  fetchDraftCampaignWithRetry,
+  findCachedDraftWizardSnapshot,
+  resolvePersistedDraftCampaignId,
+} from '@/lib/client/campaign-draft-cache';
+import { applyLaunchMediaToCampaign } from '@/lib/client/campaign-launch-media-cache';
+import { readOptimisticCampaignSnapshot } from '@/lib/client/optimistic-campaigns';
+import { clearWizardLaunchMediaCache, prepareWizardLaunchMedia } from '@/lib/client/campaign-wizard-media';
 
 type DuplicateCampaignRecord = {
   title?: string | null;
@@ -197,19 +205,39 @@ export const buildDraftFromCampaign = (campaign: DuplicateCampaignRecord): Campa
   };
 };
 
-export const duplicateCampaignToWizard = async (shopDomain: string, campaignId: string) => {
-  const response = await fetch(
-    `/api/campaigns/${encodeURIComponent(campaignId)}?shop=${encodeURIComponent(shopDomain)}`,
-  );
-  const payload = await response.json();
+const buildWizardLinks = (shopDomain: string) => ({
+  detailsHref: `/campaigns/new/details?shop=${encodeURIComponent(shopDomain)}`,
+  editorHref: `/campaigns/new/editor?shop=${encodeURIComponent(shopDomain)}`,
+  scheduleHref: `/campaigns/new/schedule?shop=${encodeURIComponent(shopDomain)}`,
+});
 
-  if (!response.ok || !payload?.ok || !payload?.campaign) {
-    throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to load campaign for duplication.');
-  }
-
-  const draft = buildDraftFromCampaign(payload.campaign as DuplicateCampaignRecord);
+const hydrateDraftWizard = async (
+  shopDomain: string,
+  campaignId: string,
+  draft: CampaignDraftSnapshot,
+) => {
   clearWizardLaunchMediaCache(shopDomain);
   writeCampaignDraft(shopDomain, draft);
+
+  await prepareWizardLaunchMedia(shopDomain, {
+    imageUrl: draft.macHero.preview ?? draft.windowsHero.preview ?? draft.androidHero.preview,
+    windowsImageUrl: draft.windowsHero.preview,
+    macosImageUrl: draft.macHero.preview,
+    androidImageUrl: draft.androidHero.preview,
+    iconUrl: draft.logo.preview,
+  }).catch(() => undefined);
+
+  return {
+    draft,
+    campaignId: resolvePersistedDraftCampaignId(shopDomain, campaignId),
+    ...buildWizardLinks(shopDomain),
+  };
+};
+
+export const duplicateCampaignToWizard = async (shopDomain: string, campaignId: string) => {
+  const campaign = await fetchDraftCampaignWithRetry(shopDomain, campaignId, 1);
+  const draft = buildDraftFromCampaign(campaign as DuplicateCampaignRecord);
+  const hydrated = await hydrateDraftWizard(shopDomain, campaignId, draft);
 
   const scheduledAt = buildCampaignDateTime(
     new Date(draft.scheduledDate ?? Date.now()),
@@ -217,41 +245,37 @@ export const duplicateCampaignToWizard = async (shopDomain: string, campaignId: 
   );
 
   return {
-    draft,
-    detailsHref: `/campaigns/new/details?shop=${encodeURIComponent(shopDomain)}`,
-    editorHref: `/campaigns/new/editor?shop=${encodeURIComponent(shopDomain)}`,
-    scheduleHref: `/campaigns/new/schedule?shop=${encodeURIComponent(shopDomain)}`,
+    ...hydrated,
     scheduledAt,
   };
 };
 
 export const editDraftCampaignToWizard = async (shopDomain: string, campaignId: string) => {
-  const response = await fetch(
-    `/api/campaigns/${encodeURIComponent(campaignId)}?shop=${encodeURIComponent(shopDomain)}`,
-  );
-  const payload = await response.json();
-
-  if (!response.ok || !payload?.ok || !payload?.campaign) {
-    throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to load draft campaign.');
+  const cachedSnapshot = findCachedDraftWizardSnapshot(shopDomain, campaignId);
+  if (cachedSnapshot) {
+    const draft = buildDraftSnapshotFromSaveInput(cachedSnapshot, campaignId);
+    return hydrateDraftWizard(shopDomain, campaignId, draft);
   }
 
-  const campaign = payload.campaign as DuplicateCampaignRecord;
+  const pinnedSnapshot = readOptimisticCampaignSnapshot(shopDomain, campaignId);
+  if (pinnedSnapshot && String(pinnedSnapshot.status ?? 'draft').toLowerCase() === 'draft') {
+    const enriched = applyLaunchMediaToCampaign(shopDomain, pinnedSnapshot);
+    const draft = {
+      ...buildDraftFromCampaign(enriched as DuplicateCampaignRecord),
+      draftCampaignId: resolvePersistedDraftCampaignId(shopDomain, campaignId),
+    };
+    return hydrateDraftWizard(shopDomain, campaignId, draft);
+  }
+
+  const campaign = await fetchDraftCampaignWithRetry(shopDomain, campaignId);
   if (String(campaign.status ?? '').toLowerCase() !== 'draft') {
     throw new Error('Only draft campaigns can be edited.');
   }
 
   const draft = {
-    ...buildDraftFromCampaign(campaign),
-    draftCampaignId: campaignId,
+    ...buildDraftFromCampaign(campaign as DuplicateCampaignRecord),
+    draftCampaignId: resolvePersistedDraftCampaignId(shopDomain, campaignId),
   };
 
-  clearWizardLaunchMediaCache(shopDomain);
-  writeCampaignDraft(shopDomain, draft);
-
-  return {
-    draft,
-    detailsHref: `/campaigns/new/details?shop=${encodeURIComponent(shopDomain)}`,
-    editorHref: `/campaigns/new/editor?shop=${encodeURIComponent(shopDomain)}`,
-    scheduleHref: `/campaigns/new/schedule?shop=${encodeURIComponent(shopDomain)}`,
-  };
+  return hydrateDraftWizard(shopDomain, campaignId, draft);
 };

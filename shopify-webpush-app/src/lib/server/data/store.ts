@@ -1661,8 +1661,7 @@ export const pruneUnusedCampaignDeviceImages = async (olderThanDays = 30) => {
         image_url = COALESCE(${keeperUrl}, image_url),
         windows_image_url = ${unusedUrls.includes(String(row.windows_image_url ?? '')) ? null : row.windows_image_url},
         macos_image_url = ${unusedUrls.includes(String(row.macos_image_url ?? '')) ? null : row.macos_image_url},
-        android_image_url = ${unusedUrls.includes(String(row.android_image_url ?? '')) ? null : row.android_image_url},
-        updated_at = NOW()
+        android_image_url = ${unusedUrls.includes(String(row.android_image_url ?? '')) ? null : row.android_image_url}
       WHERE id = ${campaignId}
         AND shop_domain = ${shopDomain}
     `;
@@ -7383,8 +7382,7 @@ export const updateCampaignDraft = async (input: CreateCampaignInput & { campaig
       android_image_url = ${input.androidImageUrl ?? null},
       action_buttons = ${JSON.stringify(input.actionButtons ?? [])}::jsonb,
       segment_id = ${input.segmentId ?? null},
-      scheduled_at = ${input.scheduledAt ? new Date(input.scheduledAt) : null},
-      updated_at = NOW()
+      scheduled_at = ${input.scheduledAt ? new Date(input.scheduledAt) : null}
     WHERE id = ${input.campaignId}
       AND shop_domain = ${input.shopDomain}
       AND status = 'draft'

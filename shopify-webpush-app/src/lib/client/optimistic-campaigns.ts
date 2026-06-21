@@ -473,6 +473,14 @@ export const removeOptimisticCampaign = (
   });
 };
 
+export const readOptimisticCampaignSnapshot = (
+  shop: string,
+  campaignId: string,
+): Record<string, unknown> | null => {
+  const snapshots = readPinnedSnapshots(shop);
+  return snapshots[campaignId] ?? null;
+};
+
 export const bumpDashboardCampaignSent = (queryClient: QueryClient, shop: string) => {
   queryClient.setQueryData(queryKeys.dashboardSummary(shop), (current: Record<string, unknown> | undefined) => {
     const campaignStatsRaw = (current?.campaignStats ?? {}) as Record<string, unknown>;
