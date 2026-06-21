@@ -19,7 +19,7 @@ import { useAutomationsOverview, useAutomationStats } from '@/hooks/queries/use-
 import { toggleAutomationRuleEnabled } from '@/hooks/use-automation-rule-toggle';
 import { readPendingAutomationEnabled } from '@/lib/client/optimistic-automations';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
-import { useShopDomain } from '@/hooks/use-shop-domain';
+import { useShopReady } from '@/hooks/use-shop-ready';
 import { normalizeAutomationRules } from '@/lib/client/normalize-automation-rule';
 import { queryKeys } from '@/lib/client/query-keys';
 import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
@@ -157,7 +157,7 @@ const getActionButtonClassName = (enabled: boolean) =>
         : 'h-8 rounded-lg bg-violet-600 px-3 text-xs font-semibold text-white hover:bg-violet-600/90';
 
 export default function AutomationsPage() {
-    const activeShopDomain = useShopDomain();
+    const { shop: activeShopDomain, isReady: shopReady } = useShopReady();
     const { atLimit } = useImpressionLimit();
     const queryClient = useQueryClient();
     const router = useRouter();
@@ -250,7 +250,7 @@ export default function AutomationsPage() {
     const statsLoading = Boolean(activeShopDomain) && isLoading && !effectiveOverview;
     const showStatsRefresh = (isFetching && Boolean(effectiveOverview)) || (isStatsFetching && Boolean(effectiveStats));
     const loadError =
-        !activeShopDomain
+        shopReady && !activeShopDomain
             ? 'Missing shop context. Open the app from Shopify so automation data can load for the current store.'
             : isError
               ? queryError instanceof Error

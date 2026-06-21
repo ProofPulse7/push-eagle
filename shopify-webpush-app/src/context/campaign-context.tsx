@@ -8,7 +8,7 @@ import {
   useRef,
   useCallback,
 } from 'react';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useSettings } from '@/context/settings-context';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import {
@@ -18,11 +18,11 @@ import {
   type CampaignDraftSnapshot,
 } from '@/lib/client/campaign-draft-storage';
 import {
-  FRESH_CAMPAIGN_QUERY_PARAM,
-  isCampaignWizardRoute,
-  isCampaignWizardStepPath,
-} from '@/lib/client/campaign-wizard-routes';
-import { clearWizardLaunchMediaCache, readPersistableImageSource } from '@/lib/client/campaign-wizard-media';
+  clearWizardLaunchMediaCache,
+  readPersistableImageSource,
+} from '@/lib/client/campaign-wizard-media';
+import { isCampaignWizardStep, getCampaignWizardPathname } from '@/lib/client/campaign-wizard-path';
+import { beginFreshCampaignSession } from '@/lib/client/start-new-campaign';
 import {
   isMyshopifyHost,
   normalizeMerchantWebsiteUrl,
@@ -180,6 +180,7 @@ export function useCampaignState() {
 export function CampaignStateProvider({ children }: { children: ReactNode }) {
   const shop = useShopDomain();
   const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const prevPathRef = useRef(pathname);
   const blobUrlsRef = useRef<Set<string>>(new Set());
@@ -271,22 +272,31 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     skipPrimaryLinkDefaultRef.current = Boolean(draft.primaryLink.trim());
   }, []);
 
+  const applyDefaultLogo = useCallback(() => {
+    if (settingsLogo.preview) {
+      setLogo({
+        file: null,
+        preview: settingsLogo.preview,
+        originalPreview: settingsLogo.originalPreview ?? null,
+      });
+    }
+  }, [settingsLogo.preview, settingsLogo.originalPreview]);
+
   useEffect(() => {
-    if (!shop || !isCampaignWizardRoute(pathname)) {
+    if (!shop || !isCampaignWizardStep(pathname)) {
       return;
     }
 
-    if (searchParams.get(FRESH_CAMPAIGN_QUERY_PARAM) === '1') {
-      clearCampaignDraft(shop);
-      clearWizardLaunchMediaCache(shop);
+    if (searchParams.get('new') === '1') {
+      beginFreshCampaignSession(shop);
       resetCampaignState();
-      if (settingsLogo.preview) {
-        setLogo({
-          file: null,
-          preview: settingsLogo.preview,
-          originalPreview: settingsLogo.originalPreview ?? null,
-        });
-      }
+      applyDefaultLogo();
+      didHydrateDraftRef.current = true;
+
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('new');
+      const nextQuery = params.toString();
+      router.replace(nextQuery ? `${getCampaignWizardPathname(pathname)}?${nextQuery}` : getCampaignWizardPathname(pathname));
       return;
     }
 
@@ -295,46 +305,41 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
     }
 
     didHydrateDraftRef.current = true;
-
     const draft = readCampaignDraft(shop);
     if (draft) {
       applyDraft(draft);
     }
-  }, [shop, pathname, applyDraft, resetCampaignState, searchParams, settingsLogo.preview, settingsLogo.originalPreview]);
+  }, [shop, pathname, searchParams, applyDraft, applyDefaultLogo, resetCampaignState, router]);
 
   useEffect(() => {
-    const wasInWizard = isCampaignWizardRoute(prevPathRef.current);
-    const inWizard = isCampaignWizardRoute(pathname);
+    const wasWizardStep = isCampaignWizardStep(prevPathRef.current);
+    const inWizardStep = isCampaignWizardStep(pathname);
 
-    if (wasInWizard && !inWizard) {
+    if (wasWizardStep && !inWizardStep) {
       if (shop) {
         clearCampaignDraft(shop);
         clearWizardLaunchMediaCache(shop);
       }
       resetCampaignState();
+      didHydrateDraftRef.current = false;
     }
 
-    if (inWizard && !wasInWizard && searchParams.get(FRESH_CAMPAIGN_QUERY_PARAM) !== '1') {
+    if (inWizardStep && !wasWizardStep && searchParams.get('new') !== '1') {
       const draft = shop ? readCampaignDraft(shop) : null;
       if (draft) {
         applyDraft(draft);
+        didHydrateDraftRef.current = true;
       } else {
         resetCampaignState();
-        if (settingsLogo.preview) {
-          setLogo({
-            file: null,
-            preview: settingsLogo.preview,
-            originalPreview: settingsLogo.originalPreview ?? null,
-          });
-        }
+        applyDefaultLogo();
       }
     }
 
     prevPathRef.current = pathname;
-  }, [pathname, shop, applyDraft, resetCampaignState, searchParams, settingsLogo.preview, settingsLogo.originalPreview]);
+  }, [pathname, shop, applyDraft, applyDefaultLogo, resetCampaignState, searchParams]);
 
   useEffect(() => {
-    if (!shop || !isCampaignWizardStepPath(pathname)) {
+    if (!shop || !isCampaignWizardStep(pathname)) {
       return;
     }
 
@@ -386,6 +391,7 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
             draftCampaignId,
           }),
         );
+
       })();
     }, 150);
 

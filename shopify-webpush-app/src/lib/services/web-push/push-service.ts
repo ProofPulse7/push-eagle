@@ -58,19 +58,6 @@ export const requestBrowserPushToken = async () => {
     return null;
   }
 
-  return getBrowserPushTokenIfGranted();
-};
-
-/** Returns a push token only when permission is already granted (no permission prompt). */
-export const getBrowserPushTokenIfGranted = async () => {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  if (!('serviceWorker' in navigator) || Notification.permission !== 'granted') {
-    return null;
-  }
-
   const messaging = await getFirebaseMessaging();
   if (!messaging) {
     return null;
@@ -85,7 +72,7 @@ export const getBrowserPushTokenIfGranted = async () => {
     serviceWorkerRegistration: registration,
   });
 
-  return token || null;
+  return token;
 };
 
 export const listenForegroundPush = async (onPayload: (payload: unknown) => void) => {

@@ -17,7 +17,7 @@ import {
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
 import { useShopDomain } from '@/hooks/use-shop-domain';
-import { buildNewCampaignHref } from '@/lib/client/campaign-wizard-routes';
+import { buildNewCampaignHref } from '@/lib/client/start-new-campaign';
 
 const NavLogo = (props: React.SVGProps<SVGSVGElement>) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" {...props}>

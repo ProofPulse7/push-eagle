@@ -2,7 +2,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { handleSendLivePreview } from '@/lib/notification-service';
@@ -50,17 +50,13 @@ export const ComposerActions = ({
     } = useCampaignState();
     const [isSending, setIsSending] = useState(false);
 
-    const scheduleHref = useMemo(
-        () =>
-            shopDomain
-                ? `/campaigns/new/schedule?shop=${encodeURIComponent(shopDomain)}`
-                : '/campaigns/new/schedule',
-        [shopDomain],
-    );
-
     useEffect(() => {
+        const queryShop = new URLSearchParams(window.location.search).get('shop');
+        const scheduleHref = queryShop
+            ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
+            : '/campaigns/new/schedule';
         router.prefetch(scheduleHref);
-    }, [router, scheduleHref]);
+    }, [router]);
 
     const buildDraftInput = (): SaveCampaignDraftInput => ({
         shopDomain: shopDomain || '',
@@ -99,16 +95,13 @@ export const ComposerActions = ({
 
         setIsSending(true);
         try {
-            await handleSendLivePreview(
-                {
-                    title: title,
-                    body: message,
-                    url: primaryLink,
-                    icon: logo.preview,
-                    image: macHero.preview,
-                },
-                shopDomain || undefined,
-            );
+            await handleSendLivePreview({
+                title: title,
+                body: message,
+                url: primaryLink,
+                icon: logo.preview,
+                image: macHero.preview,
+            });
             toast({
                 title: "Preview Sent!",
                 description: "Check your device for the notification.",
@@ -174,11 +167,14 @@ export const ComposerActions = ({
     };
 
     const handleContinue = () => {
-        if (!onContinueClick()) {
-            return;
+        const isFormValid = onContinueClick();
+        if (isFormValid) {
+            const queryShop = new URLSearchParams(window.location.search).get('shop');
+            const scheduleHref = queryShop
+                ? `/campaigns/new/schedule?shop=${encodeURIComponent(queryShop)}`
+                : '/campaigns/new/schedule';
+            router.push(scheduleHref);
         }
-
-        router.push(scheduleHref);
     };
 
     return (

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
 import {
   useAttributionSettings,
@@ -10,12 +11,15 @@ import {
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useSettings } from '@/context/settings-context';
 import { resolveMerchantWebsiteUrl } from '@/lib/client/merchant-website-url';
-import { setMerchantDisplayFormat } from '@/lib/merchant';
+import { hydrateMerchantDisplayFormat, setMerchantDisplayFormat } from '@/lib/merchant';
 import { mergePendingSettings } from '@/lib/client/pending-settings';
+import { queryKeys } from '@/lib/client/query-keys';
+import type { AppBootstrapPayload } from '@/lib/client/hydrate-app-cache';
 
 /** Applies React Query cached merchant settings into SettingsContext (instant UI). */
 export function SettingsCacheSync() {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
   const { data: overview } = useMerchantOverview();
   const { data: branding } = useBrandingSettings();
   const { data: attribution } = useAttributionSettings();
@@ -37,6 +41,23 @@ export function SettingsCacheSync() {
   }, [shop, setShopDomain]);
 
   useEffect(() => {
+    if (!shop) {
+      return;
+    }
+
+    const bootstrap = queryClient.getQueryData<AppBootstrapPayload>(queryKeys.bootstrap(shop));
+    const cachedOverview = queryClient.getQueryData<Record<string, unknown>>(queryKeys.merchantOverview(shop));
+    const currencyCode = String(
+      overview?.currencyCode
+        ?? cachedOverview?.currencyCode
+        ?? bootstrap?.merchantOverview?.currencyCode
+        ?? '',
+    ).trim();
+
+    hydrateMerchantDisplayFormat(shop, currencyCode);
+  }, [overview, queryClient, shop]);
+
+  useEffect(() => {
     if (!overview) {
       return;
     }
@@ -51,10 +72,10 @@ export function SettingsCacheSync() {
     }
 
     const currencyCode = String(overview.currencyCode ?? '').trim();
-    if (currencyCode) {
-      setMerchantDisplayFormat(currencyCode);
+    if (currencyCode && shop) {
+      setMerchantDisplayFormat(currencyCode, undefined, shop);
     }
-  }, [overview, setStoreUrl]);
+  }, [overview, setStoreUrl, shop]);
 
   useEffect(() => {
     if (!branding) {

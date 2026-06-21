@@ -20,7 +20,7 @@ import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
 import { cn } from '@/lib/utils';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
-import { buildNewCampaignHref } from '@/lib/client/campaign-wizard-routes';
+import { buildNewCampaignHref } from '@/lib/client/start-new-campaign';
 
 
 const NavLogo = (props: React.SVGProps<SVGSVGElement>) => (
@@ -43,6 +43,7 @@ export function Sidebar() {
         preservedParams.set('host', host);
     }
     const withContext = (path: string) => (preservedParams.toString() ? `${path}?${preservedParams.toString()}` : path);
+    const newCampaignHref = atLimit ? withContext('/plans') : buildNewCampaignHref(shop ?? undefined);
 
   return (
     <aside className="fixed left-0 top-0 z-40 hidden h-full w-64 flex-col border-r bg-card text-card-foreground md:flex rounded-r-3xl shadow-xl">
@@ -55,7 +56,7 @@ export function Sidebar() {
       
       <div className="flex flex-1 flex-col overflow-y-auto p-4 gap-4">
         <Button asChild disabled={atLimit} title={atLimit ? 'Monthly impression limit reached.' : undefined}>
-            <Link href={withContext(atLimit ? '/plans' : buildNewCampaignHref(shop ?? undefined))}>
+            <Link href={newCampaignHref}>
                 <Plus className="h-4 w-4" />
                 {atLimit ? 'Upgrade plan' : 'New Campaign'}
             </Link>

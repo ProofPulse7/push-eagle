@@ -11,13 +11,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDashboardSummary } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
-import { useShopDomain } from '@/hooks/use-shop-domain';
+import { useShopReady } from '@/hooks/use-shop-ready';
 import { BASIC_PLAN } from '@/lib/client/billing-plans';
-import { buildNewCampaignHref } from '@/lib/client/campaign-wizard-routes';
+import { buildNewCampaignHref } from '@/lib/client/start-new-campaign';
 import { formatCurrency } from '@/lib/utils';
 
 export function DashboardView() {
-  const shopDomain = useShopDomain();
+  const { shop: shopDomain, isResolving } = useShopReady();
   const { atLimit } = useImpressionLimit();
   const { data, isLoading, isError, error } = useDashboardSummary();
 
@@ -71,7 +71,7 @@ export function DashboardView() {
 
   return (
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-6">
-      {!shopDomain ? (
+      {!isResolving && !shopDomain ? (
         <Alert>
           <AlertTitle>Connect your store</AlertTitle>
           <AlertDescription>

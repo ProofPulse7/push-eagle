@@ -18,13 +18,14 @@ import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import { applyLaunchMediaToCampaign } from '@/lib/client/campaign-launch-media-cache';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
+import { buildNewCampaignHref } from '@/lib/client/start-new-campaign';
 import { formatCampaignScheduleLabel } from '@/lib/client/campaign-schedule';
 import {
     beginEditDraftCampaign,
     duplicateCampaignToWizard,
     refreshEditDraftCampaignInBackground,
 } from '@/lib/client/campaign-duplicate';
-import { buildNewCampaignHref } from '@/lib/client/campaign-wizard-routes';
+import { removeOptimisticCampaign } from '@/lib/client/optimistic-campaigns';
 import { queryKeys } from '@/lib/client/query-keys';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
@@ -345,7 +346,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                         <h3 className="text-xl font-semibold mb-2">{title}</h3>
                         <p className="text-muted-foreground mb-6">{description}</p>
                         <Button asChild>
-                            <Link href={buildNewCampaignHref(shop)}>
+                            <Link href={buildNewCampaignHref(shopDomain)}>
                                 <PlusCircle className="mr-2 h-4 w-4" />
                                 New Campaign
                             </Link>

@@ -14,14 +14,14 @@ import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
-import { useShopDomain } from '@/hooks/use-shop-domain';
-import { buildNewCampaignHref } from '@/lib/client/campaign-wizard-routes';
+import { useShopReady } from '@/hooks/use-shop-ready';
+import { buildNewCampaignHref } from '@/lib/client/start-new-campaign';
 import { queryKeys } from '@/lib/client/query-keys';
 
 export default function CampaignsPage() {
   const [date, setDate] = useState<DateRange | undefined>(undefined);
   const { atLimit } = useImpressionLimit();
-  const shop = useShopDomain();
+  const { shop, isReady, isResolving } = useShopReady();
   const queryClient = useQueryClient();
   const cachedData = shop ? queryClient.getQueryData<{ campaigns?: unknown[] }>(queryKeys.campaigns(shop)) : undefined;
   const { data, isLoading, isError, error, refetch, isFetching } = useCampaigns();
@@ -33,7 +33,7 @@ export default function CampaignsPage() {
       : 'Failed to load campaigns.'
     : null;
   const showInitialLoad = Boolean(shop) && isLoading && !effectiveData;
-  const showSessionWarning = !shop && !isLoading;
+  const showSessionWarning = isReady && !shop;
   const hasCachedOrLiveData = Boolean(effectiveData) || Boolean(shop);
 
   return (
