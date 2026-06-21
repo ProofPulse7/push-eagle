@@ -69,6 +69,11 @@ export const clearPendingAutomationEnabled = (shop: string, ruleKey: string) => 
   writePendingStates(shop, states);
 };
 
+export const readPendingAutomationEnabled = (shop: string, ruleKey: string): boolean | undefined => {
+  const pending = readPendingStates(shop)[ruleKey];
+  return pending ? pending.enabled : undefined;
+};
+
 const computeTotals = (rules: NormalizedAutomationRule[]) =>
   rules.reduce(
     (acc, rule) => ({

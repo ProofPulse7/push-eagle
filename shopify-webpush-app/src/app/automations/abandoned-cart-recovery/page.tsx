@@ -2,11 +2,12 @@
 
 import React, { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Zap } from 'lucide-react';
 
+import { AutomationRuleStatusBadge, AutomationRuleToggleButton } from '@/components/automations/automation-rule-toggle';
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -20,9 +21,9 @@ import { useCachedJson } from '@/hooks/use-cached-json';
 import {
   applyPendingFlowStepStates,
   createDebouncedAutomationStepsSaver,
-  hasPendingFlowSteps,
   stepEnabledFromConfig,
 } from '@/lib/client/automation-flow-steps';
+import { resolveAutomationRuleEnabled, useAutomationRuleToggle } from '@/hooks/use-automation-rule-toggle';
 import { formatCurrency } from '@/lib/utils';
 
 type CartRuleStepConfig = {
@@ -70,7 +71,7 @@ const flowData: {
       id: 'cart-reminder-1',
       title: 'Reminder 1',
       delay: '20 minutes',
-      status: 'Active',
+      status: 'Inactive',
       notification: {
         title: 'You left something behind!',
         message: "We've saved your cart for you. Buy them now before they go out of stock!",
@@ -91,7 +92,7 @@ const flowData: {
       id: 'cart-reminder-2',
       title: 'Reminder 2',
       delay: '2 hours',
-      status: 'Active',
+      status: 'Inactive',
       notification: {
         title: 'Still thinking it over?',
         message: 'Your cart is waiting for you. Complete your purchase now and get free shipping on all orders!',
@@ -230,8 +231,10 @@ const ReminderStats = ({ stats }: { stats: FlowNotification['stats'] }) => (
 );
 
 export default function AbandonedCartPage() {
+  const queryClient = useQueryClient();
   const { shopDomain: settingsShop } = useSettings();
   const displaySiteName = useMerchantDisplaySiteName();
+  const { toggleRuleEnabled, toggleError, atLimit } = useAutomationRuleToggle('cart_abandonment_30m');
   const [queryShop, setQueryShop] = useState('');
   const shopDomain = queryShop || settingsShop || '';
 
@@ -289,11 +292,27 @@ export default function AbandonedCartPage() {
   }, [shopDomain]);
 
   useEffect(() => {
+    if (!shopDomain) return;
+    const apiRule = rulesPayload?.ok
+      ? (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m')
+      : undefined;
+    const apiOverviewRule = overviewPayload?.ok
+      ? (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m')
+      : undefined;
+    setRuleEnabled(
+      resolveAutomationRuleEnabled(
+        shopDomain,
+        'cart_abandonment_30m',
+        queryClient,
+        apiRule?.enabled ?? apiOverviewRule?.enabled,
+      ),
+    );
+  }, [overviewPayload, queryClient, rulesPayload, shopDomain]);
+
+  useEffect(() => {
     if (!rulesPayload?.ok) return;
     const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
     if (!rule) return;
-
-    setRuleEnabled(Boolean(rule.enabled));
 
     const steps = rule.config?.steps;
     if (!steps) return;
@@ -337,7 +356,6 @@ export default function AbandonedCartPage() {
       item.id === id ? { ...item, status: (checked ? 'Active' : 'Inactive') as 'Active' | 'Inactive' } : item,
     );
     setNotifications(updatedNotifications);
-    setRuleEnabled(updatedNotifications.some((item) => item.status === 'Active'));
     saveCartConfig(updatedNotifications);
   };
 
@@ -349,33 +367,35 @@ export default function AbandonedCartPage() {
     saveCartConfig(updatedNotifications);
   };
 
-  const isFlowActive = ruleEnabled && notifications.some((item) => item.status === 'Active');
-  const flowConfigReady =
-    Boolean(rulesPayload?.ok) || hasPendingFlowSteps(shopDomain, 'cart_abandonment_30m');
-  const flowConfigLoading = Boolean(shopDomain) && !flowConfigReady;
+  const handleRuleToggle = () => {
+    setRuleEnabled(toggleRuleEnabled(ruleEnabled));
+  };
 
-  if (flowConfigLoading) {
-    return (
-      <div className="min-h-screen bg-muted/40">
-        <PageLoadingView title="Abandoned cart recovery" />
-      </div>
-    );
-  }
+  const isFlowActive = ruleEnabled && notifications.some((item) => item.status === 'Active');
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">
       <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-6">
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <Button variant="outline" size="icon" asChild>
             <Link href="/automations">
               <ArrowLeft className="h-4 w-4" />
               <span className="sr-only">Back to Automations</span>
             </Link>
           </Button>
-          <div>
+          <div className="flex flex-1 flex-wrap items-center gap-3">
             <h1 className="text-2xl font-bold tracking-tight md:text-3xl">{flowData.title}</h1>
+            <AutomationRuleStatusBadge enabled={ruleEnabled} />
           </div>
+          <AutomationRuleToggleButton
+            enabled={ruleEnabled}
+            onToggle={handleRuleToggle}
+            disabled={!ruleEnabled && atLimit}
+            disabledTitle={!ruleEnabled && atLimit ? 'Monthly impression limit reached.' : undefined}
+          />
         </div>
+
+        {toggleError ? <p className="text-sm text-destructive">{toggleError}</p> : null}
 
         <Card>
           <CardContent className="p-0">
@@ -432,9 +452,18 @@ export default function AbandonedCartPage() {
 
           <TabsContent value="flow" className="mt-6">
             <div className="max-w-md mx-auto w-full flex flex-col items-center">
-              {!isFlowActive && (
+              {!ruleEnabled && (
                 <Alert className="w-full mb-8">
                   <AlertTitle>This automation is inactive</AlertTitle>
+                  <AlertDescription>
+                    Activate this automation to start sending abandoned cart reminders.
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {ruleEnabled && !isFlowActive && (
+                <Alert className="w-full mb-8">
+                  <AlertTitle>No reminders are active</AlertTitle>
                   <AlertDescription>
                     Enable at least one reminder to start sending these notifications.
                   </AlertDescription>

@@ -8,6 +8,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useCampaignState, clearCampaignDraft } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
 import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
+import { subscribeShopSync } from '@/lib/client/shop-sync-bus';
 import { commitCampaignDraftSave } from '@/lib/client/campaign-save-draft';
 import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
 import {
@@ -142,8 +143,23 @@ export default function ScheduleCampaignPage() {
             })
             .catch(() => undefined);
 
+        const unsubscribe = subscribeShopSync(shopDomain, (event) => {
+            if (event.type !== 'subscribers' && event.type !== 'all') {
+                return;
+            }
+
+            const refreshedSegments = buildAudienceSegmentsFromCache(queryClient, shopDomain);
+            const refreshedSelected =
+                refreshedSegments.find((segment) => segment.id === segmentId) ?? refreshedSegments[0];
+            if (refreshedSelected) {
+                setSegmentDisplayName(refreshedSelected.name);
+                setSegmentSubscriberCount(refreshedSelected.count);
+            }
+        });
+
         return () => {
             active = false;
+            unsubscribe();
         };
     }, [queryClient, shopDomain, segmentId]);
 

@@ -15,6 +15,7 @@ import { useCampaignState } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
 import { CampaignDateTimeFields } from '@/components/campaigns/campaign-date-time-fields';
 import { buildAudienceSegmentsFromCache } from '@/lib/client/optimistic-campaigns';
+import { useSubscriberAudienceSync } from '@/hooks/use-subscriber-audience-sync';
 import { cn } from '@/lib/utils';
 
 type AudienceSegment = {
@@ -85,6 +86,8 @@ export default function CampaignDetailsPage() {
     shopDomain ? buildAudienceSegmentsFromCache(queryClient, shopDomain) : [{ id: 'all', name: 'All Subscribers', count: 0 }],
   );
   const [audienceError, setAudienceError] = useState<string | null>(null);
+
+  useSubscriberAudienceSync(setSegments, segmentId, setSegmentId);
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');

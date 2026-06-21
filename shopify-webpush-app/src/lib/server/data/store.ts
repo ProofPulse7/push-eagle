@@ -2133,9 +2133,9 @@ const mergeRuleConfig = (ruleKey: AutomationRuleKey, existingConfig: unknown, pa
 };
 
 const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean; config: Record<string, unknown> }> = [
-  { key: 'welcome_subscriber', enabled: true, config: parseWelcomeRuleConfig(null) as unknown as Record<string, unknown> },
+  { key: 'welcome_subscriber', enabled: false, config: parseWelcomeRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'browse_abandonment_15m', enabled: true, config: parseBrowseRuleConfig(null) as unknown as Record<string, unknown> },
-  { key: 'cart_abandonment_30m', enabled: true, config: parseCartRuleConfig(null) as unknown as Record<string, unknown> },
+  { key: 'cart_abandonment_30m', enabled: false, config: parseCartRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'checkout_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
   { key: 'shipping_notifications', enabled: true, config: parseShippingRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'back_in_stock', enabled: true, config: parseBackInStockRuleConfig(null) as unknown as Record<string, unknown> },

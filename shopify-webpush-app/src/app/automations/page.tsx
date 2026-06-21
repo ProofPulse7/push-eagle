@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { DateRange } from 'react-day-picker';
 import {
     ArchiveRestore,
@@ -16,14 +16,11 @@ import {
 } from 'lucide-react';
 
 import { useAutomationsOverview, useAutomationStats } from '@/hooks/queries/use-app-queries';
+import { toggleAutomationRuleEnabled } from '@/hooks/use-automation-rule-toggle';
+import { readPendingAutomationEnabled } from '@/lib/client/optimistic-automations';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { normalizeAutomationRules } from '@/lib/client/normalize-automation-rule';
-import {
-    clearPendingAutomationEnabled,
-    patchAutomationOverviewRule,
-    setPendingAutomationEnabled,
-} from '@/lib/client/optimistic-automations';
 import { queryKeys } from '@/lib/client/query-keys';
 import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
 import { readAutomationStatsFromCache } from '@/lib/client/automation-stats-cache';
@@ -80,7 +77,7 @@ const automationDefinitions: Record<RuleKey, AutomationDefinition> = {
         description: 'A sequence of notifications sent to the subscriber once they subscribe to your store notifications.',
         href: '/automations/welcome-notifications',
         icon: Hand,
-        footerStatusText: 'Activated.',
+        footerStatusText: 'Inactive.',
     },
     browse_abandonment_15m: {
         title: 'Browse abandonment',
@@ -163,6 +160,7 @@ export default function AutomationsPage() {
     const activeShopDomain = useShopDomain();
     const { atLimit } = useImpressionLimit();
     const queryClient = useQueryClient();
+    const router = useRouter();
     const [date, setDate] = useState<DateRange | undefined>(undefined);
     const statsRange = useMemo(() => {
         if (!date?.from && !date?.to) {
@@ -197,6 +195,17 @@ export default function AutomationsPage() {
     const [error, setError] = useState<string | null>(null);
     const statsPeriodLabel = formatCampaignDateRangeLabel(date);
 
+    useEffect(() => {
+        if (!activeShopDomain) {
+            return;
+        }
+
+        for (const ruleKey of ['welcome_subscriber', 'cart_abandonment_30m'] as const) {
+            const href = `${automationDefinitions[ruleKey].href}?shop=${encodeURIComponent(activeShopDomain)}`;
+            router.prefetch(href);
+        }
+    }, [activeShopDomain, router]);
+
     const visibleRuleKeysSet = useMemo(() => new Set<RuleKey>(visibleRuleKeys), []);
 
     const { rules } = useMemo(() => {
@@ -222,8 +231,13 @@ export default function AutomationsPage() {
                     revenueCents: 0,
                 };
 
+            const pendingEnabled = activeShopDomain
+                ? readPendingAutomationEnabled(activeShopDomain, ruleKey)
+                : undefined;
+
             return {
                 ...base,
+                enabled: pendingEnabled !== undefined ? pendingEnabled : base.enabled,
                 impressions: Number(statsRule?.impressions ?? base.impressions ?? 0),
                 clicks: Number(statsRule?.clicks ?? base.clicks ?? 0),
                 revenueCents: Number(statsRule?.revenueCents ?? base.revenueCents ?? 0),
@@ -231,7 +245,7 @@ export default function AutomationsPage() {
         }) as AutomationRule[];
 
         return { rules: mergedRules };
-    }, [effectiveOverview, effectiveStats, visibleRuleKeysSet]);
+    }, [activeShopDomain, effectiveOverview, effectiveStats, visibleRuleKeysSet]);
 
     const statsLoading = Boolean(activeShopDomain) && isLoading && !effectiveOverview;
     const showStatsRefresh = (isFetching && Boolean(effectiveOverview)) || (isStatsFetching && Boolean(effectiveStats));
@@ -261,43 +275,24 @@ export default function AutomationsPage() {
         }
 
         setError(null);
-        setPendingAutomationEnabled(activeShopDomain, rule.ruleKey, nextEnabled);
-        patchAutomationOverviewRule(queryClient, activeShopDomain, rule.ruleKey, { enabled: nextEnabled });
 
         void (async () => {
-            const cacheKey = queryKeys.automationsOverview(activeShopDomain);
-            const previous = queryClient.getQueryData<{ rules?: AutomationRule[]; totals?: AutomationStats }>(cacheKey);
-
-            try {
-                const response = await fetch('/api/automations/rules', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        shopDomain: activeShopDomain,
-                        ruleKey: rule.ruleKey,
-                        enabled: nextEnabled,
-                    }),
-                });
-
-                const payload = (await response.json()) as { ok?: boolean; error?: string; rule?: AutomationRule };
-                if (!response.ok || !payload.ok || !payload.rule) {
-                    throw new Error(payload.error || 'Failed to update automation rule.');
-                }
-
-                clearPendingAutomationEnabled(activeShopDomain, rule.ruleKey);
-                patchAutomationOverviewRule(queryClient, activeShopDomain, rule.ruleKey, {
-                    enabled: Boolean(payload.rule.enabled),
-                    config: (payload.rule.config ?? {}) as Record<string, unknown>,
-                    updatedAt: payload.rule.updatedAt ?? null,
-                });
-            } catch (saveError) {
-                if (previous) {
-                    queryClient.setQueryData(cacheKey, previous);
-                }
-                clearPendingAutomationEnabled(activeShopDomain, rule.ruleKey);
-                setError(saveError instanceof Error ? saveError.message : 'Failed to update automation rule.');
+            const result = await toggleAutomationRuleEnabled({
+                shop: activeShopDomain,
+                ruleKey: rule.ruleKey,
+                currentEnabled: rule.enabled,
+                queryClient,
+                atLimit,
+            });
+            if (!result.ok) {
+                setError(result.error);
             }
         })();
+    };
+
+    const navigateToFlow = (href: string) => {
+        const target = activeShopDomain ? `${href}?shop=${encodeURIComponent(activeShopDomain)}` : href;
+        router.push(target);
     };
 
     return (
@@ -346,7 +341,7 @@ export default function AutomationsPage() {
                                     ? 'Coming soon.'
                                     : rule.enabled
                                       ? 'Activated.'
-                                      : definition.footerStatusText;
+                                      : 'Inactive.';
 
                                   return (
                                       <Card key={rule.id} className="relative overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
@@ -419,10 +414,13 @@ export default function AutomationsPage() {
                                                           View Flow <ArrowRight className="ml-2 h-4 w-4" />
                                                       </Button>
                                                   ) : (
-                                                      <Button variant="outline" size="sm" className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100" asChild>
-                                                          <Link href={activeShopDomain ? `${definition.href}?shop=${encodeURIComponent(activeShopDomain)}` : definition.href}>
-                                                              View Flow <ArrowRight className="ml-2 h-4 w-4" />
-                                                          </Link>
+                                                      <Button
+                                                          variant="outline"
+                                                          size="sm"
+                                                          className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                                                          onClick={() => navigateToFlow(definition.href)}
+                                                      >
+                                                          View Flow <ArrowRight className="ml-2 h-4 w-4" />
                                                       </Button>
                                                   )}
                                               </div>

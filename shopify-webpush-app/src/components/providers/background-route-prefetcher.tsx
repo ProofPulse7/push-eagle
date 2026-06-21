@@ -12,6 +12,8 @@ const ROUTES = [
   '/campaigns',
   '/subscribers',
   '/automations',
+  '/automations/welcome-notifications',
+  '/automations/abandoned-cart-recovery',
   '/segments',
   '/plans',
   '/settings',
