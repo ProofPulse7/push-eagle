@@ -8,7 +8,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useCampaignState, clearCampaignDraft } from '@/context/campaign-context';
 import { useSettings } from '@/context/settings-context';
 import { buildAudienceSegmentsFromCache, bumpDashboardCampaignSent, patchOptimisticCampaign, prependOptimisticCampaign, replaceOptimisticCampaignId } from '@/lib/client/optimistic-campaigns';
-import { saveCampaignDraft } from '@/lib/client/campaign-save-draft';
+import { saveCampaignDraftInstantly, runBackgroundCampaignDraftSave } from '@/lib/client/campaign-save-draft';
 import { cacheLaunchMedia } from '@/lib/client/campaign-launch-media-cache';
 import {
   clearWizardLaunchMediaCache,
@@ -390,59 +390,62 @@ export default function ScheduleCampaignPage() {
         }
     };
 
-    const handleSaveDraft = async () => {
-        setIsSaving(true);
-        try {
-            if (!shopDomain) {
-                throw new Error('Open Push Eagle from Shopify Admin before saving drafts.');
-            }
-
-            const { campaignsHref } = await saveCampaignDraft(
-                {
-                    shopDomain,
-                    draftCampaignId,
-                    title,
-                    message,
-                    primaryLink,
-                    segmentId,
-                    actionButtons,
-                    logoPreview: logo.preview,
-                    windowsHeroPreview: windowsHero.preview,
-                    macHeroPreview: macHero.preview,
-                    androidHeroPreview: androidHero.preview,
-                    sendingOption,
-                    scheduledDate,
-                    scheduledTime,
-                    smartDeliver,
-                    flashSaleEnabled,
-                    flashSaleDiscountPercent,
-                    flashSaleOriginalPrice,
-                    flashSaleSalePrice,
-                    flashSaleExpiresAt,
-                    flashSaleExpiresTime,
-                    flashSaleUrgencyText,
-                },
-                queryClient,
-            );
-
-            toast({
-                title: "Draft Saved!",
-                description: "Your campaign has been saved as a draft.",
-            });
-            if (shopDomain) {
-                clearCampaignDraft(shopDomain);
-                clearWizardLaunchMediaCache(shopDomain);
-            }
-            router.push(campaignsHref);
-        } catch (error) {
+    const handleSaveDraft = () => {
+        if (!shopDomain) {
             toast({
                 variant: 'destructive',
                 title: 'Draft save failed',
-                description: error instanceof Error ? error.message : 'Unexpected error while saving draft.',
+                description: 'Open Push Eagle from Shopify Admin before saving drafts.',
             });
-        } finally {
-            setIsSaving(false);
+            return;
         }
+
+        setIsSaving(true);
+
+        const draftInput = {
+            shopDomain,
+            draftCampaignId,
+            title,
+            message,
+            primaryLink,
+            segmentId,
+            actionButtons,
+            logoPreview: logo.preview,
+            windowsHeroPreview: windowsHero.preview,
+            macHeroPreview: macHero.preview,
+            androidHeroPreview: androidHero.preview,
+            sendingOption,
+            scheduledDate,
+            scheduledTime,
+            smartDeliver,
+            flashSaleEnabled,
+            flashSaleDiscountPercent,
+            flashSaleOriginalPrice,
+            flashSaleSalePrice,
+            flashSaleExpiresAt,
+            flashSaleExpiresTime,
+            flashSaleUrgencyText,
+        };
+
+        const { campaignsHref, optimisticId } = saveCampaignDraftInstantly(draftInput, queryClient);
+
+        toast({
+            title: "Draft Saved!",
+            description: "Your campaign has been saved as a draft.",
+        });
+
+        clearCampaignDraft(shopDomain);
+        clearWizardLaunchMediaCache(shopDomain);
+        router.push(campaignsHref);
+        setIsSaving(false);
+
+        void runBackgroundCampaignDraftSave(draftInput, queryClient, optimisticId, (error) => {
+            toast({
+                variant: 'destructive',
+                title: 'Draft save failed',
+                description: error.message,
+            });
+        });
     };
 
     const renderPreview = () => {

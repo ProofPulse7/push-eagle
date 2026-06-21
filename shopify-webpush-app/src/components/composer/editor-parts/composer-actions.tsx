@@ -8,7 +8,11 @@ import { useToast } from '@/hooks/use-toast';
 import { handleSendLivePreview } from '@/lib/notification-service';
 import { useCampaignState, clearCampaignDraft } from '@/context/campaign-context';
 import { useShopDomain } from '@/hooks/use-shop-domain';
-import { saveCampaignDraft } from '@/lib/client/campaign-save-draft';
+import {
+  runBackgroundCampaignDraftSave,
+  saveCampaignDraftInstantly,
+  type SaveCampaignDraftInput,
+} from '@/lib/client/campaign-save-draft';
 import { clearWizardLaunchMediaCache } from '@/lib/client/campaign-wizard-media';
 
 import { Button } from "@/components/ui/button";
@@ -49,6 +53,31 @@ export const ComposerActions = ({
     const [isSending, setIsSending] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
 
+    const buildDraftInput = (): SaveCampaignDraftInput => ({
+        shopDomain: shopDomain || '',
+        draftCampaignId,
+        title,
+        message,
+        primaryLink,
+        segmentId,
+        actionButtons,
+        logoPreview: logo.preview,
+        windowsHeroPreview: windowsHero.preview,
+        macHeroPreview: macHero.preview,
+        androidHeroPreview: androidHero.preview,
+        sendingOption,
+        scheduledDate,
+        scheduledTime,
+        smartDeliver,
+        flashSaleEnabled,
+        flashSaleDiscountPercent,
+        flashSaleOriginalPrice,
+        flashSaleSalePrice,
+        flashSaleExpiresAt,
+        flashSaleExpiresTime,
+        flashSaleUrgencyText,
+    });
+
     const onSendPreview = async () => {
         if (!title) {
             toast({
@@ -84,7 +113,7 @@ export const ComposerActions = ({
         }
     };
     
-    const onSaveDraft = async () => {
+    const onSaveDraft = () => {
         if (!title?.trim()) {
             toast({
                 variant: "destructive",
@@ -104,52 +133,27 @@ export const ComposerActions = ({
         }
 
         setIsSaving(true);
-        try {
-            const { campaignsHref } = await saveCampaignDraft(
-                {
-                    shopDomain,
-                    draftCampaignId,
-                    title,
-                    message,
-                    primaryLink,
-                    segmentId,
-                    actionButtons,
-                    logoPreview: logo.preview,
-                    windowsHeroPreview: windowsHero.preview,
-                    macHeroPreview: macHero.preview,
-                    androidHeroPreview: androidHero.preview,
-                    sendingOption,
-                    scheduledDate,
-                    scheduledTime,
-                    smartDeliver,
-                    flashSaleEnabled,
-                    flashSaleDiscountPercent,
-                    flashSaleOriginalPrice,
-                    flashSaleSalePrice,
-                    flashSaleExpiresAt,
-                    flashSaleExpiresTime,
-                    flashSaleUrgencyText,
-                },
-                queryClient,
-            );
 
-            toast({
-                title: "Draft Saved!",
-                description: "Your campaign has been saved as a draft.",
-            });
+        const draftInput = buildDraftInput();
+        const { campaignsHref, optimisticId } = saveCampaignDraftInstantly(draftInput, queryClient);
 
-            clearCampaignDraft(shopDomain);
-            clearWizardLaunchMediaCache(shopDomain);
-            router.push(campaignsHref);
-        } catch (error) {
+        toast({
+            title: "Draft Saved!",
+            description: "Your campaign has been saved as a draft.",
+        });
+
+        clearCampaignDraft(shopDomain);
+        clearWizardLaunchMediaCache(shopDomain);
+        router.push(campaignsHref);
+        setIsSaving(false);
+
+        void runBackgroundCampaignDraftSave(draftInput, queryClient, optimisticId, (error) => {
             toast({
                 variant: 'destructive',
                 title: 'Draft save failed',
-                description: error instanceof Error ? error.message : 'Unexpected error while saving draft.',
+                description: error.message,
             });
-        } finally {
-            setIsSaving(false);
-        }
+        });
     };
 
     const handleContinue = () => {
@@ -165,7 +169,7 @@ export const ComposerActions = ({
 
     return (
         <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => void onSaveDraft()} disabled={isSaving || isSending}>
+            <Button variant="outline" onClick={onSaveDraft} disabled={isSaving || isSending}>
                 {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                 {isSaving ? 'Saving...' : 'Save as Draft'}
             </Button>

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { API_KV_TTL, invalidateShopDashboardCaches, withShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
-import { createCampaign, deleteDraftCampaign, listCampaigns, updateCampaignDraft } from '@/lib/server/data/store';
+import { createCampaign, listCampaigns } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { upsertCampaignDeliveryOptions } from '@/lib/server/campaigns/delivery-options';
@@ -40,7 +40,13 @@ const createCampaignSchema = z.object({
   windowsImageUrl: z.string().optional().nullable(),
   macosImageUrl: z.string().optional().nullable(),
   androidImageUrl: z.string().optional().nullable(),
-  actionButtons: z.array(z.object({ title: z.string().min(1), link: z.string().min(1) })).max(2).optional(),
+  actionButtons: z
+    .array(z.object({ title: z.string(), link: z.string() }))
+    .max(2)
+    .optional()
+    .transform((buttons) =>
+      (buttons ?? []).filter((button) => button.title.trim() && button.link.trim()),
+    ),
   segmentId: z.string().optional().nullable(),
   status: z.enum(['draft', 'scheduled', 'sent']).optional(),
   scheduledAt: z.string().optional().nullable(),
@@ -116,14 +122,22 @@ export async function POST(request: Request) {
     });
 
     if (body.delivery) {
-      const sql = getNeonSql();
-      await upsertCampaignDeliveryOptions(sql, String(campaign.id), shopDomain, {
-        sendingOption: body.delivery.sendingOption ?? 'now',
-        scheduledAt: body.delivery.scheduledAt ?? null,
-        smartDeliver: Boolean(body.delivery.smartDeliver),
-        flashSaleEnabled: Boolean(body.delivery.flashSaleEnabled),
-        flashSaleConfig: body.delivery.flashSaleConfig ?? null,
-      });
+      try {
+        const sql = getNeonSql();
+        await upsertCampaignDeliveryOptions(sql, String(campaign.id), shopDomain, {
+          sendingOption: body.delivery.sendingOption ?? 'now',
+          scheduledAt: body.delivery.scheduledAt ?? null,
+          smartDeliver: Boolean(body.delivery.smartDeliver),
+          flashSaleEnabled: Boolean(body.delivery.flashSaleEnabled),
+          flashSaleConfig: body.delivery.flashSaleConfig ?? null,
+        });
+      } catch (deliveryError) {
+        console.error('[campaigns/POST] delivery options failed', {
+          shopDomain,
+          campaignId: campaign.id,
+          error: deliveryError instanceof Error ? deliveryError.message : String(deliveryError),
+        });
+      }
     }
 
     void invalidateShopDashboardCaches(shopDomain);

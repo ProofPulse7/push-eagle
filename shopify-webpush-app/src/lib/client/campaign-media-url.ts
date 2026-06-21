@@ -50,13 +50,13 @@ export const resolveCampaignMediaUrl = async (
     body: JSON.stringify({ shopDomain, dataUrl }),
   });
 
-  const uploadPayload = await uploadResponse.json();
+  const uploadPayload = await uploadResponse.json().catch(() => null);
   if (!uploadResponse.ok || !uploadPayload?.ok || !uploadPayload?.asset?.url) {
-    throw new Error(
-      typeof uploadPayload?.error === 'string'
+    const message =
+      uploadPayload && typeof uploadPayload === 'object' && typeof uploadPayload.error === 'string'
         ? uploadPayload.error
-        : 'Failed to upload campaign image.',
-    );
+        : uploadResponse.statusText || 'Failed to upload campaign image.';
+    throw new Error(message);
   }
 
   return String(uploadPayload.asset.url);
