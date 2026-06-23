@@ -1,19 +1,19 @@
 import { NextResponse } from 'next/server';
 import { getNeonSql } from '@/lib/integrations/database/neon';
+import { isCronAuthorized } from '@/lib/server/cron/auth';
 
 export const maxDuration = 30;
 
 /**
  * GET /api/health/system
- * 
- * Returns system health metrics:
- * - Database connectivity
- * - Last cron execution times
- * - Queue sizes
- * - Campaign/automation stats
- * - Recent errors
+ *
+ * Returns system health metrics (cron-authenticated).
  */
 export async function GET(request: Request) {
+  if (!isCronAuthorized(request)) {
+    return NextResponse.json({ ok: false, error: 'Unauthorized.' }, { status: 401 });
+  }
+
   try {
     const sql = getNeonSql();
 

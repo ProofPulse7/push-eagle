@@ -42,7 +42,21 @@ Paste these into **Partner Dashboard → App → Distribution → Shopify App St
 
 6. **Automations**  
    Enable **Welcome notifications** or **Abandoned cart recovery** and confirm rules save.  
-   (Browse abandonment, shipping, back-in-stock, and price-drop are in development and hidden from the merchant UI.)
+   (Browse abandonment, shipping, back-in-stock, and price-drop are finished in code but hidden until post-launch — see below.)
+
+## After App Store approval (enable remaining 4 automations)
+
+While Shopify reviews the app, four automations are hidden and cannot send. To restore them when ready:
+
+```bash
+cd shopify-webpush-app
+npm run automations:unlock
+git add src/lib/automation-coming-soon.ts
+git commit -m "Enable browse, shipping, back-in-stock, and price-drop automations."
+git push
+```
+
+Deploy to Vercel. Merchants will see all six automations again; flow pages and configs are unchanged.
 
 7. **Legal pages**  
    Footer links open **Privacy** and **Terms**; **Back** returns to the previous in-app page.

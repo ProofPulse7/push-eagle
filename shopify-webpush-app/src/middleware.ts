@@ -11,9 +11,8 @@ const ROOT_APP_URL = (process.env.SHOPIFY_ROOT_APP_URL || 'https://push-eagle.ve
 const PUBLIC_API_PREFIXES = [
   '/api/shopify/webhooks',
   '/api/storefront',
-  '/api/integrations/shopify/sso',
+  '/api/integrations/shopify',
   '/api/auth',
-  '/api/health',
   '/api/cron',
   '/api/admin',
   '/api/track',

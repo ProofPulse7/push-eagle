@@ -26,5 +26,5 @@ fs.writeFileSync(configPath, next);
 console.log(
   enabled
     ? 'Coming soon lock enabled for browse abandonment, shipping, back in stock, and price drop.'
-    : 'Coming soon lock removed. All automations are fully accessible again.',
+    : 'Coming soon lock removed. Deploy to restore all four automations in the merchant UI.',
 );

@@ -7,6 +7,11 @@ import { sendVapidPushNotification } from '@/lib/integrations/firebase/vapid';
 import { buildFcmDataOnlyWebPushMessage } from '@/lib/server/push/fcm-web-push-message';
 import { recordPixelEvent } from '@/lib/server/automation/pixel-events';
 import {
+  COMING_SOON_AUTOMATIONS_ENABLED,
+  COMING_SOON_AUTOMATION_RULE_KEYS,
+  isComingSoonAutomation,
+} from '@/lib/automation-coming-soon';
+import {
   buildFlashSaleNotificationBody,
   filterRecipientsForSmartDeliveryHour,
   loadCampaignScheduleMeta,
@@ -2134,12 +2139,12 @@ const mergeRuleConfig = (ruleKey: AutomationRuleKey, existingConfig: unknown, pa
 
 const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean; config: Record<string, unknown> }> = [
   { key: 'welcome_subscriber', enabled: false, config: parseWelcomeRuleConfig(null) as unknown as Record<string, unknown> },
-  { key: 'browse_abandonment_15m', enabled: true, config: parseBrowseRuleConfig(null) as unknown as Record<string, unknown> },
+  { key: 'browse_abandonment_15m', enabled: false, config: parseBrowseRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'cart_abandonment_30m', enabled: false, config: parseCartRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'checkout_abandonment_30m', enabled: false, config: { delayMinutes: 30 } },
-  { key: 'shipping_notifications', enabled: true, config: parseShippingRuleConfig(null) as unknown as Record<string, unknown> },
-  { key: 'back_in_stock', enabled: true, config: parseBackInStockRuleConfig(null) as unknown as Record<string, unknown> },
-  { key: 'price_drop', enabled: true, config: parsePriceDropRuleConfig(null) as unknown as Record<string, unknown> },
+  { key: 'shipping_notifications', enabled: false, config: parseShippingRuleConfig(null) as unknown as Record<string, unknown> },
+  { key: 'back_in_stock', enabled: false, config: parseBackInStockRuleConfig(null) as unknown as Record<string, unknown> },
+  { key: 'price_drop', enabled: false, config: parsePriceDropRuleConfig(null) as unknown as Record<string, unknown> },
   { key: 'win_back_7d', enabled: false, config: { delayDays: 7 } },
   { key: 'post_purchase_followup', enabled: false, config: { delayDays: 2 } },
 ];
@@ -2292,6 +2297,18 @@ const ensureAutomationRules = async (shopDomain: string) => {
     `;
   }
 
+  if (COMING_SOON_AUTOMATIONS_ENABLED) {
+    for (const ruleKey of COMING_SOON_AUTOMATION_RULE_KEYS) {
+      await sql`
+        UPDATE automation_rules
+        SET enabled = false,
+            updated_at = NOW()
+        WHERE shop_domain = ${shopDomain}
+          AND rule_key = ${ruleKey}
+      `;
+    }
+  }
+
   automationRulesReadyAt.set(shop, Date.now());
 };
 
@@ -2309,7 +2326,7 @@ export const listAutomationRules = async (shopDomain: string) => {
   return rows.map((row) => ({
     id: String(row.id),
     ruleKey: String(row.rule_key),
-    enabled: Boolean(row.enabled),
+    enabled: isComingSoonAutomation(String(row.rule_key)) ? false : Boolean(row.enabled),
     config: (row.config ?? {}) as Record<string, unknown>,
     updatedAt: row.updated_at ? String(row.updated_at) : null,
   }));
@@ -2339,7 +2356,8 @@ export const upsertAutomationRule = async (
   const currentEnabled = Boolean(currentRows[0]?.enabled);
   const currentConfig = (currentRows[0]?.config ?? {}) as Record<string, unknown>;
   const currentMediaRefs = collectMediaReferences(currentConfig);
-  const nextEnabled = typeof enabled === 'boolean' ? enabled : currentEnabled;
+  const requestedEnabled = typeof enabled === 'boolean' ? enabled : currentEnabled;
+  const nextEnabled = isComingSoonAutomation(ruleKey) ? false : requestedEnabled;
   const nextConfig = config === undefined ? currentConfig : mergeRuleConfig(ruleKey, currentConfig, config);
   const nextMediaRefs = collectMediaReferences(nextConfig);
 
@@ -2551,7 +2569,7 @@ const getRuleConfig = async (shopDomain: string, ruleKey: AutomationRuleKey) => 
   `;
 
   return {
-    enabled: Boolean(rows[0]?.enabled),
+    enabled: isComingSoonAutomation(ruleKey) ? false : Boolean(rows[0]?.enabled),
     config: (rows[0]?.config ?? {}) as Record<string, unknown>,
   };
 };

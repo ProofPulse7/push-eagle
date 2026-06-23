@@ -1,6 +1,12 @@
 /**
- * Automations not yet available for App Store / merchant use.
- * Shared by UI, API, and middleware.
+ * Automations hidden during Shopify App Store review.
+ *
+ * Restore full merchant UI + sends after approval:
+ *   npm run automations:unlock
+ *   git commit && deploy
+ *
+ * Config, flow pages, and webhook handlers stay in place — only UI/API/middleware
+ * and runtime sends are gated while COMING_SOON_AUTOMATIONS_ENABLED is true.
  */
 export const COMING_SOON_AUTOMATIONS_ENABLED = true;
 

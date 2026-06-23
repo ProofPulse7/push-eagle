@@ -206,7 +206,10 @@ export default function AutomationsPage() {
         }
     }, [activeShopDomain, router]);
 
-    const visibleRuleKeysSet = useMemo(() => new Set<RuleKey>(visibleRuleKeys), []);
+    const visibleRuleKeysSet = useMemo(
+        () => new Set<RuleKey>(visibleRuleKeys.filter((key) => !isComingSoonAutomation(key))),
+        [],
+    );
 
     const { rules } = useMemo(() => {
         const overviewRules = normalizeAutomationRules(effectiveOverview?.rules).filter((rule) =>
@@ -217,7 +220,9 @@ export default function AutomationsPage() {
             statsRules.map((rule) => [rule.ruleKey, rule]),
         );
 
-        const mergedRules = visibleRuleKeys.map((ruleKey) => {
+        const mergedRules = visibleRuleKeys
+            .filter((ruleKey) => !isComingSoonAutomation(ruleKey))
+            .map((ruleKey) => {
             const found = overviewRules.find((rule) => rule.ruleKey === ruleKey);
             const statsRule = statsByRuleKey.get(ruleKey);
             const base =
@@ -333,9 +338,7 @@ export default function AutomationsPage() {
                 <section>
                     <h2 className="mb-4 text-xl font-semibold tracking-tight text-slate-950">All automations</h2>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                        {rules
-                            .filter((rule) => !isComingSoonAutomation(rule.ruleKey))
-                            .map((rule) => {
+                        {rules.map((rule) => {
                                   const definition = automationDefinitions[rule.ruleKey];
                                   const Icon = definition.icon;
                                   const footerStatusText = rule.enabled ? 'Activated.' : 'Inactive.';
