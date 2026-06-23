@@ -143,6 +143,35 @@ const CAMPAIGN_STATUS_RANK: Record<string, number> = {
   paused: 0,
 };
 
+const IN_FLIGHT_CAMPAIGN_STATUSES = new Set(['draft', 'scheduled', 'sending', 'queued']);
+/** Keep pinned local-only rows briefly while a launch/save is still in flight. */
+const OPTIMISTIC_PIN_MAX_AGE_MS = 30 * 60 * 1000;
+
+const readCampaignCreatedAt = (campaign: Record<string, unknown>) =>
+  Date.parse(String(campaign.created_at ?? campaign.createdAt ?? ''));
+
+const isActiveOptimisticCampaign = (
+  campaign: Record<string, unknown>,
+  pinnedIds: string[],
+) => {
+  const id = String(campaign.id ?? '');
+  if (!id || !pinnedIds.includes(id)) {
+    return false;
+  }
+
+  const status = readCampaignStatus(campaign);
+  if (!IN_FLIGHT_CAMPAIGN_STATUSES.has(status)) {
+    return false;
+  }
+
+  const createdAt = readCampaignCreatedAt(campaign);
+  if (!Number.isFinite(createdAt)) {
+    return false;
+  }
+
+  return Date.now() - createdAt < OPTIMISTIC_PIN_MAX_AGE_MS;
+};
+
 const readCampaignStatus = (campaign: Record<string, unknown>) =>
   String(campaign.status ?? 'draft').toLowerCase();
 
@@ -257,20 +286,29 @@ export const mergeCampaignListPayload = (
     }
   }
 
+  const previousById = new Map(previousList.map((campaign) => [String(campaign.id), campaign]));
   const byId = new Map<string, Record<string, unknown>>();
-
-  for (const campaign of previousList) {
-    const id = String(campaign.id);
-    if (supersededOptimisticIds.has(id)) {
-      continue;
-    }
-    byId.set(id, campaign);
-  }
 
   for (const campaign of freshList) {
     const id = String(campaign.id);
-    const existing = byId.get(id);
+    const existing = previousById.get(id);
     byId.set(id, mergeCampaignRecord(shop, existing, campaign));
+  }
+
+  for (const campaign of previousList) {
+    const id = String(campaign.id);
+    if (freshIds.has(id) || supersededOptimisticIds.has(id)) {
+      continue;
+    }
+
+    if (isActiveOptimisticCampaign(campaign, pinnedIds)) {
+      byId.set(id, campaign);
+      continue;
+    }
+
+    if (pinnedIds.includes(id)) {
+      removePinnedCampaign(shop, id);
+    }
   }
 
   for (const optimisticId of supersededOptimisticIds) {
@@ -331,9 +369,17 @@ export const mergeCampaignListPayload = (
     }
 
     const snapshot = snapshots[pinnedId];
-    if (snapshot) {
-      byId.set(pinnedId, normalizeCampaignRecord(shop, snapshot));
+    if (!snapshot) {
+      removePinnedCampaign(shop, pinnedId);
+      continue;
     }
+
+    if (isActiveOptimisticCampaign(snapshot, activePinnedIds)) {
+      byId.set(pinnedId, normalizeCampaignRecord(shop, snapshot));
+      continue;
+    }
+
+    removePinnedCampaign(shop, pinnedId);
   }
 
   const merged = Array.from(byId.values()).sort((left, right) => {
@@ -541,7 +587,18 @@ export const buildAudienceSegmentsFromCache = (
   return [{ id: 'all', name: 'All Subscribers', count: allCount }, ...dynamicSegments];
 };
 
-export const getPinnedCampaignIds = readPinnedCampaignIds;
+export const clearShopCampaignBrowserCache = (shop: string) => {
+  if (typeof window === 'undefined' || !shop) {
+    return;
+  }
+
+  try {
+    localStorage.removeItem(pinnedCampaignIdsKey(shop));
+    localStorage.removeItem(pinnedCampaignSnapshotsKey(shop));
+  } catch {
+    // Ignore storage errors.
+  }
+};
 
 export const mergeCampaignsFromCache = (
   queryClient: QueryClient,

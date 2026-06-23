@@ -2,7 +2,7 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import { fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { hydrateAppCache, type AppBootstrapPayload } from '@/lib/client/hydrate-app-cache';
-import { mergeCampaignsFromCache } from '@/lib/client/optimistic-campaigns';
+import { mergeCampaignsFromCache, clearShopCampaignBrowserCache } from '@/lib/client/optimistic-campaigns';
 import { queryKeys } from '@/lib/client/query-keys';
 
 export type DashboardSummaryPayload = {
@@ -39,7 +39,11 @@ export const fetchAppBootstrap = async (
 
 export const fetchCampaignsList = async (queryClient: QueryClient, shop: string) => {
   const fresh = await fetchJsonWithShop<{ campaigns: unknown[] }>('/api/campaigns', shop);
-  return mergeCampaignsFromCache(queryClient, shop, fresh);
+  const merged = mergeCampaignsFromCache(queryClient, shop, fresh);
+  if (Array.isArray(fresh.campaigns) && fresh.campaigns.length === 0 && merged.campaigns?.length === 0) {
+    clearShopCampaignBrowserCache(shop);
+  }
+  return merged;
 };
 
 export const prefetchDashboardSummary = (queryClient: QueryClient, shop: string) =>
