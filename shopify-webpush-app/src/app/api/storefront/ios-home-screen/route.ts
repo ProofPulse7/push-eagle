@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getRequestGeo } from '@/lib/server/request-geo';
 import { recordIosHomeScreenConfirmed } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
+import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
 
 export const runtime = 'nodejs';
 
@@ -42,6 +43,17 @@ export async function POST(request: Request) {
   try {
     const body = bodySchema.parse(await request.json());
     const shopDomain = parseShopDomain(body.shopDomain);
+
+    const auth = await verifyStorefrontRequest(request, shopDomain);
+    if (!auth.ok) {
+      const response = NextResponse.json(
+        { ok: false, error: 'Unauthorized storefront request.' },
+        { status: 401 },
+      );
+      addCorsHeaders(response, origin);
+      return response;
+    }
+
     const requestGeo = getRequestGeo(request);
 
     const result = await recordIosHomeScreenConfirmed({

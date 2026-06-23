@@ -1,5 +1,6 @@
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { invalidateStoredShopifyAccessToken } from '@/lib/server/billing/refresh-shopify-session';
+import { deleteShopifyStoreCredentials } from '@/lib/server/billing/shopify-credentials-store';
 import { purgeStalePrismaSessionForShop } from '@/lib/server/billing/shopify-offline-token-refresh';
 import { ensureMerchantAccount } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';

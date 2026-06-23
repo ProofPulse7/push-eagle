@@ -41,7 +41,8 @@ Paste these into **Partner Dashboard → App → Distribution → Shopify App St
    **Plans** → activate **Basic** (free) instantly, then optionally approve a **Business** test subscription. Confirm upgrade and downgrade to Basic work without contacting support.
 
 6. **Automations**  
-   Enable **Welcome notifications** or **Abandoned cart recovery** and confirm rules save.
+   Enable **Welcome notifications** or **Abandoned cart recovery** and confirm rules save.  
+   (Browse abandonment, shipping, back-in-stock, and price-drop are in development and hidden from the merchant UI.)
 
 7. **Legal pages**  
    Footer links open **Privacy** and **Terms**; **Back** returns to the previous in-app page.

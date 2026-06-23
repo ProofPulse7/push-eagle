@@ -32,7 +32,6 @@ export default function DevicePerformanceCharts({
         <TabsTrigger value="click-rate">Distribution</TabsTrigger>
       </TabsList>
       <TabsContent value="revenue" className="mt-4">
-        <p className="text-xs text-muted-foreground mb-2">Per-device revenue attribution coming soon.</p>
         <ChartContainer config={{ ...chartConfig, value: { label: 'Revenue' } }} className="h-64 w-full">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data.revenueData} layout="vertical" margin={{ left: 10, right: 80 }}>

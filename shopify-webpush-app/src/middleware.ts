@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
+import { isComingSoonAutomationPath } from '@/lib/automation-coming-soon';
+
 const ROOT_APP_URL = (process.env.SHOPIFY_ROOT_APP_URL || 'https://push-eagle.vercel.app').replace(
   /\/$/,
   '',
@@ -15,8 +17,6 @@ const PUBLIC_API_PREFIXES = [
   '/api/cron',
   '/api/admin',
   '/api/track',
-  '/api/attribution/conversion',
-  '/api/webhooks/events',
   '/api/billing/subscribe-redirect',
   '/api/billing/confirm',
 ];
@@ -76,6 +76,12 @@ export function middleware(request: NextRequest) {
       return NextResponse.redirect(`${ROOT_APP_URL}/`);
     }
     return NextResponse.next();
+  }
+
+  if (isComingSoonAutomationPath(pathname)) {
+    const redirectUrl = new URL('/automations', request.url);
+    redirectUrl.searchParams.set('shop', shop);
+    return NextResponse.redirect(redirectUrl);
   }
 
   const authenticated = request.cookies.get('pe_authenticated')?.value === '1';

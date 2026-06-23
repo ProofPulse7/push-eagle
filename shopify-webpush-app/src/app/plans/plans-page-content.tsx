@@ -16,7 +16,7 @@ import { ImpressionUsageBar } from '@/components/billing/impression-usage-bar';
 const BUSINESS_FEATURES = [
   'All Basic features',
   'Higher impression limits',
-  'All automations',
+  'Core automations (welcome, cart, checkout, win-back)',
   'Campaigns & scheduling',
   'Analytics & segments',
 ];
@@ -25,7 +25,7 @@ const BASIC_FEATURES = [
   '10,000 impressions / month',
   'Unlimited subscribers',
   'Campaigns & scheduling',
-  'All automations',
+  'Core automations (welcome, cart, checkout, win-back)',
   'Segments & opt-ins',
   'Upgrade for advanced analytics',
   'Chat support',

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { API_KV_TTL, withShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
+import { isComingSoonAutomation } from '@/lib/automation-coming-soon';
 import { getAutomationOverview } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -22,7 +23,10 @@ export async function GET(request: Request) {
       API_KV_TTL.automationsOverview,
       async () => {
         const overview = await getAutomationOverview(shopDomain);
-        return { ok: true as const, ...overview };
+        const rules = Array.isArray(overview.rules)
+          ? overview.rules.filter((rule) => !isComingSoonAutomation(String((rule as { ruleKey?: string }).ruleKey ?? '')))
+          : overview.rules;
+        return { ok: true as const, ...overview, rules };
       },
     );
 

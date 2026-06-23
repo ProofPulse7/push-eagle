@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { isImpressionLimitReached } from '@/lib/server/billing/merchant-billing';
 import { invalidateShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
+import { isComingSoonAutomation } from '@/lib/automation-coming-soon';
 import { listAutomationRules, upsertAutomationRule } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -37,8 +38,9 @@ export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
     const rules = await listAutomationRules(shopDomain);
+    const visibleRules = rules.filter((rule) => !isComingSoonAutomation(String(rule.ruleKey ?? '')));
     return NextResponse.json(
-      { ok: true, rules },
+      { ok: true, rules: visibleRules },
       {
         headers: {
           'Cache-Control': 'private, max-age=10, stale-while-revalidate=30',
@@ -55,6 +57,13 @@ export async function POST(request: Request) {
   try {
     const body = updateSchema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
+
+    if (body.enabled === true && isComingSoonAutomation(body.ruleKey)) {
+      return NextResponse.json(
+        { ok: false, error: 'This automation is not available yet.' },
+        { status: 403 },
+      );
+    }
 
     if (body.enabled === true && (await isImpressionLimitReached(shopDomain))) {
       return NextResponse.json(

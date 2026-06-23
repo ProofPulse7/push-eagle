@@ -333,25 +333,15 @@ export default function AutomationsPage() {
                 <section>
                     <h2 className="mb-4 text-xl font-semibold tracking-tight text-slate-950">All automations</h2>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                        {rules.map((rule) => {
+                        {rules
+                            .filter((rule) => !isComingSoonAutomation(rule.ruleKey))
+                            .map((rule) => {
                                   const definition = automationDefinitions[rule.ruleKey];
                                   const Icon = definition.icon;
-                                  const comingSoon = isComingSoonAutomation(rule.ruleKey);
-                                  const footerStatusText = comingSoon
-                                    ? 'Coming soon.'
-                                    : rule.enabled
-                                      ? 'Activated.'
-                                      : 'Inactive.';
+                                  const footerStatusText = rule.enabled ? 'Activated.' : 'Inactive.';
 
                                   return (
                                       <Card key={rule.id} className="relative overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
-                                          {comingSoon ? (
-                                              <div className="absolute right-4 top-4 z-10">
-                                                  <Badge className="border-0 bg-violet-600 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-600">
-                                                      Coming soon
-                                                  </Badge>
-                                              </div>
-                                          ) : null}
                                           <CardHeader className="space-y-0 px-5 pb-4 pt-5">
                                               <div className="flex items-start gap-4">
                                                   <div className="rounded-2xl bg-slate-100 p-3 text-violet-600">
@@ -360,9 +350,7 @@ export default function AutomationsPage() {
                                                   <div className="flex-1">
                                                       <div className="flex flex-wrap items-center gap-2">
                                                           <CardTitle className="text-2xl font-semibold tracking-tight text-slate-950">{definition.title}</CardTitle>
-                                                          {!comingSoon ? (
-                                                              <Badge className={getStatusBadgeClassName(rule.enabled)}>{rule.enabled ? 'Active' : 'Inactive'}</Badge>
-                                                          ) : null}
+                                                          <Badge className={getStatusBadgeClassName(rule.enabled)}>{rule.enabled ? 'Active' : 'Inactive'}</Badge>
                                                       </div>
                                                       <CardDescription className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">{definition.description}</CardDescription>
                                                   </div>
@@ -387,42 +375,25 @@ export default function AutomationsPage() {
                                               <div className="flex items-center gap-2">
                                                   <Button
                                                       size="sm"
-                                                      className={
-                                                          comingSoon
-                                                              ? 'h-8 cursor-not-allowed rounded-lg bg-slate-200 px-3 text-xs font-semibold text-slate-400 hover:bg-slate-200'
-                                                              : getActionButtonClassName(rule.enabled)
-                                                      }
+                                                      className={getActionButtonClassName(rule.enabled)}
                                                       onClick={() => handleToggleStatus(rule)}
-                                                      disabled={comingSoon || (!rule.enabled && atLimit)}
+                                                      disabled={!rule.enabled && atLimit}
                                                       title={
-                                                          comingSoon
-                                                              ? 'This automation is coming soon.'
-                                                              : !rule.enabled && atLimit
-                                                                ? 'Monthly impression limit reached.'
-                                                                : undefined
+                                                          !rule.enabled && atLimit
+                                                            ? 'Monthly impression limit reached.'
+                                                            : undefined
                                                       }
                                                   >
-                                                      {comingSoon ? 'Activate' : rule.enabled ? 'Deactivate' : 'Activate'}
+                                                      {rule.enabled ? 'Deactivate' : 'Activate'}
                                                   </Button>
-                                                  {comingSoon ? (
-                                                      <Button
-                                                          variant="outline"
-                                                          size="sm"
-                                                          className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-400"
-                                                          disabled
-                                                      >
-                                                          View Flow <ArrowRight className="ml-2 h-4 w-4" />
-                                                      </Button>
-                                                  ) : (
-                                                      <Button
-                                                          variant="outline"
-                                                          size="sm"
-                                                          className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                                                          onClick={() => navigateToFlow(definition.href)}
-                                                      >
-                                                          View Flow <ArrowRight className="ml-2 h-4 w-4" />
-                                                      </Button>
-                                                  )}
+                                                  <Button
+                                                      variant="outline"
+                                                      size="sm"
+                                                      className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                                                      onClick={() => navigateToFlow(definition.href)}
+                                                  >
+                                                      View Flow <ArrowRight className="ml-2 h-4 w-4" />
+                                                  </Button>
                                               </div>
                                               <span className="text-sm text-slate-400">{footerStatusText}</span>
                                           </CardFooter>

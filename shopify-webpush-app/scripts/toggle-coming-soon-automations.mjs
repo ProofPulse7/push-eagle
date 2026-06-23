@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const configPath = path.join(__dirname, '..', 'src', 'lib', 'client', 'coming-soon-automations.ts');
+const configPath = path.join(__dirname, '..', 'src', 'lib', 'automation-coming-soon.ts');
 const action = process.argv[2];
 
 if (action !== 'lock' && action !== 'unlock') {
