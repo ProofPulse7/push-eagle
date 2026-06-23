@@ -12,7 +12,10 @@ import {
 import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { fetchJsonWithRetry, fetchJsonWithShopRetry } from '@/lib/client/background-save';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
-import { readAutomationStatsFromCache } from '@/lib/client/automation-stats-cache';
+import {
+  readAutomationsOverviewFromCache,
+  readAutomationStatsFromCache,
+} from '@/lib/client/automation-stats-cache';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
 import { mergeAutomationsFromCache } from '@/lib/client/optimistic-automations';
 import { mergeSegmentsFromCache } from '@/lib/client/optimistic-segments';
@@ -75,7 +78,7 @@ export function useCampaigns() {
 
       return hasActiveSend ? 15_000 : false;
     },
-    refetchIntervalInBackground: false,
+    refetchIntervalInBackground: true,
     placeholderData: (previous) => previous ?? (shop ? queryClient.getQueryData(queryKeys.campaigns(shop)) : undefined),
   });
 }
@@ -95,10 +98,11 @@ export function useAutomationsOverview() {
     },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: false,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
+    initialData: () => (shop ? readAutomationsOverviewFromCache(queryClient, shop) : undefined),
     placeholderData: (previous) =>
-      previous ?? (shop ? queryClient.getQueryData(queryKeys.automationsOverview(shop)) : undefined),
+      previous ?? (shop ? readAutomationsOverviewFromCache(queryClient, shop) : undefined),
   });
 }
 
@@ -129,7 +133,7 @@ export function useAutomationStats(from?: Date, to?: Date) {
     },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: false,
+    refetchOnMount: true,
     initialData: () => readAutomationStatsFromCache(queryClient, shop, fromIso, toIso),
     placeholderData: (previous) =>
       previous ?? readAutomationStatsFromCache(queryClient, shop, fromIso, toIso),

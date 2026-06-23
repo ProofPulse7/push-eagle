@@ -12,11 +12,41 @@ export class ApiError extends Error {
 
 export type ApiEnvelope<T> = { ok: true } & T;
 
+const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
+
+const fetchWithTimeout = async (url: string, init?: RequestInit, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) => {
+  const controller = new AbortController();
+  const timeoutId =
+    typeof window !== 'undefined'
+      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      : setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      credentials: 'include',
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError('Request timed out.', 0);
+    }
+
+    throw error;
+  } finally {
+    if (typeof window !== 'undefined') {
+      window.clearTimeout(timeoutId);
+    } else {
+      clearTimeout(timeoutId);
+    }
+  }
+};
+
 export async function fetchJson<T extends Record<string, unknown>>(
   url: string,
   init?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await fetchWithTimeout(url, init);
   let payload: Record<string, unknown> | null = null;
 
   try {

@@ -12,6 +12,7 @@ import { AppSetupGate } from '@/components/providers/app-setup-gate';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { SettingsCacheSync } from '@/components/providers/settings-cache-sync';
 import { LiveShopSync } from '@/components/providers/live-shop-sync';
+import { CampaignLaunchRecovery } from '@/components/providers/campaign-launch-recovery';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -60,6 +61,7 @@ export default function RootLayout({
                 <AppBootstrapLoader>
                   <SettingsCacheSync />
                   <LiveShopSync />
+                  <CampaignLaunchRecovery />
                   <FirebaseClientInit />
                   <AppLayout>{children}</AppLayout>
                   <Toaster />
