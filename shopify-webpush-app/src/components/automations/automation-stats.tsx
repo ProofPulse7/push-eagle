@@ -1,14 +1,9 @@
 'use client';
 
-import { useMemo } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import type { DateRange } from 'react-day-picker';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAutomationStats } from '@/hooks/queries/use-app-queries';
-import { useShopDomain } from '@/hooks/use-shop-domain';
-import { readAutomationStatsFromCache } from '@/lib/client/automation-stats-cache';
-import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { formatCurrency } from '@/lib/utils';
 
 const StatSkeleton = () => (
@@ -19,27 +14,9 @@ const StatSkeleton = () => (
 );
 
 export function AutomationStats({ date }: { date: DateRange | undefined }) {
-  const shop = useShopDomain();
-  const queryClient = useQueryClient();
-  const isAllTime = !date?.from && !date?.to;
-  const { fromIso, toIso } = useMemo(() => {
-    if (isAllTime) {
-      return { fromIso: 'all', toIso: 'all' };
-    }
-
-    const range = resolveAnalyticsDateRange(
-      date?.from ? { from: date.from, to: date.to ?? date.from } : undefined,
-    );
-    return { fromIso: range.fromIso, toIso: range.toIso };
-  }, [date?.from?.getTime(), date?.to?.getTime(), isAllTime]);
-
-  const cachedStats = shop
-    ? readAutomationStatsFromCache(queryClient, shop, fromIso, toIso)
-    : undefined;
   const { data, isLoading } = useAutomationStats(date?.from, date?.to);
-  const effectiveData = data ?? cachedStats;
 
-  const totals = effectiveData?.totals as
+  const totals = data?.totals as
     | { impressions?: number; clicks?: number; revenueCents?: number }
     | undefined;
 
@@ -52,7 +29,7 @@ export function AutomationStats({ date }: { date: DateRange | undefined }) {
     },
   ];
 
-  const showSkeleton = isLoading && !effectiveData;
+  const showSkeleton = isLoading && !data;
 
   return (
     <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">

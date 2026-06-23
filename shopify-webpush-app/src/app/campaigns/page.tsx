@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { DateRange } from 'react-day-picker';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
@@ -12,11 +12,6 @@ import { CampaignStats } from '@/components/campaigns/campaign-stats';
 import { DateRangePicker } from '@/components/analytics/date-range-picker';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
-import {
-  clearCampaignLaunchFailure,
-  readCampaignLaunchFailure,
-  resumePendingCampaignLaunches,
-} from '@/lib/client/campaign-background-launch';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
@@ -25,7 +20,6 @@ import { appendFreshCampaignWizardParam } from '@/lib/client/campaign-wizard-fre
 
 export default function CampaignsPage() {
   const [date, setDate] = useState<DateRange | undefined>(undefined);
-  const [launchFailure, setLaunchFailure] = useState<string | null>(null);
   const { atLimit } = useImpressionLimit();
   const shop = useShopDomain();
   const queryClient = useQueryClient();
@@ -41,15 +35,6 @@ export default function CampaignsPage() {
   const showInitialLoad = Boolean(shop) && isLoading && !effectiveData;
   const showSessionWarning = !shop && !isLoading;
   const hasCachedOrLiveData = Boolean(effectiveData) || Boolean(shop);
-
-  useEffect(() => {
-    if (!shop) {
-      return;
-    }
-
-    resumePendingCampaignLaunches(queryClient, shop);
-    setLaunchFailure(readCampaignLaunchFailure(shop));
-  }, [queryClient, shop]);
 
   return (
     <PageLoadingShell
@@ -67,27 +52,6 @@ export default function CampaignsPage() {
             </p>
             <Button className="mt-4" type="button" onClick={() => window.location.reload()}>
               Reload
-            </Button>
-          </div>
-        ) : null}
-
-        {launchFailure ? (
-          <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-4">
-            <p className="text-sm font-medium text-destructive">Campaign launch failed</p>
-            <p className="mt-1 text-sm text-destructive/90">{launchFailure}</p>
-            <Button
-              className="mt-3"
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                if (shop) {
-                  clearCampaignLaunchFailure(shop);
-                }
-                setLaunchFailure(null);
-              }}
-            >
-              Dismiss
             </Button>
           </div>
         ) : null}

@@ -21,9 +21,9 @@ import { readPendingAutomationEnabled } from '@/lib/client/optimistic-automation
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { normalizeAutomationRules } from '@/lib/client/normalize-automation-rule';
+import { queryKeys } from '@/lib/client/query-keys';
 import { formatCampaignDateRangeLabel } from '@/lib/client/campaign-date-range-label';
-import { readAutomationStatsFromCache, readAutomationsOverviewFromCache } from '@/lib/client/automation-stats-cache';
-import { prefetchAppBootstrap } from '@/lib/client/query-fetchers';
+import { readAutomationStatsFromCache } from '@/lib/client/automation-stats-cache';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { AutomationStats } from '@/components/automations/automation-stats';
 import { DateRangePicker } from '@/components/analytics/date-range-picker';
@@ -175,7 +175,9 @@ export default function AutomationsPage() {
     }, [date?.from, date?.to]);
 
     const cachedOverview = activeShopDomain
-        ? readAutomationsOverviewFromCache(queryClient, activeShopDomain)
+        ? queryClient.getQueryData<{ rules?: unknown[]; totals?: Record<string, unknown> }>(
+              queryKeys.automationsOverview(activeShopDomain),
+          )
         : undefined;
     const { data, isLoading, isFetching, isError, error: queryError } = useAutomationsOverview();
     const { data: statsData, isFetching: isStatsFetching } = useAutomationStats(date?.from, date?.to);
@@ -192,26 +194,6 @@ export default function AutomationsPage() {
             : undefined);
     const [error, setError] = useState<string | null>(null);
     const statsPeriodLabel = formatCampaignDateRangeLabel(date);
-
-    useEffect(() => {
-        if (!activeShopDomain) {
-            return;
-        }
-
-        void prefetchAppBootstrap(queryClient, activeShopDomain);
-        void queryClient.invalidateQueries({
-            predicate: (query) => {
-                const key = query.queryKey;
-                return (
-                    Array.isArray(key)
-                    && key[0] === 'pe'
-                    && key[1] === activeShopDomain
-                    && key[2] === 'automations'
-                );
-            },
-            refetchType: 'active',
-        });
-    }, [activeShopDomain, queryClient]);
 
     useEffect(() => {
         if (!activeShopDomain) {

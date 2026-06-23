@@ -4,7 +4,6 @@ import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { prefetchAppBootstrap, prefetchCampaignsList, prefetchDashboardSummary } from '@/lib/client/query-fetchers';
-import { resumePendingCampaignLaunches } from '@/lib/client/campaign-background-launch';
 import { queryKeys } from '@/lib/client/query-keys';
 import {
   EARLY_SUBSCRIBER_SYNC_MAX,
@@ -115,24 +114,9 @@ export function LiveShopSync() {
       void prefetchDashboardSummary(queryClient, shop);
       void prefetchCampaignsList(queryClient, shop);
       void refreshSubscriberData(queryClient, shop, { fullRefresh: true });
-      resumePendingCampaignLaunches(queryClient, shop);
-      void queryClient.invalidateQueries({
-        predicate: (query) => {
-          const key = query.queryKey;
-          return Array.isArray(key) && key[0] === 'pe' && key[1] === shop && key[2] === 'automations';
-        },
-        refetchType: 'active',
-      });
-    };
-
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        onFocus();
-      }
     };
 
     window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
       unsubscribe();
@@ -140,7 +124,6 @@ export function LiveShopSync() {
         window.clearTimeout(pollTimerRef.current);
       }
       window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [queryClient, shop]);
 
