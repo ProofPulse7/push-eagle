@@ -32,8 +32,8 @@ export function AutomationStats({ date }: { date: DateRange | undefined }) {
   const showSkeleton = isLoading && !data;
 
   return (
-    <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
-      <CardContent className="grid grid-cols-1 divide-y divide-slate-200 p-0 md:grid-cols-3 md:divide-x md:divide-y-0">
+    <Card className="overflow-hidden rounded-2xl border-border/80 shadow-sm">
+      <CardContent className="grid grid-cols-1 divide-y divide-border p-0 md:grid-cols-3 md:divide-x md:divide-y-0">
         {showSkeleton ? (
           <>
             <StatSkeleton />
@@ -43,8 +43,8 @@ export function AutomationStats({ date }: { date: DateRange | undefined }) {
         ) : (
           statsData.map((stat) => (
             <div key={stat.label} className="px-5 py-4">
-              <p className="text-sm text-slate-500">{stat.label}</p>
-              <p className="mt-1 text-4xl font-semibold tracking-tight text-slate-950">{stat.value}</p>
+              <p className="text-sm text-muted-foreground">{stat.label}</p>
+              <p className="mt-1 text-4xl font-semibold tracking-tight text-foreground">{stat.value}</p>
             </div>
           ))
         )}

@@ -19,7 +19,7 @@ export function ThemeExtensionWarningBanner() {
         <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
         Push Eagle isn&apos;t connected to your store yet
       </div>
-      <div className="flex flex-col gap-3 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 bg-card px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">
           Your store isn&apos;t collecting subscribers yet. Enable Push Eagle in your theme App
           embeds, then click Save.

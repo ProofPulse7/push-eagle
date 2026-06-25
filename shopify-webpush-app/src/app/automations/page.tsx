@@ -34,6 +34,10 @@ import { Separator } from '@/components/ui/separator';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 import { isComingSoonAutomation } from '@/lib/client/coming-soon-automations';
+import {
+    getActionButtonClassName,
+    getStatusBadgeClassName,
+} from '@/components/automations/automation-rule-toggle';
 
 type RuleKey =
     | 'welcome_subscriber'
@@ -145,16 +149,6 @@ const visibleRuleKeys: RuleKey[] = [
     'back_in_stock',
     'price_drop',
 ];
-
-const getStatusBadgeClassName = (enabled: boolean) =>
-    enabled
-        ? 'border border-violet-200 bg-violet-500/15 text-violet-700'
-        : 'border border-slate-200 bg-slate-100 text-slate-600';
-
-const getActionButtonClassName = (enabled: boolean) =>
-    enabled
-        ? 'h-8 rounded-lg bg-red-500 px-3 text-xs font-semibold text-white hover:bg-red-500/90'
-        : 'h-8 rounded-lg bg-violet-600 px-3 text-xs font-semibold text-white hover:bg-violet-600/90';
 
 export default function AutomationsPage() {
     const activeShopDomain = useShopDomain();
@@ -308,20 +302,20 @@ export default function AutomationsPage() {
             isFetching={showStatsRefresh}
             error={loadError}
         >
-        <div className="min-h-full bg-slate-50/80 p-4 sm:p-6 md:p-8">
+        <div className="min-h-full bg-background p-4 sm:p-6 md:p-8">
             <div className="mx-auto flex max-w-7xl flex-col gap-6">
                 <div className="flex items-start justify-between gap-4">
                     <div>
-                        <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Automations</h1>
-                        <p className="mt-1 text-sm text-slate-500">Set up automated workflows to engage your audience.</p>
+                        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Automations</h1>
+                        <p className="mt-1 text-sm text-muted-foreground">Set up automated workflows to engage your audience.</p>
                     </div>
                 </div>
 
                 <section className="space-y-3">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div>
-                            <h2 className="text-xl font-semibold text-slate-950">Stats</h2>
-                            <p className="text-sm text-slate-500">Showing metrics for {statsPeriodLabel}.</p>
+                            <h2 className="text-xl font-semibold text-foreground">Stats</h2>
+                            <p className="text-sm text-muted-foreground">Showing metrics for {statsPeriodLabel}.</p>
                         </div>
                         <DateRangePicker date={date} setDate={setDate} />
                     </div>
@@ -330,13 +324,13 @@ export default function AutomationsPage() {
                 </section>
 
                 {loadError && !effectiveOverview ? (
-                    <Card className="rounded-2xl border-red-200 bg-red-50 shadow-sm">
+                    <Card className="rounded-2xl border-destructive/30 bg-destructive/10 shadow-sm">
                         <CardContent className="p-6 text-sm text-destructive">{loadError}</CardContent>
                     </Card>
                 ) : null}
 
                 <section>
-                    <h2 className="mb-4 text-xl font-semibold tracking-tight text-slate-950">All automations</h2>
+                    <h2 className="mb-4 text-xl font-semibold tracking-tight text-foreground">All automations</h2>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                         {rules.map((rule) => {
                                   const definition = automationDefinitions[rule.ruleKey];
@@ -344,36 +338,36 @@ export default function AutomationsPage() {
                                   const footerStatusText = rule.enabled ? 'Activated.' : 'Inactive.';
 
                                   return (
-                                      <Card key={rule.id} className="relative overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
+                                      <Card key={rule.id} className="relative overflow-hidden rounded-2xl border-border/80 shadow-sm">
                                           <CardHeader className="space-y-0 px-5 pb-4 pt-5">
                                               <div className="flex items-start gap-4">
-                                                  <div className="rounded-2xl bg-slate-100 p-3 text-violet-600">
+                                                  <div className="rounded-2xl bg-primary/10 p-3 text-primary">
                                                       <Icon className="h-5 w-5" />
                                                   </div>
                                                   <div className="flex-1">
                                                       <div className="flex flex-wrap items-center gap-2">
-                                                          <CardTitle className="text-2xl font-semibold tracking-tight text-slate-950">{definition.title}</CardTitle>
+                                                          <CardTitle className="text-2xl font-semibold tracking-tight">{definition.title}</CardTitle>
                                                           <Badge className={getStatusBadgeClassName(rule.enabled)}>{rule.enabled ? 'Active' : 'Inactive'}</Badge>
                                                       </div>
-                                                      <CardDescription className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">{definition.description}</CardDescription>
+                                                      <CardDescription className="mt-1 max-w-2xl text-sm leading-6">{definition.description}</CardDescription>
                                                   </div>
                                               </div>
                                           </CardHeader>
                                           <CardContent className="grid grid-cols-3 gap-6 px-5 pb-5 text-center">
                                               <div>
-                                                  <p className="text-3xl font-semibold tracking-tight text-slate-950">{formatNumber(rule.impressions ?? 0)}</p>
-                                                  <p className="mt-1 text-xs text-slate-500">Impressions</p>
+                                                  <p className="text-3xl font-semibold tracking-tight text-foreground">{formatNumber(rule.impressions ?? 0)}</p>
+                                                  <p className="mt-1 text-xs text-muted-foreground">Impressions</p>
                                               </div>
                                               <div>
-                                                  <p className="text-3xl font-semibold tracking-tight text-slate-950">{formatNumber(rule.clicks ?? 0)}</p>
-                                                  <p className="mt-1 text-xs text-slate-500">Clicks</p>
+                                                  <p className="text-3xl font-semibold tracking-tight text-foreground">{formatNumber(rule.clicks ?? 0)}</p>
+                                                  <p className="mt-1 text-xs text-muted-foreground">Clicks</p>
                                               </div>
                                               <div>
-                                                  <p className="text-3xl font-semibold tracking-tight text-slate-950">{formatCurrency((rule.revenueCents ?? 0) / 100)}</p>
-                                                  <p className="mt-1 text-xs text-slate-500">Revenue</p>
+                                                  <p className="text-3xl font-semibold tracking-tight text-foreground">{formatCurrency((rule.revenueCents ?? 0) / 100)}</p>
+                                                  <p className="mt-1 text-xs text-muted-foreground">Revenue</p>
                                               </div>
                                           </CardContent>
-                                          <Separator className="bg-slate-200" />
+                                          <Separator />
                                           <CardFooter className="flex items-center justify-between gap-3 px-5 py-3">
                                               <div className="flex items-center gap-2">
                                                   <Button
@@ -392,13 +386,13 @@ export default function AutomationsPage() {
                                                   <Button
                                                       variant="outline"
                                                       size="sm"
-                                                      className="h-8 rounded-lg border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                                                      className="h-8 rounded-lg px-3 text-xs font-semibold"
                                                       onClick={() => navigateToFlow(definition.href)}
                                                   >
                                                       View Flow <ArrowRight className="ml-2 h-4 w-4" />
                                                   </Button>
                                               </div>
-                                              <span className="text-sm text-slate-400">{footerStatusText}</span>
+                                              <span className="text-sm text-muted-foreground">{footerStatusText}</span>
                                           </CardFooter>
                                       </Card>
                                   );

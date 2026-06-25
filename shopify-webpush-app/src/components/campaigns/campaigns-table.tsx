@@ -52,7 +52,7 @@ type Campaign = {
 const CAMPAIGNS_PAGE_SIZE = 10;
 
 const tabTriggerClass =
-    "rounded-md px-4 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm data-[state=inactive]:bg-transparent";
+    'rounded-md px-4 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm data-[state=inactive]:text-muted-foreground';
 
 const TableSkeleton = () => (
     <div className="space-y-4">
@@ -419,7 +419,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                 };
 
                 return (
-                    <Card key={campaign.id} className="transition-shadow duration-300 hover:shadow-lg">
+                    <Card key={campaign.id} className="border-border/80 transition-shadow duration-300 hover:shadow-md">
                         <div className="p-4 space-y-4">
                             <div className="flex flex-col md:flex-row gap-4">
                                 <div className="w-full md:w-40 h-24 relative shrink-0 rounded-md overflow-hidden bg-muted">
@@ -569,7 +569,7 @@ export function CampaignsTable({ dateRange }: { dateRange: DateRange | undefined
                 <h2 className="text-xl font-semibold tracking-tight">Campaign History</h2>
             </div>
             <Tabs value={activeTab} onValueChange={(value) => startTransition(() => setActiveTab(value))}>
-                <TabsList className="bg-white border shadow-sm h-auto p-1 gap-1">
+                <TabsList className="h-auto gap-1 border border-border bg-card p-1 shadow-sm">
                     <TabsTrigger value="sent" className={tabTriggerClass}>
                         Sent <Badge variant={activeTab === 'sent' ? 'secondary' : 'outline'} className="ml-2">{tabCounts.sent}</Badge>
                     </TabsTrigger>

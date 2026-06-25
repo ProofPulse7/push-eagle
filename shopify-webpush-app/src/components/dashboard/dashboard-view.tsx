@@ -44,33 +44,33 @@ export function DashboardView() {
       value: formatCurrency(revenueCents / 100),
       hint: revenueCents > 0 ? 'Attributed push revenue' : 'Start sending to track revenue',
       icon: DollarSign,
-      accent: 'text-emerald-600',
+      accent: 'text-emerald-600 dark:text-emerald-400',
     },
     {
       title: 'Total Campaigns Sent',
       value: campaignsSent.toLocaleString(),
       hint: `${Number(campaignStats.scheduledCount ?? 0).toLocaleString()} scheduled`,
       icon: Send,
-      accent: 'text-blue-600',
+      accent: 'text-blue-600 dark:text-blue-400',
     },
     {
       title: 'Subscribers',
       value: totalSubscribers.toLocaleString(),
       hint: `${growthPercent > 0 ? '+' : ''}${growthPercent.toFixed(1)}% vs last 7 days · active notification tokens`,
       icon: Users,
-      accent: 'text-violet-600',
+      accent: 'text-violet-600 dark:text-violet-400',
     },
     {
       title: 'Impressions Consumed',
       value: `${impressionsUsed.toLocaleString()} / ${impressionLimit.toLocaleString()}`,
       hint: `${impressionsRemaining.toLocaleString()} remaining this period`,
       icon: TrendingUp,
-      accent: 'text-amber-600',
+      accent: 'text-amber-600 dark:text-amber-400',
     },
   ];
 
   return (
-    <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-6">
+    <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-6 bg-background">
       {!shopDomain ? (
         <Alert>
           <AlertTitle>Connect your store</AlertTitle>

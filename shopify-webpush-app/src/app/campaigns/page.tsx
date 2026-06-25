@@ -44,7 +44,7 @@ export default function CampaignsPage() {
       isFetching={isFetching && Boolean(effectiveData)}
       error={loadError}
     >
-      <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
+      <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8 bg-background">
         {showSessionWarning ? (
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-6 text-center">
             <p className="text-sm text-foreground">

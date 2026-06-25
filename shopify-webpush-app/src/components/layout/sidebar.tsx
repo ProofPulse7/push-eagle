@@ -45,7 +45,7 @@ export function Sidebar() {
     const withContext = (path: string) => (preservedParams.toString() ? `${path}?${preservedParams.toString()}` : path);
 
   return (
-    <aside className="fixed left-0 top-0 z-40 hidden h-full w-64 flex-col border-r bg-card text-card-foreground md:flex rounded-r-3xl shadow-xl">
+    <aside className="fixed left-0 top-0 z-40 hidden h-full w-64 flex-col rounded-r-3xl border-r border-border bg-card text-card-foreground shadow-xl md:flex">
       <div className="flex h-16 shrink-0 items-center px-6">
                 <Link href={withContext('/dashboard')} className="flex items-center gap-3 font-semibold text-lg text-foreground">
             <NavLogo className="h-7 w-7 text-primary" />

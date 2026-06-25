@@ -20,10 +20,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen w-full">
+    <div className="min-h-screen w-full bg-background">
       <Sidebar />
-      <div className="flex flex-col md:pl-64">
-        <main className="flex-grow pe-page-enter">
+      <div className="flex min-h-screen flex-col bg-background md:pl-64">
+        <main className="flex-grow bg-background pe-page-enter">
           {children}
           <AppLegalFooter />
         </main>

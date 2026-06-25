@@ -180,7 +180,7 @@ export function SubscriberGrowthChart({
     const showSkeleton = isLoading && !payload;
 
     return (
-        <Card className={fullWidth ? 'shadow-sm' : undefined}>
+        <Card className={fullWidth ? 'border-border/80 shadow-sm' : 'border-border/80'}>
             <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <CardTitle>Subscriber Growth</CardTitle>

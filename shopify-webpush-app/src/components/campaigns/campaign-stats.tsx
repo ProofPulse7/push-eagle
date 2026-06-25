@@ -44,9 +44,9 @@ export function CampaignStats({ date }: { date: DateRange | undefined }) {
     const showSkeleton = isLoading && !data;
 
     return (
-        <Card>
+        <Card className="border-border/80 shadow-sm">
             <CardContent className="p-0">
-               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x">
+               <div className="grid grid-cols-1 divide-y divide-border sm:grid-cols-2 md:grid-cols-4 sm:divide-y-0 sm:divide-x">
                     {showSkeleton
                         ? Array.from({ length: 4 }).map((_, index) => <StatSkeleton key={index} />)
                         : statsData?.map((stat) => (
