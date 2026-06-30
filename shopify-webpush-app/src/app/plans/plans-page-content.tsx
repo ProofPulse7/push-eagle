@@ -19,6 +19,7 @@ const BUSINESS_FEATURES = [
   'Core automations (welcome & abandoned cart)',
   'Campaigns & scheduling',
   'Analytics & segments',
+  'Priority email support',
 ];
 
 const BASIC_FEATURES = [
@@ -58,61 +59,68 @@ function PlanCard({
   return (
     <Card
       className={cn(
-        'relative flex h-full flex-col overflow-hidden rounded-xl border-2 pe-pressable',
-        active && 'border-primary shadow-md ring-2 ring-primary/25',
+        'relative flex min-h-[32rem] flex-col overflow-hidden rounded-2xl border-2 pe-pressable shadow-sm',
+        active && 'border-primary shadow-lg ring-2 ring-primary/25',
         highlighted && !active && 'border-primary/60 shadow-md',
         !active && !highlighted && 'border-border',
       )}
     >
       {highlighted && !active ? (
-        <span className="absolute right-3 top-3 rounded-full bg-primary px-2.5 py-0.5 text-xs font-semibold text-primary-foreground">
+        <span className="absolute right-4 top-4 z-10 rounded-full bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground">
           Most popular
         </span>
       ) : null}
       {active ? (
-        <span className="absolute right-3 top-3 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary">
+        <span className="absolute right-4 top-4 z-10 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
           Current plan
         </span>
       ) : null}
 
-      <CardHeader className={cn('pb-2 pt-5', highlighted ? 'bg-primary/5' : 'bg-muted/30')}>
-        <div className="flex items-center gap-3 pr-20">
+      <CardHeader className={cn('shrink-0 pb-3 pt-6', highlighted ? 'bg-primary/5' : 'bg-muted/30')}>
+        <div className="flex items-center gap-4 pr-24">
           <div
             className={cn(
-              'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
+              'flex h-12 w-12 shrink-0 items-center justify-center rounded-xl',
               highlighted ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
             )}
           >
-            <Icon className="h-5 w-5" />
+            <Icon className="h-6 w-6" />
           </div>
           <div className="min-w-0">
-            <CardTitle className="text-xl">{title}</CardTitle>
-            <CardDescription className="text-sm">{description}</CardDescription>
+            <CardTitle className="text-2xl">{title}</CardTitle>
+            <CardDescription className="text-base">{description}</CardDescription>
           </div>
         </div>
       </CardHeader>
 
-      <CardContent className="flex flex-grow flex-col gap-3 px-5 pb-3 pt-3">
-        <p className="text-4xl font-bold tracking-tight">
+      <CardContent className="flex flex-1 flex-col px-6 pb-4 pt-2">
+        <p className="shrink-0 text-5xl font-bold tracking-tight">
           {price}
           {priceSuffix ? (
-            <span className="ml-1 text-base font-normal text-muted-foreground">{priceSuffix}</span>
+            <span className="ml-1 text-lg font-normal text-muted-foreground">{priceSuffix}</span>
           ) : null}
         </p>
 
-        {children}
+        <div
+          className={cn(
+            'mt-5 flex h-[7.75rem] shrink-0 flex-col justify-center rounded-xl border px-4',
+            highlighted ? 'border-primary/20 bg-primary/5' : 'border-border bg-muted/30',
+          )}
+        >
+          {children}
+        </div>
 
-        <ul className="space-y-1.5 border-t pt-3">
+        <ul className="mt-5 flex-1 space-y-2.5 border-t border-border pt-5">
           {features.map((feature) => (
-            <li key={feature} className="flex items-start gap-2 text-sm">
-              <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-500" />
+            <li key={feature} className="flex items-start gap-2.5 text-sm md:text-base">
+              <Check className="mt-0.5 h-4 w-4 shrink-0 text-green-500" />
               <span>{feature}</span>
             </li>
           ))}
         </ul>
       </CardContent>
 
-      <CardFooter className="px-5 pb-5 pt-0">
+      <CardFooter className="shrink-0 px-6 pb-6 pt-2">
         <div className="w-full">{footer}</div>
       </CardFooter>
     </Card>
@@ -301,33 +309,33 @@ export function PlansPageContent() {
   );
 
   return (
-    <div className="mx-auto flex h-full max-w-5xl flex-col gap-4 px-4 py-4 pe-page-enter sm:px-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Plans</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">
+    <div className="mx-auto flex min-h-0 flex-1 flex-col gap-5 px-4 py-5 pe-page-enter sm:px-6 lg:max-w-6xl lg:px-8">
+      <div className="shrink-0">
+        <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Plans</h1>
+        <p className="mt-1 text-sm text-muted-foreground md:text-base">
           Impressions include manual campaigns and automation sends. Limits reset on the 1st of each
           month.
           {refreshHint ? ` ${refreshHint}` : ''}
         </p>
       </div>
 
-      <ImpressionUsageBar className="rounded-lg" compact />
+      <ImpressionUsageBar className="shrink-0 rounded-xl" compact />
 
       {billingStatus === 'pending' && currentPlanKey !== 'basic' ? (
-        <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100">
+        <p className="shrink-0 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-950 dark:text-amber-100">
           Your Business plan is waiting for approval in Shopify. Complete billing there, or switch to
           the free Basic plan to start sending notifications right away.
         </p>
       ) : null}
 
       {isOnPaidPlan ? (
-        <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        <p className="shrink-0 rounded-xl border border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
           Switching to Basic cancels your paid Shopify subscription so you are not charged going
           forward.
         </p>
       ) : null}
 
-      <div className="grid flex-1 grid-cols-1 items-stretch gap-5 lg:grid-cols-2">
+      <div className="grid min-h-0 flex-1 grid-cols-1 items-stretch gap-6 lg:grid-cols-2 lg:gap-8">
         <PlanCard
           title="Basic"
           description="Free — perfect to get started"
@@ -338,7 +346,8 @@ export function PlansPageContent() {
           icon={Zap}
           footer={
             <Button
-              className="w-full pe-pressable"
+              className="h-11 w-full pe-pressable text-base"
+              size="lg"
               variant={isCurrentBasic ? 'secondary' : 'outline'}
               disabled={
                 isCurrentBasic ||
@@ -350,8 +359,8 @@ export function PlansPageContent() {
             </Button>
           }
         >
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Info className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <p className="flex items-center gap-2.5 text-sm font-medium text-foreground md:text-base">
+            <Info className="h-4 w-4 shrink-0 text-primary" />
             {BASIC_PLAN.impressions.toLocaleString()} impressions per month
           </p>
         </PlanCard>
@@ -367,7 +376,8 @@ export function PlansPageContent() {
           icon={Sparkles}
           footer={
             <Button
-              className="w-full pe-pressable"
+              className="h-11 w-full pe-pressable text-base"
+              size="lg"
               disabled={
                 isCurrentBusinessTier(selectedTier.id) ||
                 pendingPlan === `business:${selectedTier.id}`
@@ -378,8 +388,8 @@ export function PlansPageContent() {
             </Button>
           }
         >
-          <div className="space-y-2 rounded-lg border bg-primary/5 px-3 py-2.5">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex w-full flex-col justify-center gap-2">
+            <div className="flex items-center justify-between text-xs font-medium text-muted-foreground">
               <span>{minBusinessTier.impressions.toLocaleString()}</span>
               <span>{maxBusinessTier.impressions.toLocaleString()}</span>
             </div>
@@ -389,7 +399,7 @@ export function PlansPageContent() {
               step={1}
               onValueChange={(value) => setTierIndex(value[0] ?? 0)}
             />
-            <p className="text-sm font-medium">
+            <p className="text-sm font-semibold md:text-base">
               {selectedTier.impressions.toLocaleString()} impressions / month
             </p>
           </div>
