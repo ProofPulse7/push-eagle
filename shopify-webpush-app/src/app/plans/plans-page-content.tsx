@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
-import { Check, Info, Mail } from 'lucide-react';
+import { Check, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BUSINESS_TIERS, BASIC_PLAN } from '@/lib/client/billing-plans';
 import { useBillingStatus, useConfirmBilling, useSubscribePlan } from '@/hooks/queries/use-billing';
@@ -31,13 +31,6 @@ const BASIC_FEATURES = [
   'Chat support',
 ];
 
-const ENTERPRISE_FEATURES = [
-  'Custom impression volume',
-  'Dedicated onboarding',
-  'Priority support',
-  'Custom contracts',
-];
-
 type PendingPlanKey = 'basic' | `business:${string}`;
 
 function PlanCard({
@@ -48,6 +41,7 @@ function PlanCard({
   features,
   footer,
   active,
+  highlighted,
   children,
 }: {
   title: string;
@@ -57,16 +51,23 @@ function PlanCard({
   features: string[];
   footer: React.ReactNode;
   active?: boolean;
+  highlighted?: boolean;
   children?: React.ReactNode;
 }) {
   return (
     <Card
       className={cn(
-        'flex h-full flex-col pe-pressable',
+        'relative flex h-full flex-col pe-pressable',
         active && 'border-primary ring-2 ring-primary/30',
+        highlighted && !active && 'border-primary/50 shadow-md',
       )}
     >
-      <CardHeader className="bg-muted/40">
+      {highlighted ? (
+        <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-primary px-3 py-1 text-xs font-medium text-primary-foreground">
+          Most popular
+        </span>
+      ) : null}
+      <CardHeader className={cn('bg-muted/40', highlighted && 'pt-8')}>
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
@@ -299,7 +300,7 @@ export function PlansPageContent() {
         </p>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3 items-stretch">
+      <div className="mx-auto grid w-full max-w-4xl grid-cols-1 items-stretch gap-8 lg:grid-cols-2">
         <PlanCard
           title="Basic"
           description="Free — perfect to get started"
@@ -334,6 +335,7 @@ export function PlansPageContent() {
           priceSuffix="/mo"
           features={BUSINESS_FEATURES}
           active={isCurrentBusinessTier(selectedTier.id)}
+          highlighted
           footer={
             <Button
               className="w-full pe-pressable"
@@ -355,26 +357,6 @@ export function PlansPageContent() {
           />
           <p className="text-sm font-medium">
             {selectedTier.impressions.toLocaleString()} impressions / month
-          </p>
-        </PlanCard>
-
-        <PlanCard
-          title="Enterprise"
-          description="Custom volume and terms"
-          price="Custom"
-          features={ENTERPRISE_FEATURES}
-          active={currentPlanKey === 'enterprise'}
-          footer={
-            <Button size="lg" variant="outline" className="w-full pe-pressable" asChild>
-              <a href="mailto:support@push-eagle.com">
-                <Mail className="mr-2 h-5 w-5" />
-                Contact for pricing
-              </a>
-            </Button>
-          }
-        >
-          <p className="text-sm text-muted-foreground">
-            Need more than 1M impressions or custom billing? We will tailor a plan for your store.
           </p>
         </PlanCard>
       </div>
