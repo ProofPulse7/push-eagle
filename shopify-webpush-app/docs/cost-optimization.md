@@ -1,6 +1,19 @@
 # Cost optimization deployment
 
-This document covers cost/performance changes in the dashboard app and Cloudflare cron worker.
+Target: **30 merchants**, **1M subscriber tokens**, all automations + tracking on **Neon free + Vercel free + Cloudflare Workers $5/mo**.
+
+## What changed (code)
+
+| Change | Impact |
+|--------|--------|
+| **D1 direct pixel ingest** | Storefront pixel events skip Neon `ingestion_jobs` when D1 is enabled |
+| **KV event throttle** | Dedupes page_view / product_view / cart events per visitor |
+| **No inline automation on page views** | Bootstrap/activity no longer run `processDueAutomationJobsForShop` when queue is enabled |
+| **KV merchant host cache** | Storefront CORS auth avoids repeated Neon `merchants` lookups |
+| **KV cron probe cache** | Idle ticks reuse probe result for 90s (fewer COUNT queries) |
+| **Cron idle sleep** | Worker skips ticks for ~14 min when no work (needs KV) |
+| **Removed analytics page load** | Dashboard bootstrap no longer loads heavy analytics stats |
+| **All 6 automations unlocked** | `COMING_SOON_AUTOMATIONS_ENABLED=false` |
 
 ## Phase 0 (deployed in code)
 

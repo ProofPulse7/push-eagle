@@ -3635,6 +3635,74 @@ const getCampaignIdFromLandingSite = (landingSite: string | null | undefined) =>
   }
 };
 
+export const ingestStorefrontPixelEventDirect = async (payload: PixelIngestionPayload) => {
+  const pixelEventId = await recordPixelEvent({
+    shopDomain: payload.shopDomain,
+    externalId: payload.externalId,
+    eventType: payload.eventType,
+    pageUrl: payload.pageUrl,
+    productId: payload.productId,
+    cartToken: payload.cartToken,
+    clientId: payload.clientId,
+    metadata: payload.metadata,
+  });
+
+  if (payload.eventType === 'page_view') {
+    return { processed: true, pixelEventId, skippedActivity: true };
+  }
+
+  await recordSubscriberActivity({
+    shopDomain: payload.shopDomain,
+    externalId: payload.externalId,
+    eventType: payload.eventType,
+    pageUrl: payload.pageUrl,
+    productId: payload.productId,
+    cartToken: payload.cartToken,
+    metadata: {
+      ...(payload.metadata ?? {}),
+      clientId: payload.clientId ?? null,
+      pixelEventId,
+    },
+    skipActivityPersist: true,
+  });
+
+  if (payload.eventType === 'checkout_complete') {
+    const metadata = (payload.metadata ?? {}) as Record<string, unknown>;
+    const rawOrderId = metadata.orderId ? String(metadata.orderId).trim() : '';
+    const orderId = rawOrderId ? rawOrderId.split('/').pop() || rawOrderId : '';
+    const totalPriceCentsRaw = Number(metadata.checkoutTotalPriceCents ?? 0);
+    const totalPriceCents = Number.isFinite(totalPriceCentsRaw) && totalPriceCentsRaw >= 0
+      ? Math.round(totalPriceCentsRaw)
+      : 0;
+
+    if (orderId) {
+      const occurredAtRaw = metadata.timestamp ? String(metadata.timestamp) : null;
+      const occurredAt = occurredAtRaw && !Number.isNaN(Date.parse(occurredAtRaw)) ? occurredAtRaw : null;
+
+      await upsertShopifyOrderEvent({
+        shopDomain: payload.shopDomain,
+        orderId,
+        externalId: payload.externalId,
+        totalPriceCents,
+        createdAt: occurredAt,
+        lineItems: [],
+      });
+
+      await recordAttributedConversion({
+        shopDomain: payload.shopDomain,
+        orderId,
+        revenueCents: totalPriceCents,
+        occurredAt,
+        externalId: payload.externalId,
+        cartToken: payload.cartToken ?? null,
+        clientId: payload.clientId ?? null,
+      });
+    }
+  }
+
+  return { processed: true, pixelEventId };
+};
+
 export const processIngestionJob = async (jobId: string) => {
   await ensureSchema();
   const sql = getNeonSql();
@@ -3657,65 +3725,7 @@ export const processIngestionJob = async (jobId: string) => {
   try {
     if (claim.job_type === 'pixel_event') {
       const payload = claim.payload as PixelIngestionPayload;
-
-      const pixelEventId = await recordPixelEvent({
-        shopDomain: payload.shopDomain,
-        externalId: payload.externalId,
-        eventType: payload.eventType,
-        pageUrl: payload.pageUrl,
-        productId: payload.productId,
-        cartToken: payload.cartToken,
-        clientId: payload.clientId,
-        metadata: payload.metadata,
-      });
-
-      await recordSubscriberActivity({
-        shopDomain: payload.shopDomain,
-        externalId: payload.externalId,
-        eventType: payload.eventType,
-        pageUrl: payload.pageUrl,
-        productId: payload.productId,
-        cartToken: payload.cartToken,
-        metadata: {
-          ...(payload.metadata ?? {}),
-          clientId: payload.clientId ?? null,
-          pixelEventId,
-        },
-      });
-
-      if (payload.eventType === 'checkout_complete') {
-        const metadata = (payload.metadata ?? {}) as Record<string, unknown>;
-        const rawOrderId = metadata.orderId ? String(metadata.orderId).trim() : '';
-        const orderId = rawOrderId ? rawOrderId.split('/').pop() || rawOrderId : '';
-        const totalPriceCentsRaw = Number(metadata.checkoutTotalPriceCents ?? 0);
-        const totalPriceCents = Number.isFinite(totalPriceCentsRaw) && totalPriceCentsRaw >= 0
-          ? Math.round(totalPriceCentsRaw)
-          : 0;
-
-        if (orderId) {
-          const occurredAtRaw = metadata.timestamp ? String(metadata.timestamp) : null;
-          const occurredAt = occurredAtRaw && !Number.isNaN(Date.parse(occurredAtRaw)) ? occurredAtRaw : null;
-
-          await upsertShopifyOrderEvent({
-            shopDomain: payload.shopDomain,
-            orderId,
-            externalId: payload.externalId,
-            totalPriceCents,
-            createdAt: occurredAt,
-            lineItems: [],
-          });
-
-          await recordAttributedConversion({
-            shopDomain: payload.shopDomain,
-            orderId,
-            revenueCents: totalPriceCents,
-            occurredAt,
-            externalId: payload.externalId,
-            cartToken: payload.cartToken ?? null,
-            clientId: payload.clientId ?? null,
-          });
-        }
-      }
+      await ingestStorefrontPixelEventDirect(payload);
     } else if (claim.job_type === 'shopify_order_create') {
       const payload = claim.payload as OrderCreateIngestionPayload;
 
@@ -5087,7 +5097,12 @@ export const recordSubscriberActivity = async (input: {
   productId?: string | null;
   cartToken?: string | null;
   metadata?: Record<string, unknown> | null;
+  skipActivityPersist?: boolean;
 }) => {
+  if (input.eventType === 'page_view') {
+    return { eventId: null, skipped: true };
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
   const triggeredAt = new Date().toISOString();
@@ -5096,21 +5111,37 @@ export const recordSubscriberActivity = async (input: {
 
   const eventId = randomUUID();
 
-  const { insertD1ActivityEvent, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
-  if (isD1EventsEnabled()) {
-    try {
-      await insertD1ActivityEvent({
-        id: eventId,
-        shopDomain: input.shopDomain,
-        externalId: input.externalId,
-        eventType: input.eventType,
-        pageUrl: input.pageUrl,
-        productId: input.productId,
-        cartToken: input.cartToken,
-        metadata: input.metadata,
-      });
-    } catch (error) {
-      console.error('[d1-events] activity write failed, falling back to Neon', error);
+  if (!input.skipActivityPersist) {
+    const { insertD1ActivityEvent, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
+    if (isD1EventsEnabled()) {
+      try {
+        await insertD1ActivityEvent({
+          id: eventId,
+          shopDomain: input.shopDomain,
+          externalId: input.externalId,
+          eventType: input.eventType,
+          pageUrl: input.pageUrl,
+          productId: input.productId,
+          cartToken: input.cartToken,
+          metadata: input.metadata,
+        });
+      } catch (error) {
+        console.error('[d1-events] activity write failed, falling back to Neon', error);
+        await sql`
+          INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
+          VALUES (
+            ${eventId},
+            ${input.shopDomain},
+            ${input.externalId},
+            ${input.eventType},
+            ${input.pageUrl ?? null},
+            ${input.productId ?? null},
+            ${input.cartToken ?? null},
+            ${JSON.stringify(input.metadata ?? {})}::jsonb
+          )
+        `;
+      }
+    } else {
       await sql`
         INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
         VALUES (
@@ -5125,20 +5156,6 @@ export const recordSubscriberActivity = async (input: {
         )
       `;
     }
-  } else {
-    await sql`
-      INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
-      VALUES (
-        ${eventId},
-        ${input.shopDomain},
-        ${input.externalId},
-        ${input.eventType},
-        ${input.pageUrl ?? null},
-        ${input.productId ?? null},
-        ${input.cartToken ?? null},
-        ${JSON.stringify(input.metadata ?? {})}::jsonb
-      )
-    `;
   }
 
   const queueRule = async (ruleKey: AutomationRuleKey, fallbackDelayMinutes: number, dedupeKeyBase: string, payload: AutomationJobPayload) => {
@@ -5328,6 +5345,9 @@ export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) =
       updated_at = NOW()
     WHERE shop_domain = ${input.shopDomain}
   `;
+
+  const { invalidateMerchantStorefrontHostsCache } = await import('@/lib/server/storefront-merchant-hosts-cache');
+  void invalidateMerchantStorefrontHostsCache(input.shopDomain);
 };
 
 export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) => {

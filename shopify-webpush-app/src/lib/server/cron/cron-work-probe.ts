@@ -1,4 +1,9 @@
 import { getNeonSql } from '@/lib/integrations/database/neon';
+import {
+  isCloudflareKvEnabled,
+  readKvJson,
+  writeKvJson,
+} from '@/lib/server/cache/cloudflare-kv';
 
 export type CronWorkProbe = {
   dueScheduledCampaigns: number;
@@ -10,7 +15,10 @@ export type CronWorkProbe = {
   nextWakeAt: Date | null;
 };
 
-export const probeCronPendingWork = async (): Promise<CronWorkProbe> => {
+const PROBE_CACHE_KEY = 'pe:cron:probe_idle_cache_v1';
+const PROBE_CACHE_TTL_SECONDS = 90;
+
+const readProbeFromNeon = async (): Promise<CronWorkProbe> => {
   const sql = getNeonSql();
 
   const rows = await sql`
@@ -94,6 +102,36 @@ export const probeCronPendingWork = async (): Promise<CronWorkProbe> => {
           ? new Date(String(nextWakeRaw))
           : null,
   };
+};
+
+export const probeCronPendingWork = async (): Promise<CronWorkProbe> => {
+  if (isCloudflareKvEnabled()) {
+    try {
+      const cached = await readKvJson<{ probe: CronWorkProbe; cachedAt: number }>(PROBE_CACHE_KEY);
+      if (
+        cached?.probe
+        && typeof cached.cachedAt === 'number'
+        && Date.now() - cached.cachedAt < PROBE_CACHE_TTL_SECONDS * 1000
+        && !cronProbeHasImmediateWork(cached.probe)
+      ) {
+        return cached.probe;
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  const probe = await readProbeFromNeon();
+
+  if (isCloudflareKvEnabled() && !cronProbeHasImmediateWork(probe)) {
+    void writeKvJson(
+      PROBE_CACHE_KEY,
+      { probe, cachedAt: Date.now() },
+      PROBE_CACHE_TTL_SECONDS,
+    ).catch(() => undefined);
+  }
+
+  return probe;
 };
 
 export const cronProbeHasImmediateWork = (probe: CronWorkProbe) =>

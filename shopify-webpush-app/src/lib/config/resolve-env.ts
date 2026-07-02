@@ -108,6 +108,15 @@ export const resolveAppEnv = (): AppEnv => {
     SHOPIFY_DASHBOARD_SSO_SECRET: ssoSecret,
     SHOPIFY_WEBHOOK_SECRET:
       parsed.SHOPIFY_WEBHOOK_SECRET.trim() || parsed.SHOPIFY_API_SECRET.trim(),
+    D1_EVENTS_ENABLED:
+      parsed.D1_EVENTS_ENABLED
+      || (
+        Boolean(parsed.CLOUDFLARE_ACCOUNT_ID.trim())
+        && Boolean(parsed.CLOUDFLARE_API_TOKEN.trim())
+        && Boolean(parsed.CLOUDFLARE_D1_DATABASE_ID.trim())
+      ),
+    AUTOMATION_QUEUE_ENABLED:
+      parsed.AUTOMATION_QUEUE_ENABLED || Boolean(parsed.CLOUDFLARE_WORKER_URL.trim()),
   };
 };
 

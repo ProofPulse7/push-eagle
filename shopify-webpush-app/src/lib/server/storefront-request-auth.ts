@@ -1,6 +1,6 @@
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
-import { getNeonSql } from '@/lib/integrations/database/neon';
 import { parseShopDomain } from '@/lib/server/shop-context';
+import { getMerchantStorefrontHosts } from '@/lib/server/storefront-merchant-hosts-cache';
 
 const normalizeOrigin = (value: string | null) => {
   if (!value) {
@@ -35,33 +35,6 @@ const normalizeHost = (value: string | null) => {
   return trimmed.replace(/\/+$/, '').split('/')[0] ?? null;
 };
 
-const readMerchantStorefrontHosts = async (shopDomain: string) => {
-  const sql = getNeonSql();
-  const rows = await sql`
-    SELECT primary_domain, myshopify_domain
-    FROM merchants
-    WHERE shop_domain = ${shopDomain}
-    LIMIT 1
-  `;
-
-  const row = rows[0] as { primary_domain?: string | null; myshopify_domain?: string | null } | undefined;
-  const hosts = new Set<string>();
-
-  for (const candidate of [row?.primary_domain, row?.myshopify_domain, shopDomain]) {
-    const host = normalizeHost(candidate ? String(candidate) : null);
-    if (host) {
-      hosts.add(host);
-    }
-  }
-
-  const shopBase = shopDomain.replace(/\.myshopify\.com$/i, '').toLowerCase();
-  if (shopBase) {
-    hosts.add(`${shopBase}.myshopify.com`);
-  }
-
-  return hosts;
-};
-
 export const isTrustedStorefrontOrigin = async (shopDomainInput: string, origin: string | null) => {
   const shopDomain = parseShopDomain(shopDomainInput);
   const normalizedOrigin = normalizeOrigin(origin);
@@ -74,7 +47,7 @@ export const isTrustedStorefrontOrigin = async (shopDomainInput: string, origin:
     return false;
   }
 
-  const allowedHosts = await readMerchantStorefrontHosts(shopDomain);
+  const allowedHosts = await getMerchantStorefrontHosts(shopDomain);
   return allowedHosts.has(originHost);
 };
 

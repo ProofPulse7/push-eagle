@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
-export default function LegacyAnalyticsPage() {
-  redirect('/settings/analytics');
+export default function AnalyticsPage() {
+  redirect('/dashboard');
 }

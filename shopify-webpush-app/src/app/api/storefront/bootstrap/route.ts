@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
-import { getMerchantCapabilitySnapshot, getOptInSettings, processDueAutomationJobsForShop } from '@/lib/server/data/store';
+import { getMerchantCapabilitySnapshot, getOptInSettings } from '@/lib/server/data/store';
+import { shouldRunStorefrontAutomationInline } from '@/lib/server/storefront-automation-inline';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { verifyStorefrontBootstrapRequest } from '@/lib/server/storefront-request-auth';
 import { getAnonymousExternalId, getCustomerExternalId } from '@/lib/server/storefront-identity';
@@ -69,7 +70,10 @@ export async function GET(request: Request) {
     const optIn = await getOptInSettings(shopDomain);
   const shopifyCapabilities = await getMerchantCapabilitySnapshot(shopDomain);
 
-    void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
+    if (shouldRunStorefrontAutomationInline()) {
+      const { processDueAutomationJobsForShop } = await import('@/lib/server/data/store');
+      void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
+    }
 
     const existingCookieId = cookieStore.get(cookieName)?.value ?? null;
     // Honor a validated storefront-provided external id first to keep identity stable

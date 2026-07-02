@@ -12,7 +12,6 @@ import {
   PieChart,
   MonitorCheck,
   Tag,
-  BarChart,
 } from 'lucide-react';
 import { NavLink } from './nav-link';
 import { Button } from '../ui/button';
@@ -54,9 +53,6 @@ export function MobileSidebar() {
             </NavLink>
             <NavLink href="/automations" icon={ShoppingCart}>
                 Automation
-            </NavLink>
-            <NavLink href="/settings/analytics" icon={BarChart}>
-                Analytics
             </NavLink>
             <NavLink href="/segments" icon={PieChart}>
                 Segments

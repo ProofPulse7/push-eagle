@@ -11,6 +11,7 @@
     "db:cleanup-merchants": "node scripts/cleanup-merchant-tables.mjs",
     "db:reset-all": "node scripts/reset-all-data.mjs --confirm",
     "kv:clear": "node scripts/clear-kv-cache.mjs",
+    "d1:init": "node scripts/init-d1-events.mjs",
     "automations:step": "node scripts/step-all-automations.mjs",
     "automations:test-six": "node scripts/verify-six-automations.mjs",
     "automations:lock": "node scripts/toggle-coming-soon-automations.mjs lock",

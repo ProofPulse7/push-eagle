@@ -15,7 +15,6 @@ import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
 import { queryKeys } from '@/lib/client/query-keys';
 import { mergePendingSettings, writePendingSettings, hasPendingSettings } from '@/lib/client/pending-settings';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
-import { SettingsAnalyticsPanel } from '@/components/settings/settings-analytics-panel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -862,7 +861,6 @@ export default function SettingsPage() {
                         </div>
                     </CardContent>
                 </Card>
-                <SettingsAnalyticsPanel />
             </TabsContent>
         </Tabs>
         <ImageEditorSheet 

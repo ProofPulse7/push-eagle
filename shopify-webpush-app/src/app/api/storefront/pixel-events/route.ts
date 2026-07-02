@@ -3,8 +3,10 @@ import { createHash } from 'crypto';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { enqueueIngestionJob, processIngestionJob } from '@/lib/server/data/store';
+import { ingestStorefrontPixelEventDirect, enqueueIngestionJob, processIngestionJob } from '@/lib/server/data/store';
+import { isD1EventsEnabled } from '@/lib/server/integrations/d1-events';
 import { extractShopDomain, parseShopDomain } from '@/lib/server/shop-context';
+import { shouldThrottleStorefrontEvent } from '@/lib/server/storefront-event-throttle';
 import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
 
 export const runtime = 'nodejs';
@@ -55,6 +57,14 @@ const deriveExternalId = (shopDomain: string, body: z.infer<typeof schema>) => {
   return null;
 };
 
+const THROTTLE_SECONDS: Record<string, number> = {
+  page_view: 90,
+  product_view: 300,
+  add_to_cart: 45,
+  checkout_start: 120,
+  checkout_complete: 300,
+};
+
 export async function OPTIONS(request: Request) {
   const origin = request.headers.get('origin');
   return new NextResponse(null, { status: 204, headers: buildCorsHeaders(origin) });
@@ -84,6 +94,24 @@ export async function POST(request: Request) {
       );
     }
 
+    const throttleSeconds = THROTTLE_SECONDS[body.eventType] ?? 60;
+    const throttled = await shouldThrottleStorefrontEvent({
+      shopDomain,
+      externalId,
+      eventType: body.eventType,
+      productId: body.productId,
+      cartToken: body.cartToken,
+      pageUrl: body.pageUrl,
+      windowSeconds: throttleSeconds,
+    });
+
+    if (throttled) {
+      return NextResponse.json(
+        { ok: true, skipped: true, reason: 'throttled' },
+        { headers: buildCorsHeaders(origin) },
+      );
+    }
+
     const requestUserAgent = request.headers.get('user-agent')?.trim() || null;
     const requestIp = getRequestIp(request);
 
@@ -102,6 +130,14 @@ export async function POST(request: Request) {
         requestIp,
       },
     };
+
+    if (isD1EventsEnabled()) {
+      const direct = await ingestStorefrontPixelEventDirect(payload);
+      return NextResponse.json(
+        { ok: true, direct: true, ...direct },
+        { headers: buildCorsHeaders(origin) },
+      );
+    }
 
     const dedupeKey = createHash('sha256')
       .update(`${shopDomain}:${externalId}:${body.eventType}:${body.pageUrl ?? ''}:${body.productId ?? ''}:${body.cartToken ?? ''}`)

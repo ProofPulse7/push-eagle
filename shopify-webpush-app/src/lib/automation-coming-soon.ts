@@ -8,7 +8,7 @@
  * Config, flow pages, and webhook handlers stay in place — only UI/API/middleware
  * and runtime sends are gated while COMING_SOON_AUTOMATIONS_ENABLED is true.
  */
-export const COMING_SOON_AUTOMATIONS_ENABLED = true;
+export const COMING_SOON_AUTOMATIONS_ENABLED = false;
 
 export const COMING_SOON_AUTOMATION_RULE_KEYS = [
   'browse_abandonment_15m',

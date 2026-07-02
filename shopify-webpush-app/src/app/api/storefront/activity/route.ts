@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { processDueAutomationJobsForShop, recordSubscriberActivity } from '@/lib/server/data/store';
+import { recordSubscriberActivity } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
+import { shouldRunStorefrontAutomationInline } from '@/lib/server/storefront-automation-inline';
+import {
+  isLowValueStorefrontActivityEvent,
+  shouldThrottleStorefrontEvent,
+} from '@/lib/server/storefront-event-throttle';
 import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
 
 export const runtime = 'nodejs';
@@ -24,6 +29,13 @@ const buildCorsHeaders = (origin: string | null) => ({
   Vary: 'Origin',
 });
 
+const THROTTLE_SECONDS: Record<string, number> = {
+  page_view: 120,
+  product_view: 300,
+  add_to_cart: 45,
+  checkout_start: 120,
+};
+
 export async function OPTIONS(request: Request) {
   const origin = request.headers.get('origin');
   return new NextResponse(null, { status: 204, headers: buildCorsHeaders(origin) });
@@ -44,6 +56,31 @@ export async function POST(request: Request) {
       );
     }
 
+    if (isLowValueStorefrontActivityEvent(body.eventType)) {
+      return NextResponse.json(
+        { ok: true, skipped: true, reason: 'page_view_handled_by_pixel' },
+        { headers: buildCorsHeaders(origin) },
+      );
+    }
+
+    const throttleSeconds = THROTTLE_SECONDS[body.eventType] ?? 60;
+    const throttled = await shouldThrottleStorefrontEvent({
+      shopDomain,
+      externalId: body.externalId,
+      eventType: body.eventType,
+      productId: body.productId,
+      cartToken: body.cartToken,
+      pageUrl: body.pageUrl,
+      windowSeconds: throttleSeconds,
+    });
+
+    if (throttled) {
+      return NextResponse.json(
+        { ok: true, skipped: true, reason: 'throttled' },
+        { headers: buildCorsHeaders(origin) },
+      );
+    }
+
     const result = await recordSubscriberActivity({
       shopDomain,
       externalId: body.externalId,
@@ -54,7 +91,10 @@ export async function POST(request: Request) {
       metadata: body.metadata,
     });
 
-    void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
+    if (shouldRunStorefrontAutomationInline()) {
+      const { processDueAutomationJobsForShop } = await import('@/lib/server/data/store');
+      void processDueAutomationJobsForShop(shopDomain, 20, 5).catch(() => undefined);
+    }
 
     return NextResponse.json({ ok: true, ...result }, { headers: buildCorsHeaders(origin) });
   } catch (error) {

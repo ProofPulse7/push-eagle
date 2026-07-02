@@ -2230,9 +2230,11 @@
       getShopifyAnalyticsClientId()
     );
     bindCommerceActivityTracking(boot);
-    sendActivityEvent(boot, window.location.pathname.indexOf('/products/') === 0 ? 'product_view' : 'page_view', {
-      referrer: document.referrer || null
-    });
+    if (window.location.pathname.indexOf('/products/') === 0) {
+      sendActivityEvent(boot, 'product_view', {
+        referrer: document.referrer || null
+      });
+    }
     var clientProfile = await buildClientProfile(root, boot);
     applyOptInSettings(root, config, boot);
 

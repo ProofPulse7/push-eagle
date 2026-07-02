@@ -1,6 +1,7 @@
 import { deleteKvKey, isCloudflareKvEnabled, readKvJson, writeKvJson } from '@/lib/server/cache/cloudflare-kv';
 
 const CRON_SLEEP_KV_KEY = 'pe:cron:sleep_until_iso';
+const CRON_PROBE_CACHE_KEY = 'pe:cron:probe_idle_cache_v1';
 
 export const readCronSleepUntil = async (): Promise<Date | null> => {
   if (!isCloudflareKvEnabled()) {
@@ -42,6 +43,7 @@ export const clearCronSleep = async () => {
 
   try {
     await deleteKvKey(CRON_SLEEP_KV_KEY);
+    await deleteKvKey(CRON_PROBE_CACHE_KEY);
   } catch (error) {
     console.error('[cron-idle] failed to clear sleep marker', error);
   }
