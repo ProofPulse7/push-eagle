@@ -3416,11 +3416,102 @@ export const rollupMerchantDailyStats = async () => {
   };
 };
 
+// Retention windows (days) for the high-volume, append-only time-series tables.
+// These grow unbounded with sends/traffic and are the main driver of Neon storage
+// and network transfer at scale. Historical analytics are preserved in the tiny
+// merchant_daily_stats rollup, so pruning the raw rows below is safe for the
+// dashboard. Windows are generous (well beyond any realistic attribution/dedup
+// window) and overridable via env for tuning without a redeploy.
+const readRetentionDays = (key: string, fallback: number) => {
+  const raw = Number(process.env[key]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Prunes the unbounded per-recipient delivery/click history and old Shopify
+ * order/fulfillment cache rows from Neon. This is the single biggest lever for
+ * staying inside the Neon free tier at scale: it caps row count (and therefore
+ * storage + scan cost) regardless of total lifetime volume, without touching any
+ * read path — recent data (attribution, welcome-step dedup, campaign detail
+ * views) is fully retained, and all-time stats live in merchant_daily_stats.
+ *
+ * We deliberately do NOT use RETURNING here: at scale that would stream every
+ * deleted id back over the wire and burn the very network transfer we are trying
+ * to conserve.
+ */
+export const pruneHighVolumeTimeSeries = async () => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const now = Date.now();
+  const deliveryDays = readRetentionDays('PE_RETENTION_DELIVERY_DAYS', 120);
+  const orderDays = readRetentionDays('PE_RETENTION_ORDER_DAYS', 180);
+  const fulfillmentDays = readRetentionDays('PE_RETENTION_FULFILLMENT_DAYS', 90);
+
+  const deliveryCutoff = new Date(now - deliveryDays * DAY_MS);
+  const orderCutoff = new Date(now - orderDays * DAY_MS);
+  const fulfillmentCutoff = new Date(now - fulfillmentDays * DAY_MS);
+
+  // Sequential to keep peak Neon compute/connections low during maintenance.
+  await sql`DELETE FROM campaign_deliveries WHERE delivered_at < ${deliveryCutoff}`;
+  await sql`DELETE FROM campaign_clicks WHERE clicked_at < ${deliveryCutoff}`;
+  await sql`DELETE FROM automation_deliveries WHERE delivered_at < ${deliveryCutoff}`;
+  await sql`DELETE FROM automation_clicks WHERE clicked_at < ${deliveryCutoff}`;
+  // order_items cascade via shopify_order_items.order_event_id ON DELETE CASCADE.
+  await sql`DELETE FROM shopify_orders WHERE created_at < ${orderCutoff}`;
+  await sql`DELETE FROM shopify_order_items WHERE created_at < ${orderCutoff}`;
+  await sql`DELETE FROM shopify_fulfillments WHERE last_seen_at < ${fulfillmentCutoff}`;
+
+  return {
+    deliveryRetentionDays: deliveryDays,
+    orderRetentionDays: orderDays,
+    fulfillmentRetentionDays: fulfillmentDays,
+  };
+};
+
+// Ensures the daily stats rollup runs at most once per UTC day even though heavy
+// maintenance now fires on an interval (not at an exact wall-clock minute). The
+// rollup is idempotent (ON CONFLICT), so if KV is unavailable we simply run it on
+// every maintenance tick rather than risk skipping a day and losing history.
+const ROLLUP_DAY_KEY = 'pe:rollup:day:v1';
+
+const maybeRollupDailyStats = async () => {
+  const target = new Date(Date.now() - DAY_MS).toISOString().slice(0, 10);
+
+  try {
+    const { isCloudflareKvEnabled, readKvJson, writeKvJson } = await import(
+      '@/lib/server/cache/cloudflare-kv'
+    );
+    if (isCloudflareKvEnabled()) {
+      const marker = await readKvJson<{ statDate?: string }>(ROLLUP_DAY_KEY);
+      if (marker?.statDate === target) {
+        return { statDate: target, skipped: true as const };
+      }
+      const result = await rollupMerchantDailyStats();
+      void writeKvJson(ROLLUP_DAY_KEY, { statDate: target }, 3 * 24 * 60 * 60).catch(
+        () => undefined,
+      );
+      return result;
+    }
+  } catch {
+    // fall through to an unconditional (idempotent) rollup
+  }
+
+  return rollupMerchantDailyStats();
+};
+
 export const runRetentionMaintenance = async () => {
   await ensureSchema();
   const sql = getNeonSql();
 
   await pruneAutomationData();
+
+  // Roll up first so a completed day is captured before its raw rows can ever be
+  // pruned, then cap the high-volume tables.
+  const dailyRollup = await maybeRollupDailyStats();
+  const highVolumePrune = await pruneHighVolumeTimeSeries();
 
   const ingestionDeleted = await sql`
     DELETE FROM ingestion_jobs
@@ -3443,16 +3534,13 @@ export const runRetentionMaintenance = async () => {
   const d1Prune = isD1EventsEnabled() ? await pruneD1TrackingEvents(14, 2000) : null;
   const campaignMediaPrune = await pruneUnusedCampaignDeviceImages(30);
 
-  const now = new Date();
-  const dailyRollup =
-    now.getUTCHours() === 3 && now.getUTCMinutes() === 0 ? await rollupMerchantDailyStats() : null;
-
   return {
     ingestionJobsDeleted: ingestionDeleted.length,
     heartbeatsDeleted: heartbeatsDeleted.length,
     pixelArchive,
     d1Prune,
     campaignMediaPrune,
+    highVolumePrune,
     dailyRollup,
   };
 };
