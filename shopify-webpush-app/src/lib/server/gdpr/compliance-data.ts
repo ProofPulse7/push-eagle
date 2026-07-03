@@ -92,14 +92,16 @@ export const exportCustomerGdprData = async (
         )
     `;
 
-  const subscribers = await sql`
-    SELECT id, external_id, browser, platform, locale, country, city, created_at, last_seen_at
-    FROM subscribers
-    WHERE shop_domain = ${shopDomain}
-      AND (
-        (${customerId}::text IS NOT NULL AND external_id = ${customerId})
-        OR id IN (
-          SELECT subscriber_id
+  const { isD1AudienceReadActive, d1GetGdprSubscriberRows } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+
+  const subscribers = isD1AudienceReadActive()
+    ? await (async () => {
+        // The subscriber<->order link stays on Neon (shopify_orders.subscriber_id);
+        // fetch matching ids there, then read the subscriber rows from D1.
+        const orderSubRows = await sql`
+          SELECT DISTINCT subscriber_id
           FROM shopify_orders
           WHERE shop_domain = ${shopDomain}
             AND subscriber_id IS NOT NULL
@@ -107,9 +109,30 @@ export const exportCustomerGdprData = async (
               (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
               OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
             )
+        `;
+        const extraIds = orderSubRows
+          .map((row) => Number(row.subscriber_id))
+          .filter((id) => Number.isFinite(id));
+        return d1GetGdprSubscriberRows(shopDomain, { externalId: customerId, extraIds });
+      })()
+    : await sql`
+      SELECT id, external_id, browser, platform, locale, country, city, created_at, last_seen_at
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+        AND (
+          (${customerId}::text IS NOT NULL AND external_id = ${customerId})
+          OR id IN (
+            SELECT subscriber_id
+            FROM shopify_orders
+            WHERE shop_domain = ${shopDomain}
+              AND subscriber_id IS NOT NULL
+              AND (
+                (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
+                OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
+              )
+          )
         )
-      )
-  `;
+    `;
 
   const orders =
     ordersRequested.length > 0
@@ -150,74 +173,132 @@ export const redactCustomerGdprData = async (
   const customerId = customerIdString(customer);
   const email = customerEmail(customer);
 
-  const subscriberRows =
-    ordersToRedact.length > 0
-      ? await sql`
-          SELECT id
-          FROM subscribers
-          WHERE shop_domain = ${shopDomain}
-            AND (
-              (${customerId}::text IS NOT NULL AND external_id = ${customerId})
-              OR id IN (
-                SELECT subscriber_id
-                FROM shopify_orders
-                WHERE shop_domain = ${shopDomain}
-                  AND subscriber_id IS NOT NULL
-                  AND (
-                    order_id = ANY(${ordersToRedact})
-                    OR (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
-                    OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
-                  )
-              )
-            )
-        `
-      : await sql`
-          SELECT id
-          FROM subscribers
-          WHERE shop_domain = ${shopDomain}
-            AND (
-              (${customerId}::text IS NOT NULL AND external_id = ${customerId})
-              OR id IN (
-                SELECT subscriber_id
-                FROM shopify_orders
-                WHERE shop_domain = ${shopDomain}
-                  AND subscriber_id IS NOT NULL
-                  AND (
-                    (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
-                    OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
-                  )
-              )
-            )
-        `;
+  const {
+    isD1AudienceReadActive,
+    isD1AudienceWriteEnabled,
+    d1GetGdprSubscriberRows,
+    d1DeleteSubscribersByIds,
+  } = await import('@/lib/server/integrations/d1-audience');
+  const readActive = isD1AudienceReadActive();
 
-  const subscriberIds = subscriberRows.map((row) => Number(row.id)).filter(Number.isFinite);
+  let subscriberIds: number[] = [];
+  // In read/d1_only, resolve the subscriber external_ids from D1 so the activity /
+  // pixel purge can target them directly (Neon no longer has the subscriber rows).
+  let subscriberExternalIds: string[] | null = null;
+
+  if (readActive) {
+    const orderSubRows =
+      ordersToRedact.length > 0
+        ? await sql`
+            SELECT DISTINCT subscriber_id
+            FROM shopify_orders
+            WHERE shop_domain = ${shopDomain}
+              AND subscriber_id IS NOT NULL
+              AND (
+                order_id = ANY(${ordersToRedact})
+                OR (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
+                OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
+              )
+          `
+        : await sql`
+            SELECT DISTINCT subscriber_id
+            FROM shopify_orders
+            WHERE shop_domain = ${shopDomain}
+              AND subscriber_id IS NOT NULL
+              AND (
+                (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
+                OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
+              )
+          `;
+    const extraIds = orderSubRows
+      .map((row) => Number(row.subscriber_id))
+      .filter((id) => Number.isFinite(id));
+    const d1Rows = await d1GetGdprSubscriberRows(shopDomain, { externalId: customerId, extraIds });
+    subscriberIds = d1Rows.map((row) => Number(row.id)).filter(Number.isFinite);
+    subscriberExternalIds = Array.from(
+      new Set(d1Rows.map((row) => row.external_id).filter((value): value is string => Boolean(value))),
+    );
+  } else {
+    const subscriberRows =
+      ordersToRedact.length > 0
+        ? await sql`
+            SELECT id
+            FROM subscribers
+            WHERE shop_domain = ${shopDomain}
+              AND (
+                (${customerId}::text IS NOT NULL AND external_id = ${customerId})
+                OR id IN (
+                  SELECT subscriber_id
+                  FROM shopify_orders
+                  WHERE shop_domain = ${shopDomain}
+                    AND subscriber_id IS NOT NULL
+                    AND (
+                      order_id = ANY(${ordersToRedact})
+                      OR (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
+                      OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
+                    )
+                )
+              )
+          `
+        : await sql`
+            SELECT id
+            FROM subscribers
+            WHERE shop_domain = ${shopDomain}
+              AND (
+                (${customerId}::text IS NOT NULL AND external_id = ${customerId})
+                OR id IN (
+                  SELECT subscriber_id
+                  FROM shopify_orders
+                  WHERE shop_domain = ${shopDomain}
+                    AND subscriber_id IS NOT NULL
+                    AND (
+                      (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
+                      OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
+                    )
+                )
+              )
+          `;
+    subscriberIds = subscriberRows.map((row) => Number(row.id)).filter(Number.isFinite);
+  }
 
   if (subscriberIds.length > 0) {
-    await sql`
-      DELETE FROM subscriber_activity_events
-      WHERE shop_domain = ${shopDomain}
-        AND external_id IN (
-          SELECT external_id FROM subscribers
+    if (readActive) {
+      if (subscriberExternalIds && subscriberExternalIds.length > 0) {
+        await sql`
+          DELETE FROM subscriber_activity_events
           WHERE shop_domain = ${shopDomain}
-            AND id = ANY(${subscriberIds})
-        )
-    `;
+            AND external_id = ANY(${subscriberExternalIds})
+        `;
+        await sql`
+          DELETE FROM pixel_events
+          WHERE shop_domain = ${shopDomain}
+            AND external_id = ANY(${subscriberExternalIds})
+        `;
+      }
+    } else {
+      await sql`
+        DELETE FROM subscriber_activity_events
+        WHERE shop_domain = ${shopDomain}
+          AND external_id IN (
+            SELECT external_id FROM subscribers
+            WHERE shop_domain = ${shopDomain}
+              AND id = ANY(${subscriberIds})
+          )
+      `;
 
-    await sql`
-      DELETE FROM pixel_events
-      WHERE shop_domain = ${shopDomain}
-        AND external_id IN (
-          SELECT external_id FROM subscribers
-          WHERE shop_domain = ${shopDomain}
-            AND id = ANY(${subscriberIds})
-        )
-    `;
+      await sql`
+        DELETE FROM pixel_events
+        WHERE shop_domain = ${shopDomain}
+          AND external_id IN (
+            SELECT external_id FROM subscribers
+            WHERE shop_domain = ${shopDomain}
+              AND id = ANY(${subscriberIds})
+          )
+      `;
+    }
 
     await sql`DELETE FROM subscribers WHERE shop_domain = ${shopDomain} AND id = ANY(${subscriberIds})`;
 
-    const { isD1AudienceWriteEnabled, d1DeleteSubscribersByIds } = await import(
-      '@/lib/server/integrations/d1-audience'
-    );
     if (isD1AudienceWriteEnabled()) {
       await d1DeleteSubscribersByIds(shopDomain, subscriberIds);
     }

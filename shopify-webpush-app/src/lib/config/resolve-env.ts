@@ -75,13 +75,20 @@ const EnvSchema = z.object({
   //                 traffic with zero production risk
   //   read       -> reads use D1 (Neon fallback on error); still dual-writes to
   //                 Neon so Neon stays a hot standby until a later d1-only step
+  //   d1_only    -> D1 is the sole store: reads use D1 and writes go ONLY to D1
+  //                 (D1 assigns ids). Neon audience tables are no longer written,
+  //                 which is what actually frees the Neon storage. Only flip this
+  //                 after 'read' has been validated in production.
   // Anything unrecognized is treated as 'off' for safety.
   D1_AUDIENCE_MODE: z
     .string()
     .default('off')
     .transform((value) => {
       const normalized = value.trim().toLowerCase();
-      return normalized === 'dual_write' || normalized === 'shadow' || normalized === 'read'
+      return normalized === 'dual_write' ||
+        normalized === 'shadow' ||
+        normalized === 'read' ||
+        normalized === 'd1_only'
         ? normalized
         : 'off';
     }),

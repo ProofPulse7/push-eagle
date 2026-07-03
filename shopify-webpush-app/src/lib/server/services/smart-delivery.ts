@@ -39,36 +39,75 @@ export const upsertSmartDeliveryMetrics = async (
 ): Promise<SmartDeliveryMetrics | null> => {
   const sql = getNeonSql();
 
-  // Fetch recent clicks for this subscriber
-  const clickRows = await sql`
-    SELECT clicked_at
-    FROM campaign_clicks
-    WHERE shop_domain = ${shopDomain}
-      AND subscriber_id = (
-        SELECT id FROM subscribers WHERE shop_domain = ${shopDomain} AND external_id = ${externalId} LIMIT 1
-      )
-      AND clicked_at >= NOW() - INTERVAL '90 days'
-    ORDER BY clicked_at DESC
-    LIMIT 100
-  `;
+  const { isD1AudienceReadActive, d1GetSubscriberIdByExternalId } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  const readActive = isD1AudienceReadActive();
+
+  let clickRows: Array<Record<string, any>>;
+  let statsRows: Array<Record<string, any>>;
+
+  if (readActive) {
+    // The external_id -> subscriber_id translation lives in D1; clicks/deliveries
+    // stay on Neon and are filtered by the resolved id.
+    const subscriberId = await d1GetSubscriberIdByExternalId(shopDomain, externalId);
+    clickRows =
+      subscriberId == null
+        ? []
+        : await sql`
+            SELECT clicked_at
+            FROM campaign_clicks
+            WHERE shop_domain = ${shopDomain}
+              AND subscriber_id = ${subscriberId}
+              AND clicked_at >= NOW() - INTERVAL '90 days'
+            ORDER BY clicked_at DESC
+            LIMIT 100
+          `;
+    statsRows =
+      subscriberId == null
+        ? [{ total_deliveries: 0, clicks: 0, conversions: 0 }]
+        : await sql`
+            SELECT
+              COUNT(DISTINCT cd.id)::INT AS total_deliveries,
+              COUNT(DISTINCT CASE WHEN cd.clicked_at IS NOT NULL THEN cd.id END)::INT AS clicks,
+              COUNT(DISTINCT CASE WHEN cd.converted_at IS NOT NULL THEN cd.id END)::INT AS conversions
+            FROM campaign_deliveries cd
+            WHERE cd.shop_domain = ${shopDomain}
+              AND cd.subscriber_id = ${subscriberId}
+              AND cd.delivered_at >= NOW() - INTERVAL '180 days'
+          `;
+  } else {
+    // Fetch recent clicks for this subscriber
+    clickRows = await sql`
+      SELECT clicked_at
+      FROM campaign_clicks
+      WHERE shop_domain = ${shopDomain}
+        AND subscriber_id = (
+          SELECT id FROM subscribers WHERE shop_domain = ${shopDomain} AND external_id = ${externalId} LIMIT 1
+        )
+        AND clicked_at >= NOW() - INTERVAL '90 days'
+      ORDER BY clicked_at DESC
+      LIMIT 100
+    `;
+
+    // Fetch total deliveries and conversions
+    statsRows = await sql`
+      SELECT
+        COUNT(DISTINCT cd.id)::INT AS total_deliveries,
+        COUNT(DISTINCT CASE WHEN cd.clicked_at IS NOT NULL THEN cd.id END)::INT AS clicks,
+        COUNT(DISTINCT CASE WHEN cd.converted_at IS NOT NULL THEN cd.id END)::INT AS conversions
+      FROM campaign_deliveries cd
+      WHERE cd.shop_domain = ${shopDomain}
+        AND cd.subscriber_id = (
+          SELECT id FROM subscribers WHERE shop_domain = ${shopDomain} AND external_id = ${externalId} LIMIT 1
+        )
+        AND cd.delivered_at >= NOW() - INTERVAL '180 days'
+    `;
+  }
 
   const clickTimes = clickRows
     .map((row) => (row.clicked_at ? new Date(row.clicked_at) : null))
     .filter((date) => date !== null) as Date[];
-
-  // Fetch total deliveries and conversions
-  const statsRows = await sql`
-    SELECT
-      COUNT(DISTINCT cd.id)::INT AS total_deliveries,
-      COUNT(DISTINCT CASE WHEN cd.clicked_at IS NOT NULL THEN cd.id END)::INT AS clicks,
-      COUNT(DISTINCT CASE WHEN cd.converted_at IS NOT NULL THEN cd.id END)::INT AS conversions
-    FROM campaign_deliveries cd
-    WHERE cd.shop_domain = ${shopDomain}
-      AND cd.subscriber_id = (
-        SELECT id FROM subscribers WHERE shop_domain = ${shopDomain} AND external_id = ${externalId} LIMIT 1
-      )
-      AND cd.delivered_at >= NOW() - INTERVAL '180 days'
-  `;
 
   const statsRow = statsRows[0];
   const totalDeliveries = Number(statsRow?.total_deliveries ?? 0);
@@ -177,22 +216,77 @@ export const optimizeCampaignDeliveryTiming = async (
 ): Promise<Array<{ hour: number; count: number; sendAt: Date }>> => {
   const sql = getNeonSql();
 
-  // Get subscribers with smart delivery metrics
-  const rows = await sql`
-    SELECT 
-      sdm.optimal_send_hour,
-      COUNT(DISTINCT cd.subscriber_id)::INT AS count
-    FROM campaign_deliveries cd
-    JOIN smart_delivery_metrics sdm 
-      ON sdm.shop_domain = cd.shop_domain 
-      AND sdm.external_id = (
-        SELECT external_id FROM subscribers WHERE id = cd.subscriber_id LIMIT 1
-      )
-    WHERE cd.campaign_id = ${campaignId}
-      AND sdm.optimal_send_hour IS NOT NULL
-    GROUP BY sdm.optimal_send_hour
-    ORDER BY sdm.optimal_send_hour ASC
-  `;
+  const { isD1AudienceReadActive, d1GetExternalIdsBySubscriberIds } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+
+  let rows: Array<{ optimal_send_hour: number | null; count: number }>;
+
+  if (isD1AudienceReadActive()) {
+    // cd (Neon) -> subscriber external_id (D1) -> sdm.optimal_send_hour (Neon).
+    const [deliveryRows, metricRows] = await Promise.all([
+      sql`
+        SELECT DISTINCT subscriber_id
+        FROM campaign_deliveries
+        WHERE campaign_id = ${campaignId}
+          AND subscriber_id IS NOT NULL
+      `,
+      sql`
+        SELECT external_id, optimal_send_hour
+        FROM smart_delivery_metrics
+        WHERE shop_domain = ${shopDomain}
+          AND optimal_send_hour IS NOT NULL
+      `,
+    ]);
+
+    const subscriberIds = deliveryRows
+      .map((row) => Number(row.subscriber_id))
+      .filter((id) => Number.isFinite(id));
+    const externalIdById = await d1GetExternalIdsBySubscriberIds(subscriberIds);
+    const hourByExternalId = new Map<string, number>();
+    for (const row of metricRows) {
+      if (row.external_id != null && row.optimal_send_hour != null) {
+        hourByExternalId.set(String(row.external_id), Number(row.optimal_send_hour));
+      }
+    }
+
+    // Count DISTINCT subscribers per optimal hour (matches the Neon aggregate).
+    const subscribersByHour = new Map<number, Set<number>>();
+    for (const subscriberId of subscriberIds) {
+      const externalId = externalIdById.get(subscriberId);
+      if (!externalId) {
+        continue;
+      }
+      const hour = hourByExternalId.get(externalId);
+      if (hour == null) {
+        continue;
+      }
+      (subscribersByHour.get(hour) ?? subscribersByHour.set(hour, new Set()).get(hour)!).add(
+        subscriberId,
+      );
+    }
+
+    rows = [...subscribersByHour.entries()]
+      .map(([hour, ids]) => ({ optimal_send_hour: hour, count: ids.size }))
+      .sort((a, b) => (a.optimal_send_hour ?? 0) - (b.optimal_send_hour ?? 0));
+  } else {
+    // Get subscribers with smart delivery metrics
+    rows = await sql`
+      SELECT 
+        sdm.optimal_send_hour,
+        COUNT(DISTINCT cd.subscriber_id)::INT AS count
+      FROM campaign_deliveries cd
+      JOIN smart_delivery_metrics sdm 
+        ON sdm.shop_domain = cd.shop_domain 
+        AND sdm.external_id = (
+          SELECT external_id FROM subscribers WHERE id = cd.subscriber_id LIMIT 1
+        )
+      WHERE cd.campaign_id = ${campaignId}
+        AND sdm.optimal_send_hour IS NOT NULL
+      GROUP BY sdm.optimal_send_hour
+      ORDER BY sdm.optimal_send_hour ASC
+    `;
+  }
 
   const result = rows.map((row) => {
     const hour = Number(row.optimal_send_hour ?? 0);

@@ -156,33 +156,57 @@ const resolveSubscriberClientId = async (shopDomain: string, externalId?: string
   }
 
   const sql = getNeonSql();
-  const rows = await sql`
-    SELECT
-      s.device_context ->> 'clientId' AS client_id,
-      s.device_context ->> 'shopifyAnalyticsClientId' AS shopify_analytics_client_id
-    FROM subscribers s
-    JOIN subscriber_tokens t ON t.subscriber_id = s.id
-    WHERE s.shop_domain = ${shopDomain}
-      AND t.shop_domain = ${shopDomain}
-      AND t.status = 'active'
-      AND s.external_id = ${normalizedExternalId}
-      AND (
-        COALESCE(s.device_context ->> 'clientId', '') <> ''
-        OR COALESCE(s.device_context ->> 'shopifyAnalyticsClientId', '') <> ''
-      )
-    ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC
-    LIMIT 1
-  `;
+  const { audienceRead, d1GetSubscriberClientIds } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
 
-  const clientId = rows[0]?.client_id ? String(rows[0].client_id).trim() : '';
-  const shopifyAnalyticsClientId = rows[0]?.shopify_analytics_client_id
-    ? String(rows[0].shopify_analytics_client_id).trim()
-    : '';
+  const resolved = await audienceRead<{
+    clientId: string | null;
+    shopifyAnalyticsClientId: string | null;
+  }>({
+    label: 'cartsUpdate.resolveSubscriberClientId',
+    key: (v) => `${v.clientId ?? ''}|${v.shopifyAnalyticsClientId ?? ''}`,
+    neon: async () => {
+      const rows = await sql`
+        SELECT
+          s.device_context ->> 'clientId' AS client_id,
+          s.device_context ->> 'shopifyAnalyticsClientId' AS shopify_analytics_client_id
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id
+        WHERE s.shop_domain = ${shopDomain}
+          AND t.shop_domain = ${shopDomain}
+          AND t.status = 'active'
+          AND s.external_id = ${normalizedExternalId}
+          AND (
+            COALESCE(s.device_context ->> 'clientId', '') <> ''
+            OR COALESCE(s.device_context ->> 'shopifyAnalyticsClientId', '') <> ''
+          )
+        ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC
+        LIMIT 1
+      `;
+      const clientId = rows[0]?.client_id ? String(rows[0].client_id).trim() : '';
+      const shopifyAnalyticsClientId = rows[0]?.shopify_analytics_client_id
+        ? String(rows[0].shopify_analytics_client_id).trim()
+        : '';
+      return {
+        clientId: clientId || null,
+        shopifyAnalyticsClientId: shopifyAnalyticsClientId || null,
+      };
+    },
+    d1: async () => {
+      const result = await d1GetSubscriberClientIds(shopDomain, normalizedExternalId);
+      const clientId = result.clientId ? result.clientId.trim() : '';
+      const shopifyAnalyticsClientId = result.shopifyAnalyticsClientId
+        ? result.shopifyAnalyticsClientId.trim()
+        : '';
+      return {
+        clientId: clientId || null,
+        shopifyAnalyticsClientId: shopifyAnalyticsClientId || null,
+      };
+    },
+  });
 
-  return {
-    clientId: clientId || null,
-    shopifyAnalyticsClientId: shopifyAnalyticsClientId || null,
-  };
+  return resolved;
 };
 
 export async function POST(request: Request) {

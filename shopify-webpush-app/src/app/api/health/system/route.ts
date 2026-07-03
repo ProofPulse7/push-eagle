@@ -53,14 +53,30 @@ export async function GET(request: Request) {
         WHERE status = 'pending' AND due_at <= NOW()
       `.then((rows) => Number(rows[0]?.count ?? 0)),
 
-      sql`
-        SELECT COUNT(*)::INT as count FROM subscriber_tokens 
-        WHERE status = 'active'
-      `.then((rows) => Number(rows[0]?.count ?? 0)),
+      (async () => {
+        const { isD1AudienceReadActive, d1CountActiveTokens } = await import(
+          '@/lib/server/integrations/d1-audience'
+        );
+        if (isD1AudienceReadActive()) {
+          return d1CountActiveTokens();
+        }
+        return sql`
+          SELECT COUNT(*)::INT as count FROM subscriber_tokens 
+          WHERE status = 'active'
+        `.then((rows) => Number(rows[0]?.count ?? 0));
+      })(),
 
-      sql`
-        SELECT COUNT(*)::INT as count FROM subscribers
-      `.then((rows) => Number(rows[0]?.count ?? 0)),
+      (async () => {
+        const { isD1AudienceReadActive, d1CountSubscribers } = await import(
+          '@/lib/server/integrations/d1-audience'
+        );
+        if (isD1AudienceReadActive()) {
+          return d1CountSubscribers();
+        }
+        return sql`
+          SELECT COUNT(*)::INT as count FROM subscribers
+        `.then((rows) => Number(rows[0]?.count ?? 0));
+      })(),
     ]);
 
     // Recent errors

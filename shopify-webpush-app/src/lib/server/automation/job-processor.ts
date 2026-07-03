@@ -47,32 +47,70 @@ export const processAutomationJobs = async (options: ProcessJobsOptions = {}) =>
 
   const sql = getNeonSql();
   const messaging = getFirebaseAdminMessaging();
+  const { isD1AudienceReadActive, d1GetFcmTokensByIds } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  const readActive = isD1AudienceReadActive();
 
   let totalProcessed = 0;
   let totalErrors = 0;
 
   while (true) {
-    // Fetch next batch of due jobs
-    const jobs = await sql`
-      SELECT
-        aj.id,
-        aj.shop_domain,
-        aj.rule_key,
-        aj.token_id,
-        aj.subscriber_id,
-        aj.payload,
-        aj.attempts,
-        st.fcm_token,
-        s.platform
-      FROM automation_jobs aj
-      JOIN subscriber_tokens st ON st.id = aj.token_id
-      LEFT JOIN subscribers s ON s.id = aj.subscriber_id
-      WHERE aj.status = 'pending'
-        AND aj.due_at <= NOW()
-        AND aj.attempts < ${maxRetries}
-      ORDER BY aj.due_at ASC, aj.created_at ASC
-      LIMIT ${batchSize}
-    `;
+    // Fetch next batch of due jobs. In read/d1_only the token (fcm) lives in D1,
+    // so pull jobs from Neon then enrich from D1, keeping only jobs that still
+    // resolve to a token (mirroring the INNER JOIN on subscriber_tokens).
+    let jobs: any[];
+    if (readActive) {
+      const jobsRaw = await sql`
+        SELECT
+          aj.id,
+          aj.shop_domain,
+          aj.rule_key,
+          aj.token_id,
+          aj.subscriber_id,
+          aj.payload,
+          aj.attempts
+        FROM automation_jobs aj
+        WHERE aj.status = 'pending'
+          AND aj.due_at <= NOW()
+          AND aj.attempts < ${maxRetries}
+        ORDER BY aj.due_at ASC, aj.created_at ASC
+        LIMIT ${batchSize}
+      `;
+      const tokenIds = jobsRaw
+        .map((job) => Number(job.token_id))
+        .filter((id) => Number.isFinite(id));
+      const fcmMap =
+        tokenIds.length > 0 ? await d1GetFcmTokensByIds(tokenIds) : new Map<number, string>();
+      jobs = jobsRaw
+        .map((job) => ({
+          ...job,
+          fcm_token: job.token_id != null ? fcmMap.get(Number(job.token_id)) ?? null : null,
+          platform: null,
+        }))
+        .filter((job) => job.fcm_token != null);
+    } else {
+      jobs = await sql`
+        SELECT
+          aj.id,
+          aj.shop_domain,
+          aj.rule_key,
+          aj.token_id,
+          aj.subscriber_id,
+          aj.payload,
+          aj.attempts,
+          st.fcm_token,
+          s.platform
+        FROM automation_jobs aj
+        JOIN subscriber_tokens st ON st.id = aj.token_id
+        LEFT JOIN subscribers s ON s.id = aj.subscriber_id
+        WHERE aj.status = 'pending'
+          AND aj.due_at <= NOW()
+          AND aj.attempts < ${maxRetries}
+        ORDER BY aj.due_at ASC, aj.created_at ASC
+        LIMIT ${batchSize}
+      `;
+    }
 
     if (jobs.length === 0) {
       break;

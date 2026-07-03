@@ -50,6 +50,49 @@ export const getSubscribersByOptimalHour = async (
 ): Promise<Record<number, string[]>> => {
   const sql = getNeonSql();
 
+  const { isD1AudienceReadActive, d1GetActiveTokensWithExternalId } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+
+  if (isD1AudienceReadActive()) {
+    // Audience (tokens + subscriber external_id) lives in D1; the optimal-hour
+    // metrics and per-campaign delivery de-dup stay on Neon, so join in app code.
+    const [tokens, metricRows, deliveredRows] = await Promise.all([
+      d1GetActiveTokensWithExternalId(shopDomain),
+      sql`
+        SELECT external_id, optimal_send_hour
+        FROM smart_delivery_metrics
+        WHERE shop_domain = ${shopDomain}
+      `,
+      sql`
+        SELECT token_id
+        FROM campaign_deliveries
+        WHERE campaign_id = ${campaignId}
+      `,
+    ]);
+
+    const hourByExternalId = new Map<string, number>();
+    for (const row of metricRows) {
+      if (row.external_id != null && row.optimal_send_hour != null) {
+        hourByExternalId.set(String(row.external_id), Number(row.optimal_send_hour));
+      }
+    }
+    const deliveredTokenIds = new Set(
+      deliveredRows.map((row) => Number(row.token_id)).filter((id) => Number.isFinite(id)),
+    );
+
+    const tokensByHour: Record<number, string[]> = {};
+    for (const token of tokens) {
+      if (!token.fcmToken || deliveredTokenIds.has(token.tokenId)) {
+        continue;
+      }
+      const hour = hourByExternalId.get(token.externalId) ?? 10;
+      (tokensByHour[hour] ??= []).push(token.fcmToken);
+    }
+
+    return tokensByHour;
+  }
+
   const rows = await sql`
     SELECT
       COALESCE(sdm.optimal_send_hour, 10) as hour,

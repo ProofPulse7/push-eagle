@@ -52,6 +52,21 @@ export async function GET(request: Request) {
         const messaging = getFirebaseAdminMessaging();
         const sql = getNeonSql();
 
+        // Map fcm_token -> {subscriber_id, token_id} from the resolved audience so we
+        // can record deliveries without re-reading subscriber_tokens from Neon (that
+        // table is empty once the audience lives in D1 / d1_only mode).
+        const idsByToken = new Map<string, { subscriberId: number; tokenId: number }>();
+        for (const recipient of tokens) {
+          const fcm = String((recipient as { fcm_token?: string | null }).fcm_token ?? '');
+          if (!fcm) {
+            continue;
+          }
+          idsByToken.set(fcm, {
+            subscriberId: Number((recipient as { subscriber_id?: number }).subscriber_id ?? 0) || 0,
+            tokenId: Number((recipient as { token_id?: number }).token_id ?? 0) || 0,
+          });
+        }
+
         // If smart send is enabled, batch by optimal hour
         let tokensByHour: Record<number, string[]> = {};
         if (campaign.smart_send_enabled) {
@@ -84,7 +99,9 @@ export async function GET(request: Request) {
                 token,
               });
 
-              // Record delivery (async, don't wait)
+              // Record delivery (async, don't wait). Ids come from the resolved
+              // audience (D1-aware) so this works in both Neon and d1_only modes.
+              const ids = idsByToken.get(token);
               sql`
                 INSERT INTO campaign_deliveries (
                   campaign_id,
@@ -93,10 +110,13 @@ export async function GET(request: Request) {
                   token_id,
                   delivered_at
                 )
-                SELECT ${campaign.id}, ${campaign.shop_domain}, s.id, t.id, NOW()
-                FROM subscriber_tokens t
-                JOIN subscribers s ON s.id = t.subscriber_id
-                WHERE t.fcm_token = ${token}
+                VALUES (
+                  ${campaign.id},
+                  ${campaign.shop_domain},
+                  ${ids?.subscriberId ?? null},
+                  ${ids?.tokenId ?? null},
+                  NOW()
+                )
                 ON CONFLICT DO NOTHING
               `.catch(() => {
                 // Silently ignore conflicts
