@@ -61,6 +61,12 @@ const EnvSchema = z.object({
     .string()
     .default('false')
     .transform((value) => value.trim().toLowerCase() === 'true'),
+  // Explicit opt-in for moving the Shopify customer cache to D1 (segmentation,
+  // GDPR, attribution). Independent from D1_CATALOG_ENABLED for staged rollout.
+  D1_CUSTOMERS_ENABLED: z
+    .string()
+    .default('false')
+    .transform((value) => value.trim().toLowerCase() === 'true'),
   VAPID_PUBLIC_KEY: z.string().default(''),
   VAPID_PRIVATE_KEY: z.string().default(''),
   VAPID_SUBJECT: z.string().default('mailto:support@push-eagle.com'),

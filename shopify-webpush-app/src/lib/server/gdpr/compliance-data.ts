@@ -77,15 +77,20 @@ export const exportCustomerGdprData = async (
   const customerId = customerIdString(customer);
   const email = customerEmail(customer);
 
-  const shopifyCustomers = await sql`
-    SELECT customer_id, external_id, email, first_name, last_name, tags, created_at, updated_at
-    FROM shopify_customers
-    WHERE shop_domain = ${shopDomain}
-      AND (
-        (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
-        OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
-      )
-  `;
+  const { isD1CustomersEnabled, d1GetCustomersForCompliance } = await import(
+    '@/lib/server/integrations/d1-customers'
+  );
+  const shopifyCustomers = isD1CustomersEnabled()
+    ? await d1GetCustomersForCompliance(shopDomain, { customerId, email })
+    : await sql`
+      SELECT customer_id, external_id, email, first_name, last_name, tags, created_at, updated_at
+      FROM shopify_customers
+      WHERE shop_domain = ${shopDomain}
+        AND (
+          (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
+          OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
+        )
+    `;
 
   const subscribers = await sql`
     SELECT id, external_id, browser, platform, locale, country, city, created_at, last_seen_at
@@ -246,14 +251,21 @@ export const redactCustomerGdprData = async (
     `;
   }
 
-  await sql`
-    DELETE FROM shopify_customers
-    WHERE shop_domain = ${shopDomain}
-      AND (
-        (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
-        OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
-      )
-  `;
+  const { isD1CustomersEnabled, d1DeleteCustomers } = await import(
+    '@/lib/server/integrations/d1-customers'
+  );
+  if (isD1CustomersEnabled()) {
+    await d1DeleteCustomers(shopDomain, { customerId, email });
+  } else {
+    await sql`
+      DELETE FROM shopify_customers
+      WHERE shop_domain = ${shopDomain}
+        AND (
+          (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
+          OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
+        )
+    `;
+  }
 
   return {
     shopDomain,
@@ -273,6 +285,14 @@ export const purgeShopGdprData = async (shopDomainInput: string) => {
   await ensureGdprSchema();
   await sql`DELETE FROM gdpr_data_exports WHERE shop_domain = ${shopDomain}`;
   await sql`DELETE FROM merchant_billing WHERE shop_domain = ${shopDomain}`;
+  // Deleting the merchant cascades Neon-owned rows, but the D1 customer cache is
+  // outside that cascade, so purge it explicitly for full GDPR erasure.
+  const { isD1CustomersEnabled, d1DeleteAllCustomersForShop } = await import(
+    '@/lib/server/integrations/d1-customers'
+  );
+  if (isD1CustomersEnabled()) {
+    await d1DeleteAllCustomersForShop(shopDomain);
+  }
   await sql`DELETE FROM merchants WHERE shop_domain = ${shopDomain}`;
 
   return {

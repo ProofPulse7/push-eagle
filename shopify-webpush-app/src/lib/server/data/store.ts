@@ -3309,20 +3309,28 @@ export const pruneAutomationData = async () => {
   await ensureSchema();
   const sql = getNeonSql();
 
+  const now = Date.now();
+  const webhookCutoff = new Date(now - readRetentionDays('PE_RETENTION_WEBHOOK_EVENT_DAYS', 30) * DAY_MS);
+  const activityCutoff = new Date(now - readRetentionDays('PE_RETENTION_ACTIVITY_DAYS', 45) * DAY_MS);
+  // automation_jobs is the high-volume automation queue. We only ever prune jobs
+  // in a terminal state (never pending/processing work), keeping Neon bounded the
+  // same way the delivery/click tables are. Window is env-tunable.
+  const jobCutoff = new Date(now - readRetentionDays('PE_RETENTION_AUTOMATION_JOB_DAYS', 60) * DAY_MS);
+
   await sql`
     DELETE FROM webhook_events
-    WHERE received_at < NOW() - INTERVAL '30 days'
+    WHERE received_at < ${webhookCutoff}
   `;
 
   await sql`
     DELETE FROM subscriber_activity_events
-    WHERE created_at < NOW() - INTERVAL '45 days'
+    WHERE created_at < ${activityCutoff}
   `;
 
   await sql`
     DELETE FROM automation_jobs
     WHERE status IN ('sent', 'failed', 'skipped')
-      AND updated_at < NOW() - INTERVAL '60 days'
+      AND updated_at < ${jobCutoff}
   `;
 };
 
@@ -5487,6 +5495,24 @@ export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) =
     return;
   }
 
+  const tagsBlob = input.tags && input.tags.length > 0 ? input.tags.join(',') : null;
+
+  const { isD1CustomersEnabled, d1UpsertCustomer } = await import(
+    '@/lib/server/integrations/d1-customers'
+  );
+  if (isD1CustomersEnabled()) {
+    await d1UpsertCustomer({
+      shopDomain: input.shopDomain,
+      customerId: input.customerId ?? null,
+      externalId: input.externalId ?? null,
+      email: input.email ?? null,
+      firstName: input.firstName ?? null,
+      lastName: input.lastName ?? null,
+      tags: tagsBlob,
+    });
+    return;
+  }
+
   if (input.customerId) {
     await sql`
       INSERT INTO shopify_customers (
@@ -5506,7 +5532,7 @@ export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) =
         ${input.email ?? null},
         ${input.firstName ?? null},
         ${input.lastName ?? null},
-        ${input.tags && input.tags.length > 0 ? input.tags.join(',') : null},
+        ${tagsBlob},
         NOW()
       )
       ON CONFLICT (shop_domain, customer_id)
@@ -5539,7 +5565,7 @@ export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) =
       ${input.email ?? null},
       ${input.firstName ?? null},
       ${input.lastName ?? null},
-      ${input.tags && input.tags.length > 0 ? input.tags.join(',') : null},
+      ${tagsBlob},
       NOW()
     )
   `;
@@ -5759,24 +5785,54 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
     if (tags.length === 0) {
       matched = new Set<number>();
     } else {
-      const rows = await sql`
-        SELECT s.id, c.tags
-        FROM subscribers s
-        JOIN shopify_customers c
-          ON c.shop_domain = s.shop_domain
-         AND c.external_id = s.external_id
-        WHERE s.shop_domain = ${shopDomain}
-          AND c.tags IS NOT NULL
-          AND c.tags <> ''
-      `;
+      const { isD1CustomersEnabled, d1GetCustomerTagsMap } = await import(
+        '@/lib/server/integrations/d1-customers'
+      );
 
-      for (const row of rows) {
-        const subscriberId = Number(row.id);
-        const tagBlob = String(row.tags ?? '').toLowerCase();
+      const matchTags = (subscriberId: number, tagsValue: string) => {
+        const tagBlob = tagsValue.toLowerCase();
         const tagList = tagBlob.split(',').map((tag) => tag.trim()).filter(Boolean);
-        const hasTag = tags.some((tag) => tagList.includes(tag.toLowerCase()) || tagBlob.includes(tag.toLowerCase()));
+        const hasTag = tags.some(
+          (tag) => tagList.includes(tag.toLowerCase()) || tagBlob.includes(tag.toLowerCase()),
+        );
         if (hasTag) {
           matched.add(subscriberId);
+        }
+      };
+
+      if (isD1CustomersEnabled()) {
+        // Reproduce the subscribers<->customers join in app code: subscriber
+        // (id, external_id) pairs live on Neon, tags live in D1.
+        const [subscriberRows, tagByExternalId] = await Promise.all([
+          sql`
+            SELECT id, external_id
+            FROM subscribers
+            WHERE shop_domain = ${shopDomain}
+              AND external_id IS NOT NULL
+          `,
+          d1GetCustomerTagsMap(shopDomain),
+        ]);
+
+        for (const row of subscriberRows as Array<Record<string, unknown>>) {
+          const tagsValue = tagByExternalId.get(String(row.external_id ?? ''));
+          if (tagsValue) {
+            matchTags(Number(row.id), tagsValue);
+          }
+        }
+      } else {
+        const rows = await sql`
+          SELECT s.id, c.tags
+          FROM subscribers s
+          JOIN shopify_customers c
+            ON c.shop_domain = s.shop_domain
+           AND c.external_id = s.external_id
+          WHERE s.shop_domain = ${shopDomain}
+            AND c.tags IS NOT NULL
+            AND c.tags <> ''
+        `;
+
+        for (const row of rows) {
+          matchTags(Number(row.id), String(row.tags ?? ''));
         }
       }
     }
@@ -6466,7 +6522,12 @@ export const getSegmentFilterOptions = async (shopDomain: string) => {
   const sql = getNeonSql();
   await ensureMerchant(shopDomain);
 
-  const [countries, cities, regions, tags] = await Promise.all([
+  const { isD1CustomersEnabled, d1GetDistinctCustomerTags } = await import(
+    '@/lib/server/integrations/d1-customers'
+  );
+  const useD1Customers = isD1CustomersEnabled();
+
+  const [countries, cities, regions, neonTags] = await Promise.all([
     sql`
       SELECT DISTINCT TRIM(country) AS value
       FROM subscribers
@@ -6494,24 +6555,30 @@ export const getSegmentFilterOptions = async (shopDomain: string) => {
       ORDER BY value ASC
       LIMIT 500
     `,
-    sql`
-      SELECT DISTINCT TRIM(tag) AS value
-      FROM (
-        SELECT regexp_split_to_table(COALESCE(tags, ''), ',') AS tag
-        FROM shopify_customers
-        WHERE shop_domain = ${shopDomain}
-      ) split_tags
-      WHERE TRIM(tag) <> ''
-      ORDER BY value ASC
-      LIMIT 500
-    `,
+    useD1Customers
+      ? Promise.resolve([] as Array<{ value: string }>)
+      : sql`
+        SELECT DISTINCT TRIM(tag) AS value
+        FROM (
+          SELECT regexp_split_to_table(COALESCE(tags, ''), ',') AS tag
+          FROM shopify_customers
+          WHERE shop_domain = ${shopDomain}
+        ) split_tags
+        WHERE TRIM(tag) <> ''
+        ORDER BY value ASC
+        LIMIT 500
+      `,
   ]);
+
+  const customerTags = useD1Customers
+    ? await d1GetDistinctCustomerTags(shopDomain)
+    : (neonTags as Array<{ value: unknown }>).map((row) => String(row.value));
 
   return {
     countries: countries.map((row) => String(row.value)),
     cities: cities.map((row) => String(row.value)),
     regions: regions.map((row) => String(row.value)),
-    customerTags: tags.map((row) => String(row.value)),
+    customerTags,
   };
 };
 
@@ -6889,11 +6956,20 @@ export const getMerchantOverview = async (shopDomain: string) => {
       )
   `;
 
-  const customerCountRows = await sql`
-    SELECT COUNT(*)::INT AS count
-    FROM shopify_customers
-    WHERE shop_domain = ${shopDomain}
-  `;
+  const { isD1CustomersEnabled, d1CountCustomers } = await import(
+    '@/lib/server/integrations/d1-customers'
+  );
+  const customerCount = isD1CustomersEnabled()
+    ? await d1CountCustomers(shopDomain)
+    : Number(
+        (
+          await sql`
+            SELECT COUNT(*)::INT AS count
+            FROM shopify_customers
+            WHERE shop_domain = ${shopDomain}
+          `
+        )[0]?.count ?? 0,
+      );
 
   const campaignCountRows = await sql`
     SELECT COUNT(*)::INT AS count
@@ -6933,7 +7009,7 @@ export const getMerchantOverview = async (shopDomain: string) => {
     lastAuthenticatedAt: row?.last_authenticated_at ? String(row.last_authenticated_at) : null,
     uninstalledAt: row?.uninstalled_at ? String(row.uninstalled_at) : null,
     subscriberCount: Number(subscriberCountRows[0]?.count ?? 0),
-    customerCount: Number(customerCountRows[0]?.count ?? 0),
+    customerCount,
     campaignCount: Number(campaignCountRows[0]?.count ?? 0),
   };
 };
@@ -9614,42 +9690,51 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     : null;
   const customerExternalId = normalizedCustomerId ? `shopify_customer:${normalizedCustomerId}` : null;
 
-  const linkedExternalRows = await (() => {
-    if (normalizedCustomerId && normalizedEmail) {
-      return sql`
-        SELECT external_id
-        FROM shopify_customers
-        WHERE shop_domain = ${input.shopDomain}
-          AND external_id IS NOT NULL
-          AND (customer_id = ${normalizedCustomerId} OR LOWER(email) = ${normalizedEmail})
-        ORDER BY updated_at DESC
-        LIMIT 25
-      `;
-    }
-    if (normalizedCustomerId) {
-      return sql`
-        SELECT external_id
-        FROM shopify_customers
-        WHERE shop_domain = ${input.shopDomain}
-          AND external_id IS NOT NULL
-          AND customer_id = ${normalizedCustomerId}
-        ORDER BY updated_at DESC
-        LIMIT 25
-      `;
-    }
-    if (normalizedEmail) {
-      return sql`
-        SELECT external_id
-        FROM shopify_customers
-        WHERE shop_domain = ${input.shopDomain}
-          AND external_id IS NOT NULL
-          AND LOWER(email) = ${normalizedEmail}
-        ORDER BY updated_at DESC
-        LIMIT 25
-      `;
-    }
-    return Promise.resolve([] as Array<{ external_id: string | null }>);
-  })();
+  const { isD1CustomersEnabled, d1GetLinkedCustomerExternalIds } = await import(
+    '@/lib/server/integrations/d1-customers'
+  );
+
+  const linkedExternalRows: Array<{ external_id: string | null }> = isD1CustomersEnabled()
+    ? await d1GetLinkedCustomerExternalIds(input.shopDomain, {
+        customerId: normalizedCustomerId,
+        email: normalizedEmail,
+      })
+    : await (() => {
+        if (normalizedCustomerId && normalizedEmail) {
+          return sql`
+            SELECT external_id
+            FROM shopify_customers
+            WHERE shop_domain = ${input.shopDomain}
+              AND external_id IS NOT NULL
+              AND (customer_id = ${normalizedCustomerId} OR LOWER(email) = ${normalizedEmail})
+            ORDER BY updated_at DESC
+            LIMIT 25
+          `;
+        }
+        if (normalizedCustomerId) {
+          return sql`
+            SELECT external_id
+            FROM shopify_customers
+            WHERE shop_domain = ${input.shopDomain}
+              AND external_id IS NOT NULL
+              AND customer_id = ${normalizedCustomerId}
+            ORDER BY updated_at DESC
+            LIMIT 25
+          `;
+        }
+        if (normalizedEmail) {
+          return sql`
+            SELECT external_id
+            FROM shopify_customers
+            WHERE shop_domain = ${input.shopDomain}
+              AND external_id IS NOT NULL
+              AND LOWER(email) = ${normalizedEmail}
+            ORDER BY updated_at DESC
+            LIMIT 25
+          `;
+        }
+        return Promise.resolve([] as Array<{ external_id: string | null }>);
+      })();
 
   const historicalOrderExternalRows = await (() => {
     if (normalizedCustomerId && normalizedEmail) {
