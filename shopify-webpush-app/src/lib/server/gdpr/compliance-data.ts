@@ -214,6 +214,13 @@ export const redactCustomerGdprData = async (
     `;
 
     await sql`DELETE FROM subscribers WHERE shop_domain = ${shopDomain} AND id = ANY(${subscriberIds})`;
+
+    const { isD1AudienceWriteEnabled, d1DeleteSubscribersByIds } = await import(
+      '@/lib/server/integrations/d1-audience'
+    );
+    if (isD1AudienceWriteEnabled()) {
+      await d1DeleteSubscribersByIds(shopDomain, subscriberIds);
+    }
   }
 
   if (ordersToRedact.length > 0) {
@@ -292,6 +299,13 @@ export const purgeShopGdprData = async (shopDomainInput: string) => {
   );
   if (isD1CustomersEnabled()) {
     await d1DeleteAllCustomersForShop(shopDomain);
+  }
+  // Same reasoning for the D1 audience mirror (subscribers + tokens).
+  const { isD1AudienceWriteEnabled, d1DeleteAllAudienceForShop } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  if (isD1AudienceWriteEnabled()) {
+    await d1DeleteAllAudienceForShop(shopDomain);
   }
   await sql`DELETE FROM merchants WHERE shop_domain = ${shopDomain}`;
 

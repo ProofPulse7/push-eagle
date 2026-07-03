@@ -7119,6 +7119,41 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   const tokenId = Number(tokenRows[0]?.id);
   const tokenWasInserted = Boolean(tokenRows[0]?.was_inserted);
 
+  // Stage-1 audience dual-write: mirror the Neon rows into D1 using the ids Neon
+  // just assigned. No-op (instant return) when D1_AUDIENCE_MODE is off.
+  {
+    const {
+      isD1AudienceWriteEnabled,
+      d1MirrorSubscriber,
+      d1MirrorToken,
+    } = await import('@/lib/server/integrations/d1-audience');
+    if (isD1AudienceWriteEnabled()) {
+      await d1MirrorSubscriber({
+        id: subscriberId,
+        shopDomain: input.shopDomain,
+        externalId: input.externalId,
+        browser: input.browser ?? null,
+        platform: input.platform ?? null,
+        locale: input.locale ?? null,
+        country: input.country ?? null,
+        city: input.city ?? null,
+        deviceContext: serializedDeviceContext,
+      });
+      await d1MirrorToken({
+        id: tokenId,
+        shopDomain: input.shopDomain,
+        subscriberId,
+        fcmToken: input.token,
+        userAgent: input.userAgent ?? null,
+        status: 'active',
+        tokenType: input.tokenType ?? 'fcm',
+        vapidEndpoint: input.vapidEndpoint ?? null,
+        vapidP256dh: input.vapidP256dh ?? null,
+        vapidAuth: input.vapidAuth ?? null,
+      });
+    }
+  }
+
   const welcomeRuleRows = await sql`
     SELECT enabled, config
     FROM automation_rules
@@ -7292,10 +7327,209 @@ export const recordIosHomeScreenConfirmed = async (input: RecordIosHomeScreenInp
     RETURNING id, ios_home_screen_confirmed_at, ios_home_screen_last_seen_at
   `;
 
+  const iosSubscriberId = Number(subscriberRows[0]?.id);
+  const iosConfirmedAt = subscriberRows[0]?.ios_home_screen_confirmed_at
+    ? String(subscriberRows[0].ios_home_screen_confirmed_at)
+    : null;
+  const iosLastSeenAt = subscriberRows[0]?.ios_home_screen_last_seen_at
+    ? String(subscriberRows[0].ios_home_screen_last_seen_at)
+    : null;
+
+  {
+    const { isD1AudienceWriteEnabled, d1MirrorSubscriber } = await import(
+      '@/lib/server/integrations/d1-audience'
+    );
+    if (isD1AudienceWriteEnabled()) {
+      await d1MirrorSubscriber({
+        id: iosSubscriberId,
+        shopDomain: input.shopDomain,
+        externalId: input.externalId,
+        browser: input.browser ?? null,
+        platform: input.platform ?? 'ios',
+        locale: input.locale ?? null,
+        country: input.country ?? null,
+        city: input.city ?? null,
+        deviceContext: serializedDeviceContext,
+        iosHomeScreenConfirmedAt: iosConfirmedAt,
+        iosHomeScreenLastSeenAt: iosLastSeenAt,
+      });
+    }
+  }
+
   return {
-    subscriberId: Number(subscriberRows[0]?.id),
-    confirmedAt: subscriberRows[0]?.ios_home_screen_confirmed_at ? String(subscriberRows[0].ios_home_screen_confirmed_at) : null,
-    lastSeenAt: subscriberRows[0]?.ios_home_screen_last_seen_at ? String(subscriberRows[0].ios_home_screen_last_seen_at) : null,
+    subscriberId: iosSubscriberId,
+    confirmedAt: iosConfirmedAt,
+    lastSeenAt: iosLastSeenAt,
+  };
+};
+
+/**
+ * Stage-1 backfill: copy existing Neon audience rows into the D1 mirror using
+ * id-keyed cursors so it is safe to call repeatedly / resume. One call processes
+ * up to `maxBatches` batches of `batchSize` rows for each table, then returns the
+ * cursors so the caller can continue where it left off.
+ */
+export const backfillAudienceToD1 = async (options?: {
+  batchSize?: number;
+  maxBatches?: number;
+  afterSubscriberId?: number;
+  afterTokenId?: number;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const {
+    isD1AudienceWriteEnabled,
+    d1BackfillSubscribers,
+    d1BackfillTokens,
+  } = await import('@/lib/server/integrations/d1-audience');
+
+  if (!isD1AudienceWriteEnabled()) {
+    throw new Error('D1_AUDIENCE_MODE is off — set it to dual_write (or read) before backfilling.');
+  }
+
+  const batchSize = Math.min(Math.max(options?.batchSize ?? 50, 1), 100);
+  const maxBatches = Math.min(Math.max(options?.maxBatches ?? 50, 1), 1000);
+
+  let subscriberCursor = Number(options?.afterSubscriberId ?? 0);
+  let tokenCursor = Number(options?.afterTokenId ?? 0);
+  let subscribersCopied = 0;
+  let tokensCopied = 0;
+  let subscribersDone = false;
+  let tokensDone = false;
+
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    if (subscribersDone && tokensDone) {
+      break;
+    }
+
+    if (!subscribersDone) {
+      const rows = await sql`
+        SELECT id, shop_domain, external_id, browser, platform, locale, country, city,
+               device_context, created_at, last_seen_at,
+               ios_home_screen_confirmed_at, ios_home_screen_last_seen_at
+        FROM subscribers
+        WHERE id > ${subscriberCursor}
+        ORDER BY id ASC
+        LIMIT ${batchSize}
+      `;
+      if (rows.length === 0) {
+        subscribersDone = true;
+      } else {
+        await d1BackfillSubscribers(
+          (rows as Array<Record<string, unknown>>).map((row) => ({
+            id: Number(row.id),
+            shop_domain: String(row.shop_domain),
+            external_id: String(row.external_id),
+            browser: row.browser == null ? null : String(row.browser),
+            platform: row.platform == null ? null : String(row.platform),
+            locale: row.locale == null ? null : String(row.locale),
+            country: row.country == null ? null : String(row.country),
+            city: row.city == null ? null : String(row.city),
+            device_context:
+              row.device_context == null
+                ? null
+                : typeof row.device_context === 'string'
+                  ? row.device_context
+                  : JSON.stringify(row.device_context),
+            created_at: row.created_at,
+            last_seen_at: row.last_seen_at,
+            ios_home_screen_confirmed_at: row.ios_home_screen_confirmed_at,
+            ios_home_screen_last_seen_at: row.ios_home_screen_last_seen_at,
+          })),
+        );
+        subscribersCopied += rows.length;
+        subscriberCursor = Number(rows[rows.length - 1]?.id ?? subscriberCursor);
+        if (rows.length < batchSize) {
+          subscribersDone = true;
+        }
+      }
+    }
+
+    if (!tokensDone) {
+      const rows = await sql`
+        SELECT id, shop_domain, subscriber_id, fcm_token, user_agent, status, token_type,
+               vapid_endpoint, vapid_p256dh, vapid_auth, created_at, updated_at, last_seen_at
+        FROM subscriber_tokens
+        WHERE id > ${tokenCursor}
+        ORDER BY id ASC
+        LIMIT ${batchSize}
+      `;
+      if (rows.length === 0) {
+        tokensDone = true;
+      } else {
+        await d1BackfillTokens(
+          (rows as Array<Record<string, unknown>>).map((row) => ({
+            id: Number(row.id),
+            shop_domain: String(row.shop_domain),
+            subscriber_id: Number(row.subscriber_id),
+            fcm_token: String(row.fcm_token),
+            user_agent: row.user_agent == null ? null : String(row.user_agent),
+            status: row.status == null ? 'active' : String(row.status),
+            token_type: row.token_type == null ? 'fcm' : String(row.token_type),
+            vapid_endpoint: row.vapid_endpoint == null ? null : String(row.vapid_endpoint),
+            vapid_p256dh: row.vapid_p256dh == null ? null : String(row.vapid_p256dh),
+            vapid_auth: row.vapid_auth == null ? null : String(row.vapid_auth),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            last_seen_at: row.last_seen_at,
+          })),
+        );
+        tokensCopied += rows.length;
+        tokenCursor = Number(rows[rows.length - 1]?.id ?? tokenCursor);
+        if (rows.length < batchSize) {
+          tokensDone = true;
+        }
+      }
+    }
+  }
+
+  return {
+    subscribersCopied,
+    tokensCopied,
+    nextSubscriberCursor: subscriberCursor,
+    nextTokenCursor: tokenCursor,
+    done: subscribersDone && tokensDone,
+  };
+};
+
+/**
+ * Stage-1 verification: compare Neon vs D1 row counts (overall or per-shop) so we
+ * can confirm parity before flipping reads to D1 (Stage 2).
+ */
+export const verifyAudienceD1Parity = async (shopDomain?: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const { d1CountSubscribers, d1CountTokens } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+
+  const [neonSubRows, neonTokRows] = await Promise.all([
+    shopDomain
+      ? sql`SELECT COUNT(*)::BIGINT AS count FROM subscribers WHERE shop_domain = ${shopDomain}`
+      : sql`SELECT COUNT(*)::BIGINT AS count FROM subscribers`,
+    shopDomain
+      ? sql`SELECT COUNT(*)::BIGINT AS count FROM subscriber_tokens WHERE shop_domain = ${shopDomain}`
+      : sql`SELECT COUNT(*)::BIGINT AS count FROM subscriber_tokens`,
+  ]);
+
+  const neonSubscribers = Number(neonSubRows[0]?.count ?? 0);
+  const neonTokens = Number(neonTokRows[0]?.count ?? 0);
+  const [d1Subscribers, d1Tokens] = await Promise.all([
+    d1CountSubscribers(shopDomain),
+    d1CountTokens(shopDomain),
+  ]);
+
+  return {
+    shopDomain: shopDomain ?? null,
+    neonSubscribers,
+    d1Subscribers,
+    subscribersMatch: neonSubscribers === d1Subscribers,
+    neonTokens,
+    d1Tokens,
+    tokensMatch: neonTokens === d1Tokens,
+    inSync: neonSubscribers === d1Subscribers && neonTokens === d1Tokens,
   };
 };
 
@@ -8446,6 +8680,16 @@ export const sendCampaign = async (
             WHERE id = ${tokenId}
           `;
         }
+        if (revokedTokenIds.length > 0) {
+          const { isD1AudienceWriteEnabled, d1UpdateTokenStatus } = await import(
+            '@/lib/server/integrations/d1-audience'
+          );
+          if (isD1AudienceWriteEnabled()) {
+            for (const tokenId of revokedTokenIds) {
+              await d1UpdateTokenStatus(Number(tokenId), 'revoked');
+            }
+          }
+        }
       }
 
       const vapidRevokedTokenIds: number[] = [];
@@ -8506,6 +8750,16 @@ export const sendCampaign = async (
           SET status = 'revoked', updated_at = NOW()
           WHERE id = ${tokenId}
         `;
+      }
+      if (vapidRevokedTokenIds.length > 0) {
+        const { isD1AudienceWriteEnabled, d1UpdateTokenStatus } = await import(
+          '@/lib/server/integrations/d1-audience'
+        );
+        if (isD1AudienceWriteEnabled()) {
+          for (const tokenId of vapidRevokedTokenIds) {
+            await d1UpdateTokenStatus(Number(tokenId), 'revoked');
+          }
+        }
       }
 
       processedRecipients += chunk.length;
@@ -8765,6 +9019,13 @@ export const markMerchantUninstalled = async (shopDomain: string) => {
     SET status = 'revoked', updated_at = NOW()
     WHERE shop_domain = ${shopDomain}
   `;
+
+  const { isD1AudienceWriteEnabled, d1RevokeAllTokensForShop } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  if (isD1AudienceWriteEnabled()) {
+    await d1RevokeAllTokensForShop(shopDomain);
+  }
 };
 
 export const getAttributionSettings = async (shopDomain: string) => {

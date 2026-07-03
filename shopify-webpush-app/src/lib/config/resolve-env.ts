@@ -67,6 +67,18 @@ const EnvSchema = z.object({
     .string()
     .default('false')
     .transform((value) => value.trim().toLowerCase() === 'true'),
+  // Staged migration of the audience (subscribers + subscriber_tokens) to D1.
+  //   off        -> Neon only (current behavior)
+  //   dual_write -> writes mirror to D1 (best-effort), reads stay on Neon
+  //   read       -> reads + writes use D1 as source of truth (Stage 2 cutover)
+  // Anything unrecognized is treated as 'off' for safety.
+  D1_AUDIENCE_MODE: z
+    .string()
+    .default('off')
+    .transform((value) => {
+      const normalized = value.trim().toLowerCase();
+      return normalized === 'dual_write' || normalized === 'read' ? normalized : 'off';
+    }),
   VAPID_PUBLIC_KEY: z.string().default(''),
   VAPID_PRIVATE_KEY: z.string().default(''),
   VAPID_SUBJECT: z.string().default('mailto:support@push-eagle.com'),
