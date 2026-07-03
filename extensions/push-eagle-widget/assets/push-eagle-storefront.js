@@ -949,18 +949,24 @@
     return cityPart.replace(/_/g, ' ');
   }
 
-  async function fetchServerGeo(appUrl, shopDomain) {
-    if (!appUrl || !shopDomain) {
+  function normalizeGeoCountry(value) {
+    var trimmed = String(value == null ? '' : value).trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (/^[a-z]{2}$/i.test(trimmed)) {
+      return trimmed.toUpperCase();
+    }
+    return trimmed;
+  }
+
+  async function fetchGeoFromOwnEndpoint(appUrl) {
+    if (!appUrl) {
       return { country: null, city: null };
     }
 
-    var cacheKey = String(appUrl) + '|' + String(shopDomain);
-    if (fetchServerGeo._cacheKey === cacheKey && fetchServerGeo._cache) {
-      return fetchServerGeo._cache;
-    }
-
     try {
-      var geoUrl = appUrl.replace(/\/$/, '') + '/api/storefront/geo?shop=' + encodeURIComponent(shopDomain);
+      var geoUrl = appUrl.replace(/\/$/, '') + '/api/storefront/geo';
       var response = await fetch(geoUrl, {
         method: 'GET',
         credentials: 'omit',
@@ -974,16 +980,66 @@
       }
 
       var data = await response.json();
-      var result = {
-        country: data && data.country ? String(data.country) : null,
-        city: data && data.city ? String(data.city) : null
+      return {
+        country: normalizeGeoCountry(data && data.country ? data.country : null),
+        city: data && data.city ? String(data.city).trim() || null : null
       };
-      fetchServerGeo._cache = result;
-      fetchServerGeo._cacheKey = cacheKey;
-      return result;
     } catch (_error) {
       return { country: null, city: null };
     }
+  }
+
+  async function fetchGeoFromPublicApi() {
+    // Free, keyless, HTTPS IP-geo lookup used only as a fallback when our own
+    // endpoint can't see the visitor IP (e.g. request relayed via app proxy).
+    try {
+      var response = await fetch('https://get.geojs.io/v1/ip/geo.json', {
+        method: 'GET',
+        credentials: 'omit',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        return { country: null, city: null };
+      }
+
+      var data = await response.json();
+      return {
+        country: normalizeGeoCountry(data && data.country_code ? data.country_code : null),
+        city: data && data.city ? String(data.city).trim() || null : null
+      };
+    } catch (_error) {
+      return { country: null, city: null };
+    }
+  }
+
+  var __peGeoCache = null;
+  var __peGeoPromise = null;
+
+  async function resolveVisitorGeo(appUrl) {
+    if (__peGeoCache) {
+      return __peGeoCache;
+    }
+    if (__peGeoPromise) {
+      return __peGeoPromise;
+    }
+
+    __peGeoPromise = (async function () {
+      var geo = await fetchGeoFromOwnEndpoint(appUrl);
+      if (!geo.country || !geo.city) {
+        var fallback = await fetchGeoFromPublicApi();
+        geo = {
+          country: geo.country || fallback.country,
+          city: geo.city || fallback.city
+        };
+      }
+      __peGeoCache = geo;
+      return geo;
+    })();
+
+    return __peGeoPromise;
   }
 
   async function getBrowserGeoHints() {
@@ -1983,6 +2039,19 @@
         };
       }
 
+      // Resolve the visitor's real city/country from their own IP before saving.
+      // This is done client-side so it stays correct even when the token save is
+      // relayed through the Shopify app proxy (which would otherwise hide the IP).
+      var visitorGeo = await resolveVisitorGeo(runtimeConfig.appUrl);
+      var resolvedCountry = visitorGeo.country
+        || (clientProfile && clientProfile.country ? clientProfile.country : null);
+      var resolvedCity = visitorGeo.city
+        || (clientProfile && clientProfile.city ? clientProfile.city : null);
+      if (clientProfile) {
+        clientProfile.country = resolvedCountry;
+        clientProfile.city = resolvedCity;
+      }
+
       var payload = {
         shopDomain: boot.shopDomain,
         externalId: boot.externalId,
@@ -1995,8 +2064,8 @@
         browser: clientProfile && clientProfile.browserName ? clientProfile.browserName : detectBrowser(),
         platform: clientProfile && clientProfile.osName ? clientProfile.osName : detectPlatform(),
         locale: clientProfile && clientProfile.language ? clientProfile.language : navigator.language,
-        country: clientProfile && clientProfile.country ? clientProfile.country : null,
-        city: clientProfile && clientProfile.city ? clientProfile.city : null,
+        country: resolvedCountry,
+        city: resolvedCity,
         deviceContext: Object.assign({}, serializeClientProfile(clientProfile) || {}, {
           clientId: boot.clientId || null
         })
@@ -2020,26 +2089,6 @@
 
       for (var endpointIndex = 0; endpointIndex < tokenEndpoints.length; endpointIndex += 1) {
         var endpoint = tokenEndpoints[endpointIndex];
-
-        // App proxy hides the visitor IP — attach geo from a direct lookup only when needed.
-        if (
-          endpointIndex > 0
-          && runtimeConfig.appUrl
-          && boot.shopDomain
-          && (!payload.country || !payload.city)
-        ) {
-          var serverGeo = await fetchServerGeo(runtimeConfig.appUrl, boot.shopDomain);
-          if (serverGeo.country) {
-            payload.country = serverGeo.country;
-          }
-          if (serverGeo.city) {
-            payload.city = serverGeo.city;
-          }
-          if (clientProfile) {
-            clientProfile.country = payload.country || clientProfile.country;
-            clientProfile.city = payload.city || clientProfile.city;
-          }
-        }
 
         try {
           var tokenResponse = await fetch(endpoint, {

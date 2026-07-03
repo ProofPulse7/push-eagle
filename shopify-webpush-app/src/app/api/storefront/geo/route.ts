@@ -1,18 +1,20 @@
 import { NextResponse } from 'next/server';
 
+import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { getRequestGeo } from '@/lib/server/request-geo';
-import { parseShopDomain } from '@/lib/server/shop-context';
-import { verifyStorefrontBootstrapRequest } from '@/lib/server/storefront-request-auth';
 
 export const runtime = 'nodejs';
 
+// Geo is coarse (city/country of the caller's own IP) and non-sensitive, so we
+// echo any storefront origin back to make it work on custom domains too.
 function addCorsHeaders(response: NextResponse, requestOrigin: string | null) {
-  if (requestOrigin && /^https:\/\/[a-z0-9-]+\.myshopify\.com$/i.test(requestOrigin)) {
+  if (requestOrigin && /^https:\/\/[a-z0-9.-]+$/i.test(requestOrigin)) {
     response.headers.set('Access-Control-Allow-Origin', requestOrigin);
-    response.headers.set('Access-Control-Allow-Credentials', 'true');
     response.headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
     response.headers.set('Access-Control-Allow-Headers', 'cache-control, content-type');
     response.headers.set('Vary', 'Origin');
+  } else {
+    response.headers.set('Access-Control-Allow-Origin', '*');
   }
   return response;
 }
@@ -29,25 +31,24 @@ export async function GET(request: Request) {
 
   try {
     const url = new URL(request.url);
-    const shopDomain = parseShopDomain(url.searchParams.get('shop'));
 
-    const auth = await verifyStorefrontBootstrapRequest(request, shopDomain);
-    if (!auth.ok) {
-      const errResponse = NextResponse.json(
-        { ok: false, error: 'Unauthorized storefront geo request.' },
-        { status: 401 },
-      );
+    // If a proxy signature is present, reject invalid ones; otherwise this is a
+    // direct browser lookup which is allowed (returns only the caller's own geo).
+    if (url.searchParams.has('signature') && !verifyShopifyAppProxySignature(url.searchParams)) {
+      const errResponse = NextResponse.json({ ok: false, error: 'Invalid signature.' }, { status: 401 });
       addCorsHeaders(errResponse, origin);
       return errResponse;
     }
 
     const geo = getRequestGeo(request);
-    const response = NextResponse.json({
-      ok: true,
-      shopDomain,
-      country: geo.country,
-      city: geo.city,
-    });
+    const response = NextResponse.json(
+      {
+        ok: true,
+        country: geo.country,
+        city: geo.city,
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
     addCorsHeaders(response, origin);
     return response;
   } catch (error) {

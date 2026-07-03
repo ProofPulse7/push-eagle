@@ -40,15 +40,9 @@ export const resolveSubscriberGeo = (request: Request, body: GeoInput) => {
     body.city ?? (typeof body.deviceContext?.city === 'string' ? body.deviceContext.city : null),
   );
 
-  // Direct browser requests to Vercel include the visitor IP geo headers.
-  if (!viaProxy && requestGeo.country) {
-    return {
-      country: normalizeCountry(requestGeo.country),
-      city: normalizeCity(requestGeo.city) ?? clientCity,
-    };
-  }
-
-  // App proxy requests come from Shopify servers — use geo fetched client-side from our geo API.
+  // The storefront resolves the visitor's geo from their own IP (our geo endpoint
+  // or a keyless public fallback), so a client-provided country is trustworthy and
+  // stays correct even when the token save is relayed through the Shopify app proxy.
   if (clientCountry) {
     return {
       country: clientCountry,
@@ -56,8 +50,17 @@ export const resolveSubscriberGeo = (request: Request, body: GeoInput) => {
     };
   }
 
+  // Direct browser requests to Vercel expose the visitor IP geo headers. Proxy
+  // requests carry Shopify's server IP, so we must not trust those headers there.
+  if (!viaProxy && requestGeo.country) {
+    return {
+      country: normalizeCountry(requestGeo.country),
+      city: normalizeCity(requestGeo.city) ?? clientCity,
+    };
+  }
+
   return {
-    country: normalizeCountry(requestGeo.country),
-    city: normalizeCity(requestGeo.city),
+    country: null,
+    city: null,
   };
 };
