@@ -5973,25 +5973,40 @@ export const upsertShopifyProductVariants = async (input: UpsertShopifyProductVa
   const sql = getNeonSql();
   await ensureMerchant(input.shopDomain);
 
-  const variantIds = input.variants.map((variant) => variant.variantId);
-  const existingRows = variantIds.length
-    ? await sql`
-      SELECT variant_id, price_cents, compare_at_price_cents, available
-      FROM shopify_product_variants
-      WHERE shop_domain = ${input.shopDomain}
-        AND variant_id = ANY(${variantIds})
-    `
-    : [];
-
-  const existingByVariantId = new Map(
-    existingRows.map((row) => [String(row.variant_id), {
-      priceCents: row.price_cents == null ? null : Number(row.price_cents),
-      compareAtPriceCents: row.compare_at_price_cents == null ? null : Number(row.compare_at_price_cents),
-      available: row.available == null ? null : Number(row.available),
-    }]),
+  const { isD1CatalogEnabled, d1GetExistingVariants, d1UpsertVariant } = await import(
+    '@/lib/server/integrations/d1-catalog'
   );
+  const useD1Catalog = isD1CatalogEnabled();
+
+  const variantIds = input.variants.map((variant) => variant.variantId);
+
+  // Shared shape ({ priceCents, compareAtPriceCents, available }) regardless of
+  // backing store so the price-drop detection below is identical either way.
+  type ExistingVariantInfo = {
+    priceCents: number | null;
+    compareAtPriceCents: number | null;
+    available: number | null;
+  };
+  const existingByVariantId: Map<string, ExistingVariantInfo> = useD1Catalog
+    ? await d1GetExistingVariants(input.shopDomain, variantIds)
+    : new Map(
+        ((variantIds.length
+          ? await sql`
+            SELECT variant_id, price_cents, compare_at_price_cents, available
+            FROM shopify_product_variants
+            WHERE shop_domain = ${input.shopDomain}
+              AND variant_id = ANY(${variantIds})
+          `
+          : []) as Array<Record<string, unknown>>
+        ).map((row) => [String(row.variant_id), {
+          priceCents: row.price_cents == null ? null : Number(row.price_cents),
+          compareAtPriceCents: row.compare_at_price_cents == null ? null : Number(row.compare_at_price_cents),
+          available: row.available == null ? null : Number(row.available),
+        }] as [string, ExistingVariantInfo]),
+      );
 
   const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
+  const nowIso = new Date().toISOString();
   const priceDropCandidates = [] as string[];
 
   for (const variant of input.variants) {
@@ -6003,6 +6018,25 @@ export const upsertShopifyProductVariants = async (input: UpsertShopifyProductVa
       && variant.priceCents < existing.priceCents
     ) {
       priceDropCandidates.push(variant.variantId);
+    }
+
+    if (useD1Catalog) {
+      await d1UpsertVariant({
+        shopDomain: input.shopDomain,
+        productId: input.productId,
+        variantId: variant.variantId,
+        inventoryItemId: variant.inventoryItemId ?? null,
+        productTitle: input.productTitle ?? null,
+        variantTitle: variant.variantTitle ?? null,
+        handle: input.handle ?? null,
+        imageUrl: input.imageUrl ?? null,
+        priceCents: variant.priceCents ?? null,
+        compareAtPriceCents: variant.compareAtPriceCents ?? null,
+        available: existing?.available ?? null,
+        updatedAtIso: updatedAt.toISOString(),
+        lastSeenAtIso: nowIso,
+      });
+      continue;
     }
 
     await sql`
@@ -6081,38 +6115,65 @@ export const processInventoryLevelUpdate = async (input: ProcessInventoryLevelUp
   const sql = getNeonSql();
   await ensureMerchant(input.shopDomain);
 
-  const rows = await sql`
-    SELECT variant_id, product_id, product_title, handle, available
-    FROM shopify_product_variants
-    WHERE shop_domain = ${input.shopDomain}
-      AND inventory_item_id = ${input.inventoryItemId}
-  `;
+  const {
+    isD1CatalogEnabled,
+    d1GetVariantsByInventoryItem,
+    d1UpdateVariantAvailabilityByInventoryItem,
+  } = await import('@/lib/server/integrations/d1-catalog');
+  const useD1Catalog = isD1CatalogEnabled();
 
-  if (rows.length === 0) {
+  const variantRows = useD1Catalog
+    ? await d1GetVariantsByInventoryItem(input.shopDomain, input.inventoryItemId)
+    : ((
+        await sql`
+          SELECT variant_id, product_id, product_title, handle, available
+          FROM shopify_product_variants
+          WHERE shop_domain = ${input.shopDomain}
+            AND inventory_item_id = ${input.inventoryItemId}
+        `
+      ) as Array<Record<string, unknown>>).map((row) => ({
+        variantId: String(row.variant_id),
+        productId: String(row.product_id),
+        productTitle: row.product_title ? String(row.product_title) : null,
+        handle: row.handle ? String(row.handle) : null,
+        available: row.available == null ? null : Number(row.available),
+      }));
+
+  if (variantRows.length === 0) {
     return;
   }
 
   const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
   const backInStockCandidates = [] as Array<{ productId: string; variantId: string; productTitle: string | null; handle: string | null }>;
 
-  for (const row of rows) {
+  for (const row of variantRows) {
     const previousAvailable = row.available == null ? null : Number(row.available);
     if ((previousAvailable == null || previousAvailable <= 0) && (input.available ?? 0) > 0) {
       backInStockCandidates.push({
-        productId: String(row.product_id),
-        variantId: String(row.variant_id),
-        productTitle: row.product_title ? String(row.product_title) : null,
-        handle: row.handle ? String(row.handle) : null,
+        productId: row.productId,
+        variantId: row.variantId,
+        productTitle: row.productTitle,
+        handle: row.handle,
       });
     }
   }
 
-  await sql`
-    UPDATE shopify_product_variants
-    SET available = ${input.available}, updated_at = ${updatedAt}, last_seen_at = NOW()
-    WHERE shop_domain = ${input.shopDomain}
-      AND inventory_item_id = ${input.inventoryItemId}
-  `;
+  if (useD1Catalog) {
+    await d1UpdateVariantAvailabilityByInventoryItem({
+      shopDomain: input.shopDomain,
+      inventoryItemId: input.inventoryItemId,
+      available: input.available ?? null,
+      updatedAtIso: updatedAt.toISOString(),
+      lastSeenAtIso: new Date().toISOString(),
+    });
+  } else {
+    await sql`
+      UPDATE shopify_product_variants
+      SET available = ${input.available}, updated_at = ${updatedAt}, last_seen_at = NOW()
+      WHERE shop_domain = ${input.shopDomain}
+        AND inventory_item_id = ${input.inventoryItemId}
+    `;
+  }
 
   const backInStockRule = await getRuleConfig(input.shopDomain, 'back_in_stock');
   if (!backInStockRule.enabled || backInStockCandidates.length === 0) {

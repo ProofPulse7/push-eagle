@@ -55,6 +55,12 @@ const EnvSchema = z.object({
     .string()
     .default('false')
     .transform((value) => value.trim().toLowerCase() === 'true'),
+  // Explicit opt-in (unlike D1_EVENTS_ENABLED, this never auto-enables from creds)
+  // so the catalog->D1 code ships dormant and is only activated after validation.
+  D1_CATALOG_ENABLED: z
+    .string()
+    .default('false')
+    .transform((value) => value.trim().toLowerCase() === 'true'),
   VAPID_PUBLIC_KEY: z.string().default(''),
   VAPID_PRIVATE_KEY: z.string().default(''),
   VAPID_SUBJECT: z.string().default('mailto:support@push-eagle.com'),
