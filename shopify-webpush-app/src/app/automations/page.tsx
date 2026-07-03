@@ -297,8 +297,8 @@ export default function AutomationsPage() {
     return (
         <PageLoadingShell
             title="Automations"
+            hasData={Boolean(effectiveOverview) || Boolean(loadError)}
             isLoading={statsLoading}
-            hasData={Boolean(activeShopDomain) || Boolean(effectiveOverview) || Boolean(loadError)}
             isFetching={showStatsRefresh}
             error={loadError}
         >

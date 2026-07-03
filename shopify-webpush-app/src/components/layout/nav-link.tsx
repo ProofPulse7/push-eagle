@@ -2,7 +2,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import type { LucideIcon } from 'lucide-react';
@@ -11,6 +11,7 @@ import { useShopDomain } from '@/hooks/use-shop-domain';
 
 export function NavLink({ href, icon: Icon, children }: { href: string; icon: LucideIcon; children: React.ReactNode; }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const shopDomain = useShopDomain();
 
@@ -22,10 +23,9 @@ export function NavLink({ href, icon: Icon, children }: { href: string; icon: Lu
       isActive = false;
   }
 
-  const currentParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
   const preservedParams = new URLSearchParams();
-  const shop = currentParams.get('shop');
-  const host = currentParams.get('host');
+  const shop = searchParams.get('shop');
+  const host = searchParams.get('host');
   if (shop) {
     preservedParams.set('shop', shop);
   }

@@ -9,25 +9,34 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { useDashboardSummary } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { BASIC_PLAN } from '@/lib/client/billing-plans';
 import { appendFreshCampaignWizardParam } from '@/lib/client/campaign-wizard-fresh';
+import { queryKeys } from '@/lib/client/query-keys';
 import { formatCurrency } from '@/lib/utils';
+import { useQueryClient } from '@tanstack/react-query';
 
 export function DashboardView() {
   const shopDomain = useShopDomain();
+  const queryClient = useQueryClient();
+  const cachedData = shopDomain ? queryClient.getQueryData(queryKeys.dashboardSummary(shopDomain)) : undefined;
   const { atLimit } = useImpressionLimit();
   const { data, isLoading, isError, error } = useDashboardSummary();
+  const effectiveData = data ?? cachedData;
 
-  const overview = (data?.overview ?? {}) as Record<string, unknown>;
-  const campaignStatsRaw = (data?.campaignStats ?? {}) as Record<string, unknown>;
+  const overview = (effectiveData?.overview ?? {}) as Record<string, unknown>;
+  const campaignStatsRaw = (effectiveData?.campaignStats ?? {}) as Record<string, unknown>;
   const campaignStats = (campaignStatsRaw.stats ?? campaignStatsRaw) as Record<string, unknown>;
-  const subscriberKpis = (data?.subscriberKpis ?? {}) as Record<string, unknown>;
-  const billing = (data?.billing ?? {}) as Record<string, unknown>;
+  const subscriberKpis = (effectiveData?.subscriberKpis ?? {}) as Record<string, unknown>;
+  const billing = (effectiveData?.billing ?? {}) as Record<string, unknown>;
 
-  const revenueCents = Number(campaignStats.revenueCents ?? 0);
+  const automationTotals = (effectiveData?.automationTotals ?? {}) as Record<string, unknown>;
+  const campaignRevenueCents = Number(campaignStats.revenueCents ?? 0);
+  const automationRevenueCents = Number(automationTotals.revenueCents ?? 0);
+  const revenueCents = campaignRevenueCents + automationRevenueCents;
   const impressionsUsed = Number(billing.impressionsUsed ?? campaignStats.impressions ?? 0);
   const impressionLimit = Number(billing.impressionLimit ?? BASIC_PLAN.impressions);
   const impressionsRemaining = Math.max(0, impressionLimit - impressionsUsed);
@@ -36,7 +45,8 @@ export function DashboardView() {
   );
   const campaignsSent = Number(campaignStats.sentCount ?? campaignStats.sent ?? overview.campaignCount ?? 0);
   const growthPercent = Number(subscriberKpis.growthPercent ?? 0);
-  const showValueSkeleton = isLoading && !data;
+  const showValueSkeleton = isLoading && !effectiveData;
+  const showInitialLoad = Boolean(shopDomain) && isLoading && !effectiveData;
 
   const statCards = [
     {
@@ -70,6 +80,12 @@ export function DashboardView() {
   ];
 
   return (
+    <PageLoadingShell
+      title="Dashboard"
+      isLoading={showInitialLoad}
+      hasData={Boolean(effectiveData) || !shopDomain || (isError && !effectiveData)}
+      isFetching={isLoading && Boolean(effectiveData)}
+    >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-6 bg-background">
       {!shopDomain ? (
         <Alert>
@@ -82,7 +98,7 @@ export function DashboardView() {
 
       {shopDomain ? <ThemeExtensionWarningBanner /> : null}
 
-      {isError && !data ? (
+      {isError && !effectiveData ? (
         <Alert variant="destructive">
           <AlertTitle>Error loading dashboard</AlertTitle>
           <AlertDescription>
@@ -137,5 +153,6 @@ export function DashboardView() {
 
       <SubscriberGrowthChart fullWidth defaultDays={30} />
     </div>
+    </PageLoadingShell>
   );
 }

@@ -34,7 +34,7 @@ export default function CampaignsPage() {
     : null;
   const showInitialLoad = Boolean(shop) && isLoading && !effectiveData;
   const showSessionWarning = !shop && !isLoading;
-  const hasCachedOrLiveData = Boolean(effectiveData) || Boolean(shop);
+  const hasCachedOrLiveData = Boolean(effectiveData);
 
   return (
     <PageLoadingShell

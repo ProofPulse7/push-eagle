@@ -1,8 +1,10 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { RoutePageSkeleton } from '@/components/layout/page-loading-shell';
 import { TopLoadingBar } from '@/components/ui/top-loading-bar';
 import { cn } from '@/lib/utils';
 
@@ -66,9 +68,19 @@ type PageLoadingViewProps = {
   title: string;
   description?: string;
   className?: string;
+  pathname?: string;
 };
 
-export function PageLoadingView({ title, description, className }: PageLoadingViewProps) {
+export function PageLoadingView({ title, description, className, pathname }: PageLoadingViewProps) {
+  if (pathname) {
+    return (
+      <div className={className}>
+        <RoutePageSkeleton pathname={pathname} />
+        <span className="sr-only">Loading {title}</span>
+      </div>
+    );
+  }
+
   return (
     <div className={cn('px-4 py-6 sm:px-6 md:px-8 md:py-8', className)}>
       <div className="mb-8 space-y-2">
@@ -109,6 +121,7 @@ type PageLoadingShellProps = {
   hasData: boolean;
   isFetching?: boolean;
   error?: string | null;
+  pathname?: string;
   children: React.ReactNode;
 };
 
@@ -119,10 +132,20 @@ export function PageLoadingShell({
   hasData,
   isFetching = false,
   error,
+  pathname,
   children,
 }: PageLoadingShellProps) {
+  const currentPathname = usePathname();
+  const skeletonPath = pathname ?? currentPathname;
+
   if (!hasData && isLoading) {
-    return <PageLoadingView title={title} description={description} />;
+    return (
+      <PageLoadingView
+        title={title}
+        description={description}
+        pathname={skeletonPath}
+      />
+    );
   }
 
   return (

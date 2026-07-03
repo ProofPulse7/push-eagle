@@ -309,7 +309,7 @@ export function PlansPageContent() {
   );
 
   return (
-    <div className="mx-auto flex min-h-0 flex-1 flex-col gap-5 px-4 py-5 pe-page-enter sm:px-6 lg:max-w-6xl lg:px-8">
+    <div className="mx-auto flex min-h-0 flex-1 flex-col gap-5 px-4 py-5 sm:px-6 lg:max-w-6xl lg:px-8">
       <div className="shrink-0">
         <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Plans</h1>
         <p className="mt-1 text-sm text-muted-foreground md:text-base">

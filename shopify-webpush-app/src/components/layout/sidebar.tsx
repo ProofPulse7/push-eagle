@@ -2,6 +2,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   LayoutGrid,
   Send,
@@ -32,10 +33,10 @@ const NavLogo = (props: React.SVGProps<SVGSVGElement>) => (
 
 export function Sidebar() {
     const { atLimit } = useImpressionLimit();
-    const currentParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+    const searchParams = useSearchParams();
     const preservedParams = new URLSearchParams();
-    const shop = currentParams.get('shop');
-    const host = currentParams.get('host');
+    const shop = searchParams.get('shop');
+    const host = searchParams.get('host');
     if (shop) {
         preservedParams.set('shop', shop);
     }

@@ -24,10 +24,16 @@ export function SettingsCacheSync() {
   const { data: branding } = useBrandingSettings();
   const { data: attribution } = useAttributionSettings();
   const {
-    setStoreUrl,
-    setLogo,
-    setShopDomain,
     storeUrl,
+    setStoreUrl,
+    logo,
+    setLogo,
+    shopDomain,
+    setShopDomain,
+    attributionModel,
+    attributionCreditMode,
+    clickWindowDays,
+    impressionWindowDays,
     setAttributionModel,
     setAttributionCreditMode,
     setClickWindowDays,
@@ -35,10 +41,10 @@ export function SettingsCacheSync() {
   } = useSettings();
 
   useEffect(() => {
-    if (shop) {
+    if (shop && shop !== shopDomain) {
       setShopDomain(shop);
     }
-  }, [shop, setShopDomain]);
+  }, [shop, shopDomain, setShopDomain]);
 
   useEffect(() => {
     if (!shop) {
@@ -61,7 +67,7 @@ export function SettingsCacheSync() {
       primaryDomain: String(overview.primaryDomain ?? overview.primary_domain ?? ''),
     });
 
-    if (nextStoreUrl) {
+    if (nextStoreUrl && nextStoreUrl !== storeUrl) {
       setStoreUrl(nextStoreUrl);
     }
 
@@ -70,7 +76,7 @@ export function SettingsCacheSync() {
       setMerchantDisplayFormat(currencyCode);
       writeCachedMerchantCurrency(shop, currencyCode);
     }
-  }, [overview, setStoreUrl, shop]);
+  }, [overview, setStoreUrl, shop, storeUrl]);
 
   useEffect(() => {
     if (!branding) {
@@ -78,10 +84,10 @@ export function SettingsCacheSync() {
     }
 
     const logoUrl = String(branding.logoUrl ?? '').trim();
-    if (logoUrl) {
+    if (logoUrl && logo.preview !== logoUrl) {
       setLogo({ file: null, preview: logoUrl });
     }
-  }, [branding, setLogo]);
+  }, [branding, logo.preview, setLogo]);
 
   useEffect(() => {
     if (!shop || !attribution) {
@@ -90,26 +96,33 @@ export function SettingsCacheSync() {
 
     const merged = mergePendingSettings(shop, 'attribution', attribution);
     const model = String(merged.attributionModel ?? '');
-    if (model === 'click' || model === 'impression') {
+    if ((model === 'click' || model === 'impression') && model !== attributionModel) {
       setAttributionModel(model);
     }
 
     const creditMode = String(merged.attributionCreditMode ?? '');
-    if (creditMode === 'last_touch' || creditMode === 'all_touches') {
+    if (
+      (creditMode === 'last_touch' || creditMode === 'all_touches')
+      && creditMode !== attributionCreditMode
+    ) {
       setAttributionCreditMode(creditMode);
     }
 
     const clickDays = Number(merged.clickWindowDays);
-    if (Number.isFinite(clickDays) && clickDays > 0) {
+    if (Number.isFinite(clickDays) && clickDays > 0 && clickDays !== clickWindowDays) {
       setClickWindowDays(clickDays);
     }
 
     const impressionDays = Number(merged.impressionWindowDays);
-    if (Number.isFinite(impressionDays) && impressionDays > 0) {
+    if (Number.isFinite(impressionDays) && impressionDays > 0 && impressionDays !== impressionWindowDays) {
       setImpressionWindowDays(impressionDays);
     }
   }, [
     attribution,
+    attributionCreditMode,
+    attributionModel,
+    clickWindowDays,
+    impressionWindowDays,
     shop,
     setAttributionCreditMode,
     setAttributionModel,

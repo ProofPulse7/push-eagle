@@ -2,6 +2,8 @@
 
 import { usePathname } from 'next/navigation';
 import { AppLegalFooter } from './app-legal-footer';
+import { GlobalLoadingProvider } from '@/components/providers/global-loading-provider';
+import { MainRouteContent } from './main-route-content';
 import { Sidebar } from './sidebar';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
@@ -20,14 +22,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen w-full bg-background">
-      <Sidebar />
-      <div className="flex min-h-screen flex-col bg-background md:pl-64">
-        <main className="flex-grow bg-background pe-page-enter">
-          {children}
-          <AppLegalFooter />
-        </main>
+    <GlobalLoadingProvider>
+      <div className="min-h-screen w-full bg-background">
+        <Sidebar />
+        <div className="flex min-h-screen flex-col bg-background md:pl-64">
+          <main className="flex flex-1 flex-col bg-background">
+            <MainRouteContent>{children}</MainRouteContent>
+            <AppLegalFooter />
+          </main>
+        </div>
       </div>
-    </div>
+    </GlobalLoadingProvider>
   );
 }

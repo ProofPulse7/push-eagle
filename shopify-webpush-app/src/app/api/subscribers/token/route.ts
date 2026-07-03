@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { getRequestGeo } from '@/lib/server/request-geo';
+import { resolveSubscriberGeo } from '@/lib/server/resolve-subscriber-geo';
 import { upsertSubscriberToken } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
-    const requestGeo = getRequestGeo(request);
+    const { country, city } = resolveSubscriberGeo(request, body);
     const userAgent = body.userAgent ?? request.headers.get('user-agent');
     const externalId = body.externalId?.trim()
       ? body.externalId.trim()
@@ -70,8 +70,8 @@ export async function POST(request: Request) {
       browser: body.browser ?? detectBrowserFromUserAgent(userAgent),
       platform: body.platform ?? detectPlatformFromUserAgent(userAgent),
       locale: body.locale,
-      country: body.country ?? requestGeo.country,
-      city: body.city ?? requestGeo.city,
+      country,
+      city,
       userAgent,
     });
 

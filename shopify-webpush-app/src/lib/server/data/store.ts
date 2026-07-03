@@ -6814,7 +6814,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
       browser = EXCLUDED.browser,
       platform = EXCLUDED.platform,
       locale = EXCLUDED.locale,
-      country = EXCLUDED.country,
+      country = COALESCE(NULLIF(EXCLUDED.country, ''), subscribers.country),
       city = COALESCE(EXCLUDED.city, subscribers.city),
       device_context = COALESCE(EXCLUDED.device_context, subscribers.device_context),
       last_seen_at = NOW()

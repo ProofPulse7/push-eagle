@@ -50,3 +50,6 @@ firestore-debug.log
 
 # cloudflare local dev
 cloudflare-cron/.wrangler/
+
+.vercel
+.env*

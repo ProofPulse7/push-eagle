@@ -949,25 +949,45 @@
     return cityPart.replace(/_/g, ' ');
   }
 
+  async function fetchServerGeo(appUrl, shopDomain) {
+    if (!appUrl || !shopDomain) {
+      return { country: null, city: null };
+    }
+
+    var cacheKey = String(appUrl) + '|' + String(shopDomain);
+    if (fetchServerGeo._cacheKey === cacheKey && fetchServerGeo._cache) {
+      return fetchServerGeo._cache;
+    }
+
+    try {
+      var geoUrl = appUrl.replace(/\/$/, '') + '/api/storefront/geo?shop=' + encodeURIComponent(shopDomain);
+      var response = await fetch(geoUrl, {
+        method: 'GET',
+        credentials: 'omit',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        return { country: null, city: null };
+      }
+
+      var data = await response.json();
+      var result = {
+        country: data && data.country ? String(data.country) : null,
+        city: data && data.city ? String(data.city) : null
+      };
+      fetchServerGeo._cache = result;
+      fetchServerGeo._cacheKey = cacheKey;
+      return result;
+    } catch (_error) {
+      return { country: null, city: null };
+    }
+  }
+
   async function getBrowserGeoHints() {
     var timezone = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || null;
-    var localeCandidates = [];
-    if (Array.isArray(navigator.languages)) {
-      localeCandidates = navigator.languages.slice(0, 5);
-    }
-    if (navigator.language) {
-      localeCandidates.push(navigator.language);
-    }
-
-    var country = null;
-    for (var localeIndex = 0; localeIndex < localeCandidates.length; localeIndex += 1) {
-      country = extractCountryFromLocale(localeCandidates[localeIndex]);
-      if (country) {
-        break;
-      }
-    }
-
-    var city = deriveCityFromTimezone(timezone);
     var geolocationPermission = null;
 
     try {
@@ -980,8 +1000,8 @@
     }
 
     return {
-      country: country,
-      city: city,
+      country: null,
+      city: null,
       geolocationPermission: geolocationPermission,
       timezone: timezone
     };
@@ -1084,7 +1104,7 @@
     }
   }
 
-  async function buildClientProfile(root, boot) {
+  async function buildClientProfile(root, boot, runtimeConfig) {
     var ua = navigator.userAgent || '';
     var uaData = await getUserAgentDataDetails();
     var uaBrowser = detectBrowserFromUserAgent(ua);
@@ -1128,7 +1148,7 @@
       language: navigator.language || shopifyContext.locale || null,
       languages: Array.isArray(navigator.languages) ? navigator.languages.slice(0, 5) : [],
       timezone: geoHints.timezone,
-      country: geoHints.country || shopifyContext.country || null,
+      country: geoHints.country || null,
       city: geoHints.city || null,
       geolocationPermission: geoHints.geolocationPermission,
       maxTouchPoints: Number(navigator.maxTouchPoints || 0),
@@ -1975,7 +1995,7 @@
         browser: clientProfile && clientProfile.browserName ? clientProfile.browserName : detectBrowser(),
         platform: clientProfile && clientProfile.osName ? clientProfile.osName : detectPlatform(),
         locale: clientProfile && clientProfile.language ? clientProfile.language : navigator.language,
-        country: clientProfile && clientProfile.country ? clientProfile.country : (clientProfile && clientProfile.shopifyCountry ? clientProfile.shopifyCountry : null),
+        country: clientProfile && clientProfile.country ? clientProfile.country : null,
         city: clientProfile && clientProfile.city ? clientProfile.city : null,
         deviceContext: Object.assign({}, serializeClientProfile(clientProfile) || {}, {
           clientId: boot.clientId || null
@@ -1988,20 +2008,11 @@
         : '';
       var tokenEndpoints = [];
 
-      if (boot.bootstrapSource === 'proxy') {
-        if (primaryTokenEndpoint) {
-          tokenEndpoints.push(primaryTokenEndpoint);
-        }
-        if (directTokenEndpoint && tokenEndpoints.indexOf(directTokenEndpoint) === -1) {
-          tokenEndpoints.push(directTokenEndpoint);
-        }
-      } else {
-        if (directTokenEndpoint) {
-          tokenEndpoints.push(directTokenEndpoint);
-        }
-        if (primaryTokenEndpoint && tokenEndpoints.indexOf(primaryTokenEndpoint) === -1) {
-          tokenEndpoints.push(primaryTokenEndpoint);
-        }
+      if (directTokenEndpoint) {
+        tokenEndpoints.push(directTokenEndpoint);
+      }
+      if (primaryTokenEndpoint && tokenEndpoints.indexOf(primaryTokenEndpoint) === -1) {
+        tokenEndpoints.push(primaryTokenEndpoint);
       }
 
       var tokenSaved = false;
@@ -2009,6 +2020,26 @@
 
       for (var endpointIndex = 0; endpointIndex < tokenEndpoints.length; endpointIndex += 1) {
         var endpoint = tokenEndpoints[endpointIndex];
+
+        // App proxy hides the visitor IP — attach geo from a direct lookup only when needed.
+        if (
+          endpointIndex > 0
+          && runtimeConfig.appUrl
+          && boot.shopDomain
+          && (!payload.country || !payload.city)
+        ) {
+          var serverGeo = await fetchServerGeo(runtimeConfig.appUrl, boot.shopDomain);
+          if (serverGeo.country) {
+            payload.country = serverGeo.country;
+          }
+          if (serverGeo.city) {
+            payload.city = serverGeo.city;
+          }
+          if (clientProfile) {
+            clientProfile.country = payload.country || clientProfile.country;
+            clientProfile.city = payload.city || clientProfile.city;
+          }
+        }
 
         try {
           var tokenResponse = await fetch(endpoint, {
@@ -2235,7 +2266,7 @@
         referrer: document.referrer || null
       });
     }
-    var clientProfile = await buildClientProfile(root, boot);
+    var clientProfile = await buildClientProfile(root, boot, config);
     applyOptInSettings(root, config, boot);
 
     var settings = config.resolvedOptIn || getResolvedOptInSettings(boot);

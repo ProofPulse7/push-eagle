@@ -8,6 +8,7 @@ export type DashboardSummaryPayload = {
   campaignStats: Record<string, unknown>;
   subscriberKpis: Record<string, unknown>;
   billing: Record<string, unknown>;
+  automationTotals?: Record<string, unknown>;
 };
 
 export const readDashboardSummaryFromCache = (
@@ -43,5 +44,6 @@ export const readDashboardSummaryFromCache = (
     campaignStats: (bootstrap?.campaignStats ?? {}) as Record<string, unknown>,
     subscriberKpis: (subscriberKpis ?? {}) as Record<string, unknown>,
     billing: (billingPayload?.billing ?? bootstrap?.billing ?? {}) as Record<string, unknown>,
+    automationTotals: (bootstrap?.automationsOverview?.totals ?? {}) as Record<string, unknown>,
   };
 };

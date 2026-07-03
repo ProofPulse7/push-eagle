@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { env } from '@/lib/config/env';
-import { getRequestGeo } from '@/lib/server/request-geo';
+import { resolveSubscriberGeo } from '@/lib/server/resolve-subscriber-geo';
 import { upsertSubscriberToken } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
@@ -114,7 +114,11 @@ export async function POST(request: Request) {
     }
 
     const userAgent = request.headers.get('user-agent');
-    const requestGeo = getRequestGeo(request);
+    const { country, city } = resolveSubscriberGeo(request, {
+      country: body.country,
+      city: body.city,
+      deviceContext: body.deviceContext,
+    });
     const externalId = body.externalId?.trim()
       ? body.externalId.trim()
       : createHash('sha256').update(`${shopDomain}:${body.token}`).digest('hex').slice(0, 24);
@@ -129,13 +133,6 @@ export async function POST(request: Request) {
     const locale = body.locale
       ?? (typeof body.deviceContext?.language === 'string' ? body.deviceContext.language : undefined)
       ?? (typeof body.deviceContext?.shopifyLocale === 'string' ? body.deviceContext.shopifyLocale : undefined);
-    const country = body.country
-      ?? (typeof body.deviceContext?.country === 'string' ? body.deviceContext.country : undefined)
-      ?? requestGeo.country
-      ?? (typeof body.deviceContext?.shopifyCountry === 'string' ? body.deviceContext.shopifyCountry : undefined);
-    const city = body.city
-      ?? (typeof body.deviceContext?.city === 'string' ? body.deviceContext.city : undefined)
-      ?? requestGeo.city;
 
     const enrichedDeviceContext = {
       ...(body.deviceContext ?? {}),

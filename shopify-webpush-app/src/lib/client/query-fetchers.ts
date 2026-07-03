@@ -10,14 +10,16 @@ export type DashboardSummaryPayload = {
   campaignStats: Record<string, unknown>;
   subscriberKpis: Record<string, unknown>;
   billing: Record<string, unknown>;
+  automationTotals?: Record<string, unknown>;
 };
 
 export const fetchDashboardSummary = async (shop: string): Promise<DashboardSummaryPayload> => {
-  const [overview, campaignStats, subscriberKpis, billingPayload] = await Promise.all([
+  const [overview, campaignStats, subscriberKpis, billingPayload, automationOverview] = await Promise.all([
     fetchJsonWithShop<Record<string, unknown>>('/api/settings/overview', shop),
     fetchJsonWithShop<Record<string, unknown>>('/api/campaigns/stats', shop),
     fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
     fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=0', shop),
+    fetchJsonWithShop<{ totals?: Record<string, unknown> }>('/api/automations/overview', shop),
   ]);
 
   return {
@@ -25,6 +27,7 @@ export const fetchDashboardSummary = async (shop: string): Promise<DashboardSumm
     campaignStats,
     subscriberKpis,
     billing: billingPayload.billing ?? {},
+    automationTotals: automationOverview.totals ?? {},
   };
 };
 

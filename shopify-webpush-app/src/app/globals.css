@@ -186,7 +186,51 @@
   }
 
   .pe-page-enter {
-    animation: pe-page-enter 220ms ease-out both;
+    animation: pe-page-enter 220ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  }
+
+  .pe-route-enter {
+    animation: pe-route-enter 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  }
+
+  .pe-route-enter-soft {
+    animation: pe-route-enter-soft 240ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  }
+
+  .pe-route-crossfade-in {
+    animation: pe-route-crossfade-in 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  }
+
+  .pe-route-leave {
+    animation: pe-route-leave 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  }
+
+  .pe-route-underlay {
+    animation: pe-route-underlay-settle 120ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  }
+
+  .pe-route-idle {
+    transform: translateY(0);
+  }
+
+  .pe-route-outgoing-hold {
+    opacity: 1;
+  }
+
+  .pe-route-outgoing-fade {
+    animation: pe-route-outgoing-fade 120ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pe-page-enter,
+    .pe-route-enter,
+    .pe-route-enter-soft,
+    .pe-route-crossfade-in,
+    .pe-route-leave,
+    .pe-route-underlay,
+    .pe-route-outgoing-fade {
+      animation: none;
+    }
   }
 
   .pe-pressable {
@@ -200,11 +244,62 @@
 
 @keyframes pe-page-enter {
   from {
-    opacity: 0;
-    transform: translateY(6px);
+    opacity: 0.96;
+    transform: translateY(2px);
   }
   to {
     opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pe-route-enter {
+  from {
+    opacity: 0.92;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pe-route-enter-soft {
+  from {
+    opacity: 1;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pe-route-crossfade-in {
+  from {
+    opacity: 1;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pe-route-outgoing-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes pe-route-underlay-settle {
+  from {
+    transform: translateY(1px);
+  }
+  to {
     transform: translateY(0);
   }
 }

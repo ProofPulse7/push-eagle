@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { hasWarmShopCache } from '@/lib/client/app-cache-ready';
+import { readShopDomainSync } from '@/lib/client/read-shop-domain';
 import { AppSetupScreen } from '@/components/ui/loading-ui';
 import { usePersistRestored } from '@/components/providers/query-provider';
 import { useAppBootstrap } from '@/hooks/queries/use-app-queries';
@@ -46,13 +47,14 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
   const bootstrap = useAppBootstrap();
   const skip = shouldSkipSetup(pathname);
 
-  const hasWarmCache = Boolean(shop && hasWarmShopCache(queryClient, shop));
-  const cachedBootstrap = shop ? queryClient.getQueryData(queryKeys.bootstrap(shop)) : undefined;
-  const canRenderApp = skip || !shop || isRestored;
+  const resolvedShop = (shop || readShopDomainSync()).trim().toLowerCase();
+  const hasWarmCache = Boolean(resolvedShop && hasWarmShopCache(queryClient, resolvedShop));
+  const cachedBootstrap = resolvedShop ? queryClient.getQueryData(queryKeys.bootstrap(resolvedShop)) : undefined;
+  const canRenderApp = skip || !resolvedShop || isRestored;
   const hasBootstrapData = Boolean(bootstrap.data ?? cachedBootstrap);
-  const needsBootstrap = Boolean(shop) && !hasWarmCache && !hasBootstrapData;
+  const needsBootstrap = Boolean(resolvedShop) && !hasWarmCache && !hasBootstrapData;
   const showBootstrapOverlay =
-    canRenderApp && !skip && Boolean(shop) && needsBootstrap && bootstrap.isPending && !bootstrap.isError;
+    canRenderApp && !skip && Boolean(resolvedShop) && needsBootstrap && bootstrap.isPending && !bootstrap.isError;
 
   const [progress, setProgress] = useState(hasWarmCache ? 100 : 24);
   const [overlayVisible, setOverlayVisible] = useState(showBootstrapOverlay);

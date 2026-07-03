@@ -1,5 +1,5 @@
-import { PageLoadingShell } from '@/components/layout/page-loading-shell';
+import { RoutePageSkeleton } from '@/components/layout/page-loading-shell';
 
-export default function NewCampaignLoading() {
-  return <PageLoadingShell titleWidth="w-52" statCards={0} />;
+export default function CampaignWizardLoading() {
+  return <RoutePageSkeleton pathname="/campaigns/new/details" />;
 }

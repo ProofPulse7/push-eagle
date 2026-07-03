@@ -110,6 +110,7 @@ export const hydrateAppCache = (
     campaignStats: payload.campaignStats,
     subscriberKpis: payload.subscriberKpis,
     billing: payload.billing ?? {},
+    automationTotals: payload.automationsOverview?.totals ?? {},
   });
 
   queryClient.setQueryData(

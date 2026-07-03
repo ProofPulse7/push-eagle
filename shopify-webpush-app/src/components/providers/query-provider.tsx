@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
@@ -42,6 +42,23 @@ export function QueryProvider({ children }: { children: ReactNode }) {
   );
   const [isRestored, setIsRestored] = useState(() => typeof window === 'undefined');
 
+  useEffect(() => {
+    if (isRestored || typeof window === 'undefined') {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      try {
+        sessionStorage.removeItem('pe_query_cache_v1');
+      } catch {
+        // Ignore storage failures and unblock the app shell.
+      }
+      setIsRestored(true);
+    }, 4000);
+
+    return () => window.clearTimeout(timeout);
+  }, [isRestored]);
+
   return (
     <PersistRestoreContext.Provider value={isRestored}>
       <PersistQueryClientProvider
@@ -54,6 +71,14 @@ export function QueryProvider({ children }: { children: ReactNode }) {
           },
         }}
         onSuccess={() => {
+          setIsRestored(true);
+        }}
+        onError={() => {
+          try {
+            sessionStorage.removeItem('pe_query_cache_v1');
+          } catch {
+            // Ignore storage failures and unblock the app shell.
+          }
           setIsRestored(true);
         }}
       >

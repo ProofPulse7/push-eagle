@@ -1,9 +1,11 @@
 
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
+import { Suspense } from 'react';
 import './globals.css';
 import { Toaster } from '@/components/ui/toaster';
 import { AppLayout } from '@/components/layout/app-layout';
+import { RoutePageSkeleton } from '@/components/layout/page-loading-shell';
 import { ThemeProvider } from '@/components/theme-provider';
 import { FirebaseClientInit } from '@/components/firebase/firebase-client-init';
 import { SettingsProvider } from '@/context/settings-context';
@@ -61,7 +63,9 @@ export default function RootLayout({
                   <SettingsCacheSync />
                   <LiveShopSync />
                   <FirebaseClientInit />
-                  <AppLayout>{children}</AppLayout>
+                  <Suspense fallback={<RoutePageSkeleton pathname="/dashboard" />}>
+                    <AppLayout>{children}</AppLayout>
+                  </Suspense>
                   <Toaster />
                 </AppBootstrapLoader>
               </AppSetupGate>

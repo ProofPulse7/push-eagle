@@ -3,11 +3,24 @@ type RequestGeo = {
   country: string | null;
 };
 
+const decodeHeaderValue = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(trimmed);
+  } catch {
+    return trimmed;
+  }
+};
+
 const pickHeader = (headers: Headers, keys: string[]): string | null => {
   for (const key of keys) {
     const value = headers.get(key);
     if (value && value.trim()) {
-      return value.trim();
+      return decodeHeaderValue(value);
     }
   }
   return null;

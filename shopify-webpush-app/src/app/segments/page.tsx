@@ -371,12 +371,18 @@ export default function SegmentsPage() {
   };
 
 
+  const cachedSegments = resolvedShopDomain
+    ? queryClient.getQueryData<{ segments?: SegmentApiRow[] }>(queryKeys.segments(resolvedShopDomain))
+    : undefined;
+  const effectiveSegmentsData = segmentsData ?? cachedSegments;
+  const showInitialLoad = isLoading && !effectiveSegmentsData;
+
   return (
     <PageLoadingShell
       title="Segments"
-      isLoading={isLoading}
-      hasData={true}
-      isFetching={isFetching}
+      isLoading={showInitialLoad}
+      hasData={Boolean(effectiveSegmentsData)}
+      isFetching={isFetching && Boolean(effectiveSegmentsData)}
     >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
       <div className="flex items-center justify-between">
