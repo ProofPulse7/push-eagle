@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
-import { getMerchantCapabilitySnapshot, getOptInSettings } from '@/lib/server/data/store';
+import { getStorefrontConfigCached } from '@/lib/server/cache/storefront-config-cache';
 import { shouldRunStorefrontAutomationInline } from '@/lib/server/storefront-automation-inline';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { verifyStorefrontBootstrapRequest } from '@/lib/server/storefront-request-auth';
@@ -67,8 +67,7 @@ export async function GET(request: Request) {
       email: url.searchParams.get('logged_in_customer_email'),
     });
 
-    const optIn = await getOptInSettings(shopDomain);
-  const shopifyCapabilities = await getMerchantCapabilitySnapshot(shopDomain);
+    const { optIn, shopifyCapabilities } = await getStorefrontConfigCached(shopDomain);
 
     if (shouldRunStorefrontAutomationInline()) {
       const { processDueAutomationJobsForShop } = await import('@/lib/server/data/store');

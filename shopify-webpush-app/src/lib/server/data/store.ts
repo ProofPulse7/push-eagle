@@ -457,9 +457,27 @@ const parseScopes = (value?: string | null) =>
     .map((scope) => scope.trim())
     .filter(Boolean);
 
+const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v1';
+const SCHEMA_READY_TTL_SECONDS = 6 * 60 * 60;
+
 const ensureSchema = async () => {
   if (!schemaReadyPromise) {
     schemaReadyPromise = (async () => {
+      // The DDL below is idempotent but runs ~40 statements. Once it succeeds we
+      // record a short-lived KV flag so subsequent cold starts skip the full sync,
+      // saving Neon compute and round-trips. Bump the key version to force a resync.
+      try {
+        const { isCloudflareKvEnabled, readKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+        if (isCloudflareKvEnabled()) {
+          const ready = await readKvJson<{ ready?: boolean }>(SCHEMA_READY_KV_KEY);
+          if (ready?.ready) {
+            return;
+          }
+        }
+      } catch {
+        // fall through to the full sync
+      }
+
       const sql = getNeonSql();
 
       await sql`CREATE TABLE IF NOT EXISTS merchants (
@@ -1039,7 +1057,22 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_inventory ON shopify_product_variants(shop_domain, inventory_item_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_product ON shopify_product_variants(shop_domain, product_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_shopify_fulfillments_shop_order ON shopify_fulfillments(shop_domain, order_id, updated_at DESC)`;
-    })();
+
+      try {
+        const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+        if (isCloudflareKvEnabled()) {
+          void writeKvJson(SCHEMA_READY_KV_KEY, { ready: true }, SCHEMA_READY_TTL_SECONDS).catch(
+            () => undefined,
+          );
+        }
+      } catch {
+        // ignore — schema is synced, the flag is only an optimization
+      }
+    })().catch((error) => {
+      // Reset so a later request can retry instead of caching a rejected promise.
+      schemaReadyPromise = null;
+      throw error;
+    });
   }
 
   await schemaReadyPromise;
@@ -5348,6 +5381,13 @@ export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) =
 
   const { invalidateMerchantStorefrontHostsCache } = await import('@/lib/server/storefront-merchant-hosts-cache');
   void invalidateMerchantStorefrontHostsCache(input.shopDomain);
+
+  try {
+    const { clearStorefrontConfigCache } = await import('@/lib/server/cache/storefront-config-cache');
+    void clearStorefrontConfigCache(input.shopDomain);
+  } catch {
+    // best-effort cache invalidation
+  }
 };
 
 export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) => {
@@ -6752,7 +6792,6 @@ export const getMerchantOverview = async (shopDomain: string) => {
 export const getMerchantCapabilitySnapshot = async (shopDomain: string) => {
   await ensureSchema();
   const sql = getNeonSql();
-  await ensureMerchant(shopDomain);
 
   const rows = await sql`
     SELECT
@@ -8676,6 +8715,13 @@ export const updateOptInSettings = async (input: UpdateOptInSettingsInput) => {
 
   if (previousLogoUrl && previousLogoUrl !== (input.logoUrl ?? null)) {
     await cleanupUnusedMediaAssets(input.shopDomain, [previousLogoUrl]);
+  }
+
+  try {
+    const { clearStorefrontConfigCache } = await import('@/lib/server/cache/storefront-config-cache');
+    void clearStorefrontConfigCache(input.shopDomain);
+  } catch {
+    // best-effort cache invalidation
   }
 
   return {

@@ -17,10 +17,55 @@ import {
   cronProbeHasImmediateWork,
   probeCronPendingWork,
 } from '@/lib/server/cron/cron-work-probe';
+import { isCloudflareKvEnabled, readKvJson, writeKvJson } from '@/lib/server/cache/cloudflare-kv';
 
 import type { CronTickConfig } from '@/lib/server/cron/auth';
 
-const IDLE_SLEEP_MS = 14 * 60 * 1000;
+const MAINTENANCE_KEY = 'pe:cron:last:maintenance';
+const PROMOTION_KEY = 'pe:cron:last:promotion';
+const SAFETY_NET_KEY = 'pe:cron:last:safetynet';
+
+const MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const PROMOTION_INTERVAL_MS = 5 * 60 * 1000;
+const QUEUE_SAFETY_NET_INTERVAL_MS = 30 * 60 * 1000;
+const INLINE_AUTOMATION_INTERVAL_MS = 5 * 60 * 1000;
+
+// Time-based scheduling (via KV markers) instead of matching an exact UTC minute:
+// once the cron idles it wakes at a fixed minute each hour, which would never line
+// up with a "% 30 === 0" style check. Elapsed-time markers guarantee the periodic
+// safety nets still run without keeping Neon awake.
+const shouldRunPeriodic = async (key: string, intervalMs: number): Promise<boolean> => {
+  if (!isCloudflareKvEnabled()) {
+    const minutes = Math.max(1, Math.round(intervalMs / 60000));
+    return new Date().getUTCMinutes() % minutes === 0;
+  }
+
+  try {
+    const last = await readKvJson<{ at?: number }>(key);
+    if (last?.at && Date.now() - last.at < intervalMs) {
+      return false;
+    }
+  } catch {
+    // fall through and allow the run
+  }
+
+  return true;
+};
+
+const markPeriodicRan = (key: string, intervalMs: number) => {
+  if (!isCloudflareKvEnabled()) {
+    return;
+  }
+  const ttlSeconds = Math.max(120, Math.ceil((intervalMs * 2) / 1000));
+  void writeKvJson(key, { at: Date.now() }, ttlSeconds).catch(() => undefined);
+};
+
+// Neon compute autosuspends after ~5 min idle, and every wake bills a full
+// suspend cycle. Sleeping only 14 min meant the probe re-woke Neon ~100x/day,
+// burning ~10 compute-hours. Since scheduling any campaign/automation calls
+// bumpCronWakeNow() (which clears this sleep marker), we can idle much longer and
+// still deliver on time — the cron only needs to self-wake for periodic safety nets.
+const IDLE_SLEEP_MS = 60 * 60 * 1000;
 
 const processAutomationChunk = async (
   jobs: Array<{ id: string }>,
@@ -55,12 +100,16 @@ const resolveIdleSleepUntil = (probe: Awaited<ReturnType<typeof probeCronPending
 };
 
 export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick') => {
-  const utcMinute = new Date().getUTCMinutes();
-  const runHeavyMaintenance = utcMinute % 30 === 0;
-  const runQueuePromotion = isAutomationQueueEnabled() && utcMinute % 5 === 0;
-  const runAutomationSafetyNet = isAutomationQueueEnabled()
-    ? utcMinute % 30 === 0
-    : utcMinute % 5 === 0;
+  const queueEnabled = isAutomationQueueEnabled();
+  const [runHeavyMaintenance, runQueuePromotionDue, runAutomationSafetyNet] = await Promise.all([
+    shouldRunPeriodic(MAINTENANCE_KEY, MAINTENANCE_INTERVAL_MS),
+    queueEnabled ? shouldRunPeriodic(PROMOTION_KEY, PROMOTION_INTERVAL_MS) : Promise.resolve(false),
+    shouldRunPeriodic(
+      SAFETY_NET_KEY,
+      queueEnabled ? QUEUE_SAFETY_NET_INTERVAL_MS : INLINE_AUTOMATION_INTERVAL_MS,
+    ),
+  ]);
+  const runQueuePromotion = queueEnabled && runQueuePromotionDue;
 
   const probe = await probeCronPendingWork();
   const hasImmediateWork = cronProbeHasImmediateWork(probe);
@@ -79,6 +128,19 @@ export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick'
   }
 
   await clearCronSleep();
+
+  if (runHeavyMaintenance) {
+    markPeriodicRan(MAINTENANCE_KEY, MAINTENANCE_INTERVAL_MS);
+  }
+  if (runQueuePromotion) {
+    markPeriodicRan(PROMOTION_KEY, PROMOTION_INTERVAL_MS);
+  }
+  if (runAutomationSafetyNet) {
+    markPeriodicRan(
+      SAFETY_NET_KEY,
+      queueEnabled ? QUEUE_SAFETY_NET_INTERVAL_MS : INLINE_AUTOMATION_INTERVAL_MS,
+    );
+  }
 
   try {
     const retention = runHeavyMaintenance ? await runRetentionMaintenance() : null;
