@@ -30,54 +30,83 @@ export type NotificationDeliveryStats = {
  * Calculate target subscribers for campaign (all if no segment, filtered if segment exists).
  * Optimized for querying millions of subscribers.
  */
+type FcmTarget = { tokenId: number; externalId: string; fcmToken: string };
+
 const getTargetTokens = async (
   shopDomain: string,
   segmentId?: string | null,
-): Promise<Array<{ tokenId: number; externalId: string; fcmToken: string }>> => {
+): Promise<FcmTarget[]> => {
   const sql = getNeonSql();
+  const { audienceRead, d1GetFcmTargetTokens } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  const key = (rows: FcmTarget[]) => rows.map((row) => row.tokenId).sort((a, b) => a - b).join(',');
 
   if (!segmentId) {
-    const rows = await sql`
-      SELECT DISTINCT ON (s.id)
-        t.id AS token_id,
-        s.external_id,
-        t.fcm_token
-      FROM subscriber_tokens t
-      JOIN subscribers s ON s.id = t.subscriber_id
-      WHERE t.shop_domain = ${shopDomain}
-        AND t.status = 'active'
-        AND t.fcm_token IS NOT NULL
-        AND TRIM(t.fcm_token) <> ''
-      ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-    `;
-    return rows.map((row) => ({
-      tokenId: Number(row.token_id),
-      externalId: String(row.external_id),
-      fcmToken: String(row.fcm_token),
-    }));
+    return audienceRead<FcmTarget[]>({
+      label: 'notificationBatch.getTargetTokens.all',
+      key,
+      neon: async () => {
+        const rows = await sql`
+          SELECT DISTINCT ON (s.id)
+            t.id AS token_id,
+            s.external_id,
+            t.fcm_token
+          FROM subscriber_tokens t
+          JOIN subscribers s ON s.id = t.subscriber_id
+          WHERE t.shop_domain = ${shopDomain}
+            AND t.status = 'active'
+            AND t.fcm_token IS NOT NULL
+            AND TRIM(t.fcm_token) <> ''
+          ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+        `;
+        return rows.map((row) => ({
+          tokenId: Number(row.token_id),
+          externalId: String(row.external_id),
+          fcmToken: String(row.fcm_token),
+        }));
+      },
+      d1: async () => d1GetFcmTargetTokens(shopDomain),
+    });
   }
 
-  const rows = await sql`
-    SELECT DISTINCT ON (s.id)
-      t.id AS token_id,
-      s.external_id,
-      t.fcm_token
-    FROM subscriber_tokens t
-    JOIN subscribers s ON s.id = t.subscriber_id
-    JOIN segments seg ON seg.shop_domain = s.shop_domain
-    WHERE t.shop_domain = ${shopDomain}
-      AND seg.id = ${segmentId}
-      AND t.status = 'active'
-      AND t.fcm_token IS NOT NULL
-      AND TRIM(t.fcm_token) <> ''
-    ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-  `;
-
-  return rows.map((row) => ({
-    tokenId: Number(row.token_id),
-    externalId: String(row.external_id),
-    fcmToken: String(row.fcm_token),
-  }));
+  return audienceRead<FcmTarget[]>({
+    label: 'notificationBatch.getTargetTokens.segment',
+    key,
+    neon: async () => {
+      const rows = await sql`
+        SELECT DISTINCT ON (s.id)
+          t.id AS token_id,
+          s.external_id,
+          t.fcm_token
+        FROM subscriber_tokens t
+        JOIN subscribers s ON s.id = t.subscriber_id
+        JOIN segments seg ON seg.shop_domain = s.shop_domain
+        WHERE t.shop_domain = ${shopDomain}
+          AND seg.id = ${segmentId}
+          AND t.status = 'active'
+          AND t.fcm_token IS NOT NULL
+          AND TRIM(t.fcm_token) <> ''
+        ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+      `;
+      return rows.map((row) => ({
+        tokenId: Number(row.token_id),
+        externalId: String(row.external_id),
+        fcmToken: String(row.fcm_token),
+      }));
+    },
+    d1: async () => {
+      // Mirror the Neon join semantics: tokens are returned only if a segment with
+      // this id exists for the shop (the Neon query joins segments by shop only).
+      const segExists = await sql`
+        SELECT 1 FROM segments WHERE shop_domain = ${shopDomain} AND id = ${segmentId} LIMIT 1
+      `;
+      if (segExists.length === 0) {
+        return [];
+      }
+      return d1GetFcmTargetTokens(shopDomain);
+    },
+  });
 };
 
 /**

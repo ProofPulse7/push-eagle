@@ -22,7 +22,7 @@ import { env } from '@/lib/config/env';
  * automation_deliveries row on Neon keeps referencing a valid audience id.
  */
 
-export type D1AudienceMode = 'off' | 'dual_write' | 'read';
+export type D1AudienceMode = 'off' | 'dual_write' | 'shadow' | 'read';
 
 const hasD1Creds = () =>
   Boolean(env.CLOUDFLARE_ACCOUNT_ID.trim())
@@ -31,17 +31,86 @@ const hasD1Creds = () =>
 
 export const getD1AudienceMode = (): D1AudienceMode => {
   const mode = env.D1_AUDIENCE_MODE as D1AudienceMode;
-  if ((mode === 'dual_write' || mode === 'read') && hasD1Creds()) {
+  if ((mode === 'dual_write' || mode === 'shadow' || mode === 'read') && hasD1Creds()) {
     return mode;
   }
   return 'off';
 };
 
-/** True when writes should be mirrored into D1 (dual_write or read). */
+/** True when writes should be mirrored into D1 (dual_write, shadow, or read). */
 export const isD1AudienceWriteEnabled = () => getD1AudienceMode() !== 'off';
 
 /** True when D1 is the source of truth for reads (Stage 2 cutover). */
 export const isD1AudienceReadEnabled = () => getD1AudienceMode() === 'read';
+
+/** True when reads should be shadow-compared (Neon authoritative, D1 logged). */
+export const isD1AudienceShadow = () => getD1AudienceMode() === 'shadow';
+
+/**
+ * Central read router for the audience cutover. Wrap each Neon audience read with
+ * its D1 equivalent and this decides what to do based on D1_AUDIENCE_MODE:
+ *   - off / dual_write : run only Neon (current behavior).
+ *   - shadow           : run BOTH in parallel, return Neon, log any mismatch.
+ *   - read             : return D1; if the D1 read throws, fall back to Neon.
+ *
+ * `key` produces a canonical, order-independent string for mismatch detection
+ * (e.g. sorted ids). Defaults to JSON.stringify.
+ */
+export const audienceRead = async <T>(opts: {
+  label: string;
+  neon: () => Promise<T>;
+  d1: () => Promise<T>;
+  key?: (result: T) => string;
+}): Promise<T> => {
+  const mode = getD1AudienceMode();
+
+  if (mode === 'read') {
+    try {
+      return await opts.d1();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      console.warn(`[d1-audience] read '${opts.label}' failed, falling back to Neon: ${message}`);
+      return await opts.neon();
+    }
+  }
+
+  if (mode === 'shadow') {
+    const [neonResult, d1Settled] = await Promise.all([
+      opts.neon(),
+      opts.d1().then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      ),
+    ]);
+
+    if (!d1Settled.ok) {
+      const message =
+        d1Settled.error instanceof Error ? d1Settled.error.message : String(d1Settled.error ?? '');
+      console.warn(`[d1-audience] shadow '${opts.label}' D1 read error: ${message}`);
+      return neonResult;
+    }
+
+    try {
+      const toKey = opts.key ?? ((value: T) => JSON.stringify(value));
+      const neonKey = toKey(neonResult);
+      const d1Key = toKey(d1Settled.value);
+      if (neonKey === d1Key) {
+        console.log(`[d1-audience] shadow OK '${opts.label}'`);
+      } else {
+        console.warn(
+          `[d1-audience] SHADOW MISMATCH '${opts.label}'\n  neon=${neonKey.slice(0, 800)}\n  d1  =${d1Key.slice(0, 800)}`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      console.warn(`[d1-audience] shadow '${opts.label}' compare error: ${message}`);
+    }
+
+    return neonResult;
+  }
+
+  return opts.neon();
+};
 
 type D1QueryResult = {
   success: boolean;
@@ -495,6 +564,456 @@ export const d1BackfillTokens = async (rows: D1BackfillTokenRow[]) => {
     `,
     params,
   );
+};
+
+// ---------------------------------------------------------------------------
+// Read primitives (Stage 2): D1 equivalents of the Neon audience reads. Each is
+// written to return the same shape as its Neon counterpart so it can be diffed
+// in shadow mode and swapped in for read mode.
+// ---------------------------------------------------------------------------
+
+// SQLite binds at most 999 params per statement; chunk large id lists.
+const D1_MAX_IN = 900;
+
+const chunk = <T>(items: T[], size: number): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+};
+
+// Matches the Neon "active + deliverable" predicate: an active token that is
+// either a usable VAPID subscription or a usable FCM token.
+const DELIVERABLE_TOKEN_PREDICATE = `
+  t.status = 'active'
+  AND (
+    (
+      COALESCE(t.token_type, 'fcm') = 'vapid'
+      AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+      AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+      AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+    )
+    OR (
+      COALESCE(t.token_type, 'fcm') <> 'vapid'
+      AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+    )
+  )
+`;
+
+export type D1CampaignRecipient = {
+  token_id: number;
+  fcm_token: string;
+  token_type: string | null;
+  vapid_endpoint: string | null;
+  vapid_p256dh: string | null;
+  vapid_auth: string | null;
+  subscriber_id: number;
+  external_id: string | null;
+  platform: string | null;
+  user_agent: string | null;
+};
+
+const mapRecipient = (row: Record<string, unknown>): D1CampaignRecipient => ({
+  token_id: Number(row.token_id),
+  fcm_token: row.fcm_token == null ? '' : String(row.fcm_token),
+  token_type: row.token_type == null ? null : String(row.token_type),
+  vapid_endpoint: row.vapid_endpoint == null ? null : String(row.vapid_endpoint),
+  vapid_p256dh: row.vapid_p256dh == null ? null : String(row.vapid_p256dh),
+  vapid_auth: row.vapid_auth == null ? null : String(row.vapid_auth),
+  subscriber_id: Number(row.subscriber_id),
+  external_id: row.external_id == null ? null : String(row.external_id),
+  platform: row.platform == null ? null : String(row.platform),
+  user_agent: row.user_agent == null ? null : String(row.user_agent),
+});
+
+const RECIPIENT_SELECT = `
+  SELECT token_id, fcm_token, token_type, vapid_endpoint, vapid_p256dh, vapid_auth,
+         subscriber_id, external_id, platform, user_agent
+  FROM (
+    SELECT
+      t.id AS token_id, t.fcm_token, t.token_type, t.vapid_endpoint, t.vapid_p256dh,
+      t.vapid_auth, s.id AS subscriber_id, s.external_id, s.platform, t.user_agent,
+      ROW_NUMBER() OVER (
+        PARTITION BY s.id
+        ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+      ) AS rn
+    FROM subscribers s
+    JOIN subscriber_tokens t ON t.subscriber_id = s.id
+    WHERE s.shop_domain = ? AND t.shop_domain = ?
+      AND __DELIVERABLE__
+      __ID_FILTER__
+  )
+  WHERE rn = 1
+`;
+
+/**
+ * One deliverable token per subscriber (the most recent), mirroring the Neon
+ * `DISTINCT ON (s.id) ... ORDER BY last_seen_at DESC, updated_at DESC, id DESC`.
+ * Optionally restricted to a set of subscriber ids (segment). Delivery de-dup is
+ * applied by the caller (subscriber ids come from Neon campaign_deliveries).
+ */
+export const d1ResolveCampaignRecipients = async (
+  shopDomain: string,
+  subscriberIds?: number[],
+): Promise<D1CampaignRecipient[]> => {
+  await ensureD1AudienceSchema();
+
+  if (subscriberIds && subscriberIds.length === 0) {
+    return [];
+  }
+
+  const runChunk = async (ids?: number[]) => {
+    const params: unknown[] = [shopDomain, shopDomain];
+    let idFilter = '';
+    if (ids) {
+      idFilter = `AND s.id IN (${ids.map(() => '?').join(', ')})`;
+      params.push(...ids);
+    }
+    const sql = RECIPIENT_SELECT
+      .replace('__DELIVERABLE__', DELIVERABLE_TOKEN_PREDICATE)
+      .replace('__ID_FILTER__', idFilter);
+    const rows = await runD1Query(sql, params);
+    return (rows as Array<Record<string, unknown>>).map(mapRecipient);
+  };
+
+  if (!subscriberIds) {
+    const result = await runChunk();
+    result.sort((a, b) => a.subscriber_id - b.subscriber_id);
+    return result;
+  }
+
+  // Chunk large segment id lists. Chunks partition by subscriber id, so results
+  // are disjoint by subscriber and can be concatenated safely.
+  const result: D1CampaignRecipient[] = [];
+  for (const ids of chunk(subscriberIds, D1_MAX_IN)) {
+    result.push(...(await runChunk(ids)));
+  }
+  result.sort((a, b) => a.subscriber_id - b.subscriber_id);
+  return result;
+};
+
+export type D1FcmTarget = { tokenId: number; externalId: string; fcmToken: string };
+
+/**
+ * FCM-only best-token-per-subscriber, mirroring notification-batch getTargetTokens
+ * (which intentionally ignores VAPID and only sends via FCM).
+ */
+export const d1GetFcmTargetTokens = async (shopDomain: string): Promise<D1FcmTarget[]> => {
+  await ensureD1AudienceSchema();
+  const rows = await runD1Query(
+    `
+      SELECT token_id, external_id, fcm_token
+      FROM (
+        SELECT
+          t.id AS token_id, s.external_id, t.fcm_token, s.id AS subscriber_id,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.id
+            ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+          ) AS rn
+        FROM subscriber_tokens t
+        JOIN subscribers s ON s.id = t.subscriber_id
+        WHERE t.shop_domain = ?
+          AND t.status = 'active'
+          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+      )
+      WHERE rn = 1
+      ORDER BY subscriber_id
+    `,
+    [shopDomain],
+  );
+  return (rows as Array<Record<string, unknown>>).map((row) => ({
+    tokenId: Number(row.token_id),
+    externalId: row.external_id == null ? '' : String(row.external_id),
+    fcmToken: row.fcm_token == null ? '' : String(row.fcm_token),
+  }));
+};
+
+// Automation "targetable" predicate: active token that is either non-VAPID (FCM,
+// even if empty here to match the Neon query) or a VAPID subscription with keys.
+const AUTOMATION_TARGET_PREDICATE = `
+  t.status = 'active'
+  AND (
+    COALESCE(t.token_type, 'fcm') <> 'vapid'
+    OR (
+      COALESCE(t.vapid_endpoint, '') <> ''
+      AND COALESCE(t.vapid_p256dh, '') <> ''
+      AND COALESCE(t.vapid_auth, '') <> ''
+    )
+  )
+`;
+
+export type D1AutomationTarget = {
+  tokenId: number;
+  subscriberId: number | null;
+  externalId: string | null;
+};
+
+const mapAutomationTarget = (row: Record<string, unknown>): D1AutomationTarget => ({
+  tokenId: Number(row.token_id),
+  subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
+  externalId: row.external_id ? String(row.external_id) : null,
+});
+
+const runAutomationTargets = async (
+  shopDomain: string,
+  partitionCol: 'id' | 'external_id',
+  whereClause: string,
+  whereParams: unknown[],
+): Promise<D1AutomationTarget[]> => {
+  await ensureD1AudienceSchema();
+  const rows = await runD1Query(
+    `
+      SELECT token_id, subscriber_id, external_id
+      FROM (
+        SELECT
+          t.id AS token_id, s.id AS subscriber_id, s.external_id,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.${partitionCol}
+            ORDER BY t.last_seen_at DESC, t.updated_at DESC, t.id DESC
+          ) AS rn
+        FROM subscriber_tokens t
+        JOIN subscribers s ON s.id = t.subscriber_id
+        WHERE t.shop_domain = ?
+          AND ${AUTOMATION_TARGET_PREDICATE}
+          AND ${whereClause}
+      )
+      WHERE rn = 1
+    `,
+    [shopDomain, ...whereParams],
+  );
+  return (rows as Array<Record<string, unknown>>).map(mapAutomationTarget);
+};
+
+export const d1AutomationTargetsBySubscriberId = (shopDomain: string, subscriberId: number) =>
+  runAutomationTargets(shopDomain, 'id', 's.id = ?', [subscriberId]);
+
+export const d1AutomationTargetsByExternalId = (shopDomain: string, externalId: string) =>
+  runAutomationTargets(shopDomain, 'external_id', 's.external_id = ?', [externalId ?? '']);
+
+export const d1AutomationTargetsByExternalIds = async (
+  shopDomain: string,
+  externalIds: string[],
+): Promise<D1AutomationTarget[]> => {
+  if (externalIds.length === 0) {
+    return [];
+  }
+  const out: D1AutomationTarget[] = [];
+  for (const ids of chunk(externalIds, D1_MAX_IN)) {
+    const placeholders = ids.map(() => '?').join(', ');
+    out.push(...(await runAutomationTargets(shopDomain, 'external_id', `s.external_id IN (${placeholders})`, ids)));
+  }
+  return out;
+};
+
+export const d1AutomationTargetsByClientId = (shopDomain: string, clientId: string) =>
+  runAutomationTargets(
+    shopDomain,
+    'id',
+    `s.shop_domain = ? AND (
+       COALESCE(json_extract(s.device_context, '$.clientId'), '') = ?
+       OR COALESCE(json_extract(s.device_context, '$.shopifyAnalyticsClientId'), '') = ?
+     )`,
+    [shopDomain, clientId, clientId],
+  );
+
+export const d1ListAllSubscriberIds = async (shopDomain: string): Promise<number[]> => {
+  await ensureD1AudienceSchema();
+  const rows = await runD1Query(`SELECT id FROM subscribers WHERE shop_domain = ?`, [shopDomain]);
+  return (rows as Array<Record<string, unknown>>)
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isFinite(id));
+};
+
+export type D1SubscribedRow = { id: number; created_at: string | null };
+
+export const d1GetSubscribedRows = async (shopDomain: string): Promise<D1SubscribedRow[]> => {
+  await ensureD1AudienceSchema();
+  const rows = await runD1Query(
+    `SELECT id, created_at FROM subscribers WHERE shop_domain = ?`,
+    [shopDomain],
+  );
+  return (rows as Array<Record<string, unknown>>).map((row) => ({
+    id: Number(row.id),
+    created_at: row.created_at == null ? null : String(row.created_at),
+  }));
+};
+
+export type D1LocationRow = {
+  id: number;
+  country: string | null;
+  city: string | null;
+  region: string | null;
+};
+
+export const d1GetLocationRows = async (shopDomain: string): Promise<D1LocationRow[]> => {
+  await ensureD1AudienceSchema();
+  const rows = await runD1Query(
+    `SELECT id, country, city, device_context FROM subscribers WHERE shop_domain = ?`,
+    [shopDomain],
+  );
+  return (rows as Array<Record<string, unknown>>).map((row) => {
+    let region: string | null = null;
+    const ctx = row.device_context;
+    if (ctx != null) {
+      try {
+        const parsed = typeof ctx === 'string' ? JSON.parse(ctx) : ctx;
+        if (parsed && typeof parsed === 'object' && 'region' in parsed) {
+          const value = (parsed as Record<string, unknown>).region;
+          region = value == null ? null : String(value);
+        }
+      } catch {
+        region = null;
+      }
+    }
+    return {
+      id: Number(row.id),
+      country: row.country == null ? null : String(row.country),
+      city: row.city == null ? null : String(row.city),
+      region,
+    };
+  });
+};
+
+export type D1IdExternalIdRow = { id: number; external_id: string | null };
+
+export const d1GetSubscriberIdExternalIdPairs = async (
+  shopDomain: string,
+): Promise<D1IdExternalIdRow[]> => {
+  await ensureD1AudienceSchema();
+  const rows = await runD1Query(
+    `SELECT id, external_id FROM subscribers WHERE shop_domain = ? AND external_id IS NOT NULL`,
+    [shopDomain],
+  );
+  return (rows as Array<Record<string, unknown>>).map((row) => ({
+    id: Number(row.id),
+    external_id: row.external_id == null ? null : String(row.external_id),
+  }));
+};
+
+const d1DistinctTrimmed = async (
+  shopDomain: string,
+  column: 'country' | 'city',
+  limit: number,
+): Promise<string[]> => {
+  await ensureD1AudienceSchema();
+  const rows = await runD1Query(
+    `
+      SELECT DISTINCT TRIM(${column}) AS value
+      FROM subscribers
+      WHERE shop_domain = ? AND ${column} IS NOT NULL AND TRIM(${column}) <> ''
+      ORDER BY value ASC
+      LIMIT ?
+    `,
+    [shopDomain, limit],
+  );
+  return (rows as Array<Record<string, unknown>>)
+    .map((row) => (row.value == null ? '' : String(row.value)))
+    .filter(Boolean);
+};
+
+export const d1GetDistinctCountries = (shopDomain: string, limit = 300) =>
+  d1DistinctTrimmed(shopDomain, 'country', limit);
+
+export const d1GetDistinctCities = (shopDomain: string, limit = 500) =>
+  d1DistinctTrimmed(shopDomain, 'city', limit);
+
+export const d1GetDistinctRegions = async (shopDomain: string, limit = 500): Promise<string[]> => {
+  await ensureD1AudienceSchema();
+  // device_context is JSON text in D1; extract region via json_extract.
+  const rows = await runD1Query(
+    `
+      SELECT DISTINCT TRIM(json_extract(device_context, '$.region')) AS value
+      FROM subscribers
+      WHERE shop_domain = ?
+        AND device_context IS NOT NULL
+        AND TRIM(COALESCE(json_extract(device_context, '$.region'), '')) <> ''
+      ORDER BY value ASC
+      LIMIT ?
+    `,
+    [shopDomain, limit],
+  );
+  return (rows as Array<Record<string, unknown>>)
+    .map((row) => (row.value == null ? '' : String(row.value)))
+    .filter(Boolean);
+};
+
+/**
+ * COUNT(DISTINCT subscriber) that have at least one active, deliverable token,
+ * mirroring getMerchantOverview / countActiveDeliverableSubscribers / KPIs.
+ * Optional created_at window (ISO strings) for new-vs-previous-period KPIs.
+ */
+export const d1CountActiveDeliverableSubscribers = async (
+  shopDomain: string,
+  opts?: { createdSince?: string; createdBefore?: string },
+): Promise<number> => {
+  await ensureD1AudienceSchema();
+  const clauses: string[] = ['s.shop_domain = ?', DELIVERABLE_TOKEN_PREDICATE];
+  const params: unknown[] = [shopDomain];
+  if (opts?.createdSince) {
+    clauses.push('s.created_at >= ?');
+    params.push(opts.createdSince);
+  }
+  if (opts?.createdBefore) {
+    clauses.push('s.created_at < ?');
+    params.push(opts.createdBefore);
+  }
+  const rows = await runD1Query(
+    `
+      SELECT COUNT(DISTINCT s.id) AS count
+      FROM subscribers s
+      JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+      WHERE ${clauses.join(' AND ')}
+    `,
+    params,
+  );
+  return Number((rows as Array<Record<string, unknown>>)[0]?.count ?? 0);
+};
+
+export type D1SubscriberListRow = {
+  external_id: string | null;
+  created_at: string | null;
+  web_browser: string;
+  os_name: string;
+  device_used: string;
+  city: string | null;
+  country: string | null;
+};
+
+export const d1ListSubscribers = async (
+  shopDomain: string,
+  limit: number,
+  offset: number,
+  sortOrder: 'asc' | 'desc',
+): Promise<D1SubscriberListRow[]> => {
+  await ensureD1AudienceSchema();
+  const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
+  const rows = await runD1Query(
+    `
+      SELECT
+        external_id,
+        created_at,
+        COALESCE(NULLIF(browser, ''), NULLIF(json_extract(device_context, '$.browserName'), ''), 'unknown') AS web_browser,
+        COALESCE(NULLIF(platform, ''), NULLIF(json_extract(device_context, '$.osName'), ''), 'unknown') AS os_name,
+        COALESCE(NULLIF(json_extract(device_context, '$.deviceType'), ''), 'unknown') AS device_used,
+        NULLIF(city, '') AS city,
+        NULLIF(country, '') AS country
+      FROM subscribers
+      WHERE shop_domain = ?
+      ORDER BY created_at ${order}
+      LIMIT ? OFFSET ?
+    `,
+    [shopDomain, limit, offset],
+  );
+  return (rows as Array<Record<string, unknown>>).map((row) => ({
+    external_id: row.external_id == null ? null : String(row.external_id),
+    created_at: row.created_at == null ? null : String(row.created_at),
+    web_browser: row.web_browser == null ? 'unknown' : String(row.web_browser),
+    os_name: row.os_name == null ? 'unknown' : String(row.os_name),
+    device_used: row.device_used == null ? 'unknown' : String(row.device_used),
+    city: row.city == null ? null : String(row.city),
+    country: row.country == null ? null : String(row.country),
+  }));
 };
 
 // ---------------------------------------------------------------------------

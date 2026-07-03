@@ -2614,70 +2614,84 @@ const listAutomationTargets = async (input: { shopDomain: string; externalId?: s
     return [] as Array<{ tokenId: number; subscriberId: number | null; externalId: string | null }>;
   }
 
-  // Keep only the most recently seen active token per subscriber to prevent duplicate sends.
-  const rows = input.subscriberId
-    ? await sql`
-      WITH ranked AS (
-        SELECT
-          t.id AS token_id,
-          s.id AS subscriber_id,
-          s.external_id,
-          ROW_NUMBER() OVER (
-            PARTITION BY s.id
-            ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-          ) AS rn
-        FROM subscriber_tokens t
-        JOIN subscribers s ON s.id = t.subscriber_id
-        WHERE t.shop_domain = ${input.shopDomain}
-          AND s.id = ${input.subscriberId}
-          AND t.status = 'active'
-          AND (
-            COALESCE(t.token_type, 'fcm') <> 'vapid'
-            OR (
-              COALESCE(t.vapid_endpoint, '') <> ''
-              AND COALESCE(t.vapid_p256dh, '') <> ''
-              AND COALESCE(t.vapid_auth, '') <> ''
-            )
-          )
-      )
-      SELECT token_id, subscriber_id, external_id
-      FROM ranked
-      WHERE rn = 1
-    `
-    : await sql`
-      WITH ranked AS (
-        SELECT
-          t.id AS token_id,
-          s.id AS subscriber_id,
-          s.external_id,
-          ROW_NUMBER() OVER (
-            PARTITION BY s.external_id
-            ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-          ) AS rn
-        FROM subscriber_tokens t
-        JOIN subscribers s ON s.id = t.subscriber_id
-        WHERE t.shop_domain = ${input.shopDomain}
-          AND s.external_id = ${input.externalId ?? ''}
-          AND t.status = 'active'
-          AND (
-            COALESCE(t.token_type, 'fcm') <> 'vapid'
-            OR (
-              COALESCE(t.vapid_endpoint, '') <> ''
-              AND COALESCE(t.vapid_p256dh, '') <> ''
-              AND COALESCE(t.vapid_auth, '') <> ''
-            )
-          )
-      )
-      SELECT token_id, subscriber_id, external_id
-      FROM ranked
-      WHERE rn = 1
-    `;
+  const { audienceRead, d1AutomationTargetsBySubscriberId, d1AutomationTargetsByExternalId } =
+    await import('@/lib/server/integrations/d1-audience');
+  type Target = { tokenId: number; subscriberId: number | null; externalId: string | null };
+  const key = (rows: Target[]) => rows.map((r) => r.tokenId).sort((a, b) => a - b).join(',');
 
-  return rows.map((row) => ({
-    tokenId: Number(row.token_id),
-    subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
-    externalId: row.external_id ? String(row.external_id) : null,
-  }));
+  // Keep only the most recently seen active token per subscriber to prevent duplicate sends.
+  return audienceRead<Target[]>({
+    label: input.subscriberId ? 'automation.targets.bySubscriberId' : 'automation.targets.byExternalId',
+    key,
+    neon: async () => {
+      const rows = input.subscriberId
+        ? await sql`
+          WITH ranked AS (
+            SELECT
+              t.id AS token_id,
+              s.id AS subscriber_id,
+              s.external_id,
+              ROW_NUMBER() OVER (
+                PARTITION BY s.id
+                ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+              ) AS rn
+            FROM subscriber_tokens t
+            JOIN subscribers s ON s.id = t.subscriber_id
+            WHERE t.shop_domain = ${input.shopDomain}
+              AND s.id = ${input.subscriberId}
+              AND t.status = 'active'
+              AND (
+                COALESCE(t.token_type, 'fcm') <> 'vapid'
+                OR (
+                  COALESCE(t.vapid_endpoint, '') <> ''
+                  AND COALESCE(t.vapid_p256dh, '') <> ''
+                  AND COALESCE(t.vapid_auth, '') <> ''
+                )
+              )
+          )
+          SELECT token_id, subscriber_id, external_id
+          FROM ranked
+          WHERE rn = 1
+        `
+        : await sql`
+          WITH ranked AS (
+            SELECT
+              t.id AS token_id,
+              s.id AS subscriber_id,
+              s.external_id,
+              ROW_NUMBER() OVER (
+                PARTITION BY s.external_id
+                ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+              ) AS rn
+            FROM subscriber_tokens t
+            JOIN subscribers s ON s.id = t.subscriber_id
+            WHERE t.shop_domain = ${input.shopDomain}
+              AND s.external_id = ${input.externalId ?? ''}
+              AND t.status = 'active'
+              AND (
+                COALESCE(t.token_type, 'fcm') <> 'vapid'
+                OR (
+                  COALESCE(t.vapid_endpoint, '') <> ''
+                  AND COALESCE(t.vapid_p256dh, '') <> ''
+                  AND COALESCE(t.vapid_auth, '') <> ''
+                )
+              )
+          )
+          SELECT token_id, subscriber_id, external_id
+          FROM ranked
+          WHERE rn = 1
+        `;
+      return rows.map((row) => ({
+        tokenId: Number(row.token_id),
+        subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
+        externalId: row.external_id ? String(row.external_id) : null,
+      }));
+    },
+    d1: async () =>
+      input.subscriberId
+        ? d1AutomationTargetsBySubscriberId(input.shopDomain, input.subscriberId)
+        : d1AutomationTargetsByExternalId(input.shopDomain, input.externalId ?? ''),
+  });
 };
 
 const listAutomationTargetsByExternalIds = async (shopDomain: string, externalIds: string[]) => {
@@ -2686,40 +2700,51 @@ const listAutomationTargetsByExternalIds = async (shopDomain: string, externalId
   }
 
   const sql = getNeonSql();
-  const rows = await sql`
-    WITH ranked AS (
-      SELECT
-        t.id AS token_id,
-        s.id AS subscriber_id,
-        s.external_id,
-        ROW_NUMBER() OVER (
-          PARTITION BY s.external_id
-          ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-        ) AS rn
-      FROM subscriber_tokens t
-      JOIN subscribers s ON s.id = t.subscriber_id
-      WHERE t.shop_domain = ${shopDomain}
-        AND s.external_id = ANY(${externalIds})
-        AND t.status = 'active'
-        AND (
-          COALESCE(t.token_type, 'fcm') <> 'vapid'
-          OR (
-            COALESCE(t.vapid_endpoint, '') <> ''
-            AND COALESCE(t.vapid_p256dh, '') <> ''
-            AND COALESCE(t.vapid_auth, '') <> ''
-          )
-        )
-    )
-    SELECT token_id, subscriber_id, external_id
-    FROM ranked
-    WHERE rn = 1
-  `;
+  const { audienceRead, d1AutomationTargetsByExternalIds } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  type Target = { tokenId: number; subscriberId: number | null; externalId: string | null };
 
-  return rows.map((row) => ({
-    tokenId: Number(row.token_id),
-    subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
-    externalId: row.external_id ? String(row.external_id) : null,
-  }));
+  return audienceRead<Target[]>({
+    label: 'automation.targets.byExternalIds',
+    key: (rows) => rows.map((r) => r.tokenId).sort((a, b) => a - b).join(','),
+    neon: async () => {
+      const rows = await sql`
+        WITH ranked AS (
+          SELECT
+            t.id AS token_id,
+            s.id AS subscriber_id,
+            s.external_id,
+            ROW_NUMBER() OVER (
+              PARTITION BY s.external_id
+              ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+            ) AS rn
+          FROM subscriber_tokens t
+          JOIN subscribers s ON s.id = t.subscriber_id
+          WHERE t.shop_domain = ${shopDomain}
+            AND s.external_id = ANY(${externalIds})
+            AND t.status = 'active'
+            AND (
+              COALESCE(t.token_type, 'fcm') <> 'vapid'
+              OR (
+                COALESCE(t.vapid_endpoint, '') <> ''
+                AND COALESCE(t.vapid_p256dh, '') <> ''
+                AND COALESCE(t.vapid_auth, '') <> ''
+              )
+            )
+        )
+        SELECT token_id, subscriber_id, external_id
+        FROM ranked
+        WHERE rn = 1
+      `;
+      return rows.map((row) => ({
+        tokenId: Number(row.token_id),
+        subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
+        externalId: row.external_id ? String(row.external_id) : null,
+      }));
+    },
+    d1: async () => d1AutomationTargetsByExternalIds(shopDomain, externalIds),
+  });
 };
 
 const listAutomationTargetsByClientId = async (shopDomain: string, clientId: string) => {
@@ -2729,44 +2754,55 @@ const listAutomationTargetsByClientId = async (shopDomain: string, clientId: str
   }
 
   const sql = getNeonSql();
-  const rows = await sql`
-    WITH ranked AS (
-      SELECT
-        t.id AS token_id,
-        s.id AS subscriber_id,
-        s.external_id,
-        ROW_NUMBER() OVER (
-          PARTITION BY s.id
-          ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-        ) AS rn
-      FROM subscriber_tokens t
-      JOIN subscribers s ON s.id = t.subscriber_id
-      WHERE t.shop_domain = ${shopDomain}
-        AND s.shop_domain = ${shopDomain}
-        AND t.status = 'active'
-        AND (
-          COALESCE(t.token_type, 'fcm') <> 'vapid'
-          OR (
-            COALESCE(t.vapid_endpoint, '') <> ''
-            AND COALESCE(t.vapid_p256dh, '') <> ''
-            AND COALESCE(t.vapid_auth, '') <> ''
-          )
-        )
-        AND (
-          COALESCE(s.device_context ->> 'clientId', '') = ${normalizedClientId}
-          OR COALESCE(s.device_context ->> 'shopifyAnalyticsClientId', '') = ${normalizedClientId}
-        )
-    )
-    SELECT token_id, subscriber_id, external_id
-    FROM ranked
-    WHERE rn = 1
-  `;
+  const { audienceRead, d1AutomationTargetsByClientId } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  type Target = { tokenId: number; subscriberId: number | null; externalId: string | null };
 
-  return rows.map((row) => ({
-    tokenId: Number(row.token_id),
-    subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
-    externalId: row.external_id ? String(row.external_id) : null,
-  }));
+  return audienceRead<Target[]>({
+    label: 'automation.targets.byClientId',
+    key: (rows) => rows.map((r) => r.tokenId).sort((a, b) => a - b).join(','),
+    neon: async () => {
+      const rows = await sql`
+        WITH ranked AS (
+          SELECT
+            t.id AS token_id,
+            s.id AS subscriber_id,
+            s.external_id,
+            ROW_NUMBER() OVER (
+              PARTITION BY s.id
+              ORDER BY t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+            ) AS rn
+          FROM subscriber_tokens t
+          JOIN subscribers s ON s.id = t.subscriber_id
+          WHERE t.shop_domain = ${shopDomain}
+            AND s.shop_domain = ${shopDomain}
+            AND t.status = 'active'
+            AND (
+              COALESCE(t.token_type, 'fcm') <> 'vapid'
+              OR (
+                COALESCE(t.vapid_endpoint, '') <> ''
+                AND COALESCE(t.vapid_p256dh, '') <> ''
+                AND COALESCE(t.vapid_auth, '') <> ''
+              )
+            )
+            AND (
+              COALESCE(s.device_context ->> 'clientId', '') = ${normalizedClientId}
+              OR COALESCE(s.device_context ->> 'shopifyAnalyticsClientId', '') = ${normalizedClientId}
+            )
+        )
+        SELECT token_id, subscriber_id, external_id
+        FROM ranked
+        WHERE rn = 1
+      `;
+      return rows.map((row) => ({
+        tokenId: Number(row.token_id),
+        subscriberId: row.subscriber_id ? Number(row.subscriber_id) : null,
+        externalId: row.external_id ? String(row.external_id) : null,
+      }));
+    },
+    d1: async () => d1AutomationTargetsByClientId(shopDomain, normalizedClientId),
+  });
 };
 
 const normalizeClientId = (metadata?: Record<string, unknown> | null) => {
@@ -5665,12 +5701,23 @@ const parseConditionGroups = (value: unknown): SegmentConditionGroup[] => {
 
 const listAllSubscriberIds = async (shopDomain: string) => {
   const sql = getNeonSql();
-  const rows = await sql`
-    SELECT id
-    FROM subscribers
-    WHERE shop_domain = ${shopDomain}
-  `;
-  return new Set(rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id)));
+  const { audienceRead, d1ListAllSubscriberIds } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  const ids = await audienceRead<number[]>({
+    label: 'segment.listAllSubscriberIds',
+    key: (arr) => [...arr].sort((a, b) => a - b).join(','),
+    neon: async () => {
+      const rows = await sql`
+        SELECT id
+        FROM subscribers
+        WHERE shop_domain = ${shopDomain}
+      `;
+      return rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+    },
+    d1: async () => d1ListAllSubscriberIds(shopDomain),
+  });
+  return new Set(ids);
 };
 
 const queryConditionSubscriberIds = async (shopDomain: string, condition: SegmentCondition, allIds: Set<number>) => {
@@ -5737,11 +5784,29 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
       }
     }
   } else if (condition.type === 'Subscribed') {
-    const rows = await sql`
-      SELECT id, created_at
-      FROM subscribers
-      WHERE shop_domain = ${shopDomain}
-    `;
+    const { audienceRead, d1GetSubscribedRows } = await import(
+      '@/lib/server/integrations/d1-audience'
+    );
+    const rows = await audienceRead<Array<{ id: number; created_at: string | null }>>({
+      label: 'segment.subscribed',
+      key: (arr) =>
+        arr
+          .map((r) => `${Number(r.id)}:${r.created_at ? new Date(String(r.created_at)).getTime() : 0}`)
+          .sort()
+          .join(','),
+      neon: async () => {
+        const r = await sql`
+          SELECT id, created_at
+          FROM subscribers
+          WHERE shop_domain = ${shopDomain}
+        `;
+        return (r as Array<Record<string, unknown>>).map((row) => ({
+          id: Number(row.id),
+          created_at: row.created_at == null ? null : String(row.created_at),
+        }));
+      },
+      d1: async () => d1GetSubscribedRows(shopDomain),
+    });
 
     for (const row of rows) {
       const subscriberId = Number(row.id);
@@ -5756,17 +5821,42 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
     const cities = selected.filter((value) => value.type === 'city').map((value) => String(value.value).toLowerCase());
     const regions = selected.filter((value) => value.type === 'region').map((value) => String(value.value).toLowerCase());
 
-    const rows = await sql`
-      SELECT id, country, city, device_context
-      FROM subscribers
-      WHERE shop_domain = ${shopDomain}
-    `;
+    const { audienceRead, d1GetLocationRows } = await import(
+      '@/lib/server/integrations/d1-audience'
+    );
+    const rows = await audienceRead<
+      Array<{ id: number; country: string | null; city: string | null; region: string | null }>
+    >({
+      label: 'segment.location',
+      key: (arr) =>
+        arr
+          .map(
+            (r) =>
+              `${Number(r.id)}|${(r.country || '').toLowerCase()}|${(r.city || '').toLowerCase()}|${(r.region || '').toLowerCase()}`,
+          )
+          .sort()
+          .join(','),
+      neon: async () => {
+        const r = await sql`
+          SELECT id, country, city, device_context ->> 'region' AS region
+          FROM subscribers
+          WHERE shop_domain = ${shopDomain}
+        `;
+        return (r as Array<Record<string, unknown>>).map((row) => ({
+          id: Number(row.id),
+          country: row.country == null ? null : String(row.country),
+          city: row.city == null ? null : String(row.city),
+          region: row.region == null ? null : String(row.region),
+        }));
+      },
+      d1: async () => d1GetLocationRows(shopDomain),
+    });
 
     for (const row of rows) {
       const subscriberId = Number(row.id);
       const country = String(row.country || '').toLowerCase();
       const city = String(row.city || '').toLowerCase();
-      const region = String((row.device_context && (row.device_context as Record<string, unknown>).region) || '').toLowerCase();
+      const region = String(row.region || '').toLowerCase();
 
       const countryMatch = countries.length === 0 || countries.includes(country);
       const cityMatch = cities.length === 0 || cities.includes(city);
@@ -5802,18 +5892,32 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
 
       if (isD1CustomersEnabled()) {
         // Reproduce the subscribers<->customers join in app code: subscriber
-        // (id, external_id) pairs live on Neon, tags live in D1.
+        // (id, external_id) pairs live on Neon (or D1), tags live in D1.
+        const { audienceRead, d1GetSubscriberIdExternalIdPairs } = await import(
+          '@/lib/server/integrations/d1-audience'
+        );
         const [subscriberRows, tagByExternalId] = await Promise.all([
-          sql`
-            SELECT id, external_id
-            FROM subscribers
-            WHERE shop_domain = ${shopDomain}
-              AND external_id IS NOT NULL
-          `,
+          audienceRead<Array<{ id: number; external_id: string | null }>>({
+            label: 'segment.customerTag.subscriberPairs',
+            key: (arr) => arr.map((r) => `${Number(r.id)}:${r.external_id || ''}`).sort().join(','),
+            neon: async () => {
+              const r = await sql`
+                SELECT id, external_id
+                FROM subscribers
+                WHERE shop_domain = ${shopDomain}
+                  AND external_id IS NOT NULL
+              `;
+              return (r as Array<Record<string, unknown>>).map((row) => ({
+                id: Number(row.id),
+                external_id: row.external_id == null ? null : String(row.external_id),
+              }));
+            },
+            d1: async () => d1GetSubscriberIdExternalIdPairs(shopDomain),
+          }),
           d1GetCustomerTagsMap(shopDomain),
         ]);
 
-        for (const row of subscriberRows as Array<Record<string, unknown>>) {
+        for (const row of subscriberRows) {
           const tagsValue = tagByExternalId.get(String(row.external_id ?? ''));
           if (tagsValue) {
             matchTags(Number(row.id), tagsValue);
@@ -6525,36 +6629,68 @@ export const getSegmentFilterOptions = async (shopDomain: string) => {
   const { isD1CustomersEnabled, d1GetDistinctCustomerTags } = await import(
     '@/lib/server/integrations/d1-customers'
   );
+  const {
+    audienceRead,
+    d1GetDistinctCountries,
+    d1GetDistinctCities,
+    d1GetDistinctRegions,
+  } = await import('@/lib/server/integrations/d1-audience');
   const useD1Customers = isD1CustomersEnabled();
 
+  const stringListKey = (arr: string[]) => arr.join('|');
+
   const [countries, cities, regions, neonTags] = await Promise.all([
-    sql`
-      SELECT DISTINCT TRIM(country) AS value
-      FROM subscribers
-      WHERE shop_domain = ${shopDomain}
-        AND country IS NOT NULL
-        AND TRIM(country) <> ''
-      ORDER BY value ASC
-      LIMIT 300
-    `,
-    sql`
-      SELECT DISTINCT TRIM(city) AS value
-      FROM subscribers
-      WHERE shop_domain = ${shopDomain}
-        AND city IS NOT NULL
-        AND TRIM(city) <> ''
-      ORDER BY value ASC
-      LIMIT 500
-    `,
-    sql`
-      SELECT DISTINCT TRIM(device_context ->> 'region') AS value
-      FROM subscribers
-      WHERE shop_domain = ${shopDomain}
-        AND device_context IS NOT NULL
-        AND TRIM(device_context ->> 'region') <> ''
-      ORDER BY value ASC
-      LIMIT 500
-    `,
+    audienceRead<string[]>({
+      label: 'segment.filterOptions.countries',
+      key: stringListKey,
+      neon: async () => {
+        const rows = await sql`
+          SELECT DISTINCT TRIM(country) AS value
+          FROM subscribers
+          WHERE shop_domain = ${shopDomain}
+            AND country IS NOT NULL
+            AND TRIM(country) <> ''
+          ORDER BY value ASC
+          LIMIT 300
+        `;
+        return (rows as Array<{ value: unknown }>).map((row) => String(row.value));
+      },
+      d1: async () => d1GetDistinctCountries(shopDomain, 300),
+    }),
+    audienceRead<string[]>({
+      label: 'segment.filterOptions.cities',
+      key: stringListKey,
+      neon: async () => {
+        const rows = await sql`
+          SELECT DISTINCT TRIM(city) AS value
+          FROM subscribers
+          WHERE shop_domain = ${shopDomain}
+            AND city IS NOT NULL
+            AND TRIM(city) <> ''
+          ORDER BY value ASC
+          LIMIT 500
+        `;
+        return (rows as Array<{ value: unknown }>).map((row) => String(row.value));
+      },
+      d1: async () => d1GetDistinctCities(shopDomain, 500),
+    }),
+    audienceRead<string[]>({
+      label: 'segment.filterOptions.regions',
+      key: stringListKey,
+      neon: async () => {
+        const rows = await sql`
+          SELECT DISTINCT TRIM(device_context ->> 'region') AS value
+          FROM subscribers
+          WHERE shop_domain = ${shopDomain}
+            AND device_context IS NOT NULL
+            AND TRIM(device_context ->> 'region') <> ''
+          ORDER BY value ASC
+          LIMIT 500
+        `;
+        return (rows as Array<{ value: unknown }>).map((row) => String(row.value));
+      },
+      d1: async () => d1GetDistinctRegions(shopDomain, 500),
+    }),
     useD1Customers
       ? Promise.resolve([] as Array<{ value: string }>)
       : sql`
@@ -6575,103 +6711,155 @@ export const getSegmentFilterOptions = async (shopDomain: string) => {
     : (neonTags as Array<{ value: unknown }>).map((row) => String(row.value));
 
   return {
-    countries: countries.map((row) => String(row.value)),
-    cities: cities.map((row) => String(row.value)),
-    regions: regions.map((row) => String(row.value)),
+    countries,
+    cities,
+    regions,
     customerTags,
   };
+};
+
+type CampaignRecipientRow = {
+  token_id: string | number;
+  fcm_token: string;
+  token_type: string | null;
+  vapid_endpoint: string | null;
+  vapid_p256dh: string | null;
+  vapid_auth: string | null;
+  subscriber_id: string | number;
+  external_id: string | null;
+  platform: string | null;
+  user_agent?: string | null;
 };
 
 export const resolveCampaignAudience = async (
   shopDomain: string,
   segmentId?: string | null,
   excludeDeliveredCampaignId?: string | null,
-) => {
+): Promise<CampaignRecipientRow[]> => {
   await ensureSchema();
   const sql = getNeonSql();
 
+  const { audienceRead, d1ResolveCampaignRecipients } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+
+  // Canonical, order-independent signature for shadow-mode mismatch detection.
+  const recipientKey = (rows: CampaignRecipientRow[]) =>
+    rows
+      .map((row) => `${Number(row.subscriber_id)}:${Number(row.token_id)}`)
+      .sort()
+      .join(',');
+
+  // The delivery de-dup lives on Neon (campaign_deliveries). For the D1 path we
+  // fetch the already-delivered subscriber ids and subtract in app code.
+  const getDeliveredSubscriberIds = async (): Promise<Set<number>> => {
+    if (!excludeDeliveredCampaignId) {
+      return new Set<number>();
+    }
+    const rows = await sql`
+      SELECT DISTINCT subscriber_id
+      FROM campaign_deliveries
+      WHERE campaign_id = ${excludeDeliveredCampaignId}
+        AND fcm_message_id IS NOT NULL
+    `;
+    return new Set(
+      (rows as Array<Record<string, unknown>>)
+        .map((row) => Number(row.subscriber_id))
+        .filter((id) => Number.isFinite(id)),
+    );
+  };
+
+  const d1Recipients = async (subscriberIds?: number[]): Promise<CampaignRecipientRow[]> => {
+    const [recipients, delivered] = await Promise.all([
+      d1ResolveCampaignRecipients(shopDomain, subscriberIds),
+      getDeliveredSubscriberIds(),
+    ]);
+    const filtered =
+      delivered.size > 0
+        ? recipients.filter((row) => !delivered.has(row.subscriber_id))
+        : recipients;
+    return filtered as unknown as CampaignRecipientRow[];
+  };
+
   if (!segmentId || segmentId === 'all') {
-    const rows = excludeDeliveredCampaignId
-      ? await sql`
-        SELECT DISTINCT ON (s.id)
-          t.id AS token_id,
-          t.fcm_token,
-          t.token_type,
-          t.vapid_endpoint,
-          t.vapid_p256dh,
-          t.vapid_auth,
-          s.id AS subscriber_id,
-          s.external_id,
-          s.platform,
-          t.user_agent
-        FROM subscribers s
-        JOIN subscriber_tokens t ON t.subscriber_id = s.id
-        WHERE s.shop_domain = ${shopDomain}
-          AND t.shop_domain = ${shopDomain}
-          AND t.status = 'active'
-          AND (
-            (
-              COALESCE(t.token_type, 'fcm') = 'vapid'
-              AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
-              AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
-              AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
-            )
-            OR (
-              COALESCE(t.token_type, 'fcm') <> 'vapid'
-              AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
-            )
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM campaign_deliveries cd
-            WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
-              AND cd.subscriber_id = s.id
-              AND cd.fcm_message_id IS NOT NULL
-          )
-        ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-      `
-      : await sql`
-        SELECT DISTINCT ON (s.id)
-          t.id AS token_id,
-          t.fcm_token,
-          t.token_type,
-          t.vapid_endpoint,
-          t.vapid_p256dh,
-          t.vapid_auth,
-          s.id AS subscriber_id,
-          s.external_id,
-          s.platform,
-          t.user_agent
-        FROM subscribers s
-        JOIN subscriber_tokens t ON t.subscriber_id = s.id
-        WHERE s.shop_domain = ${shopDomain}
-          AND t.shop_domain = ${shopDomain}
-          AND t.status = 'active'
-          AND (
-            (
-              COALESCE(t.token_type, 'fcm') = 'vapid'
-              AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
-              AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
-              AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
-            )
-            OR (
-              COALESCE(t.token_type, 'fcm') <> 'vapid'
-              AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
-            )
-          )
-        ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-      `;
-    return rows as Array<{
-      token_id: string | number;
-      fcm_token: string;
-      token_type: string | null;
-      vapid_endpoint: string | null;
-      vapid_p256dh: string | null;
-      vapid_auth: string | null;
-      subscriber_id: string | number;
-      external_id: string | null;
-      platform: string | null;
-    }>;
+    return audienceRead<CampaignRecipientRow[]>({
+      label: 'resolveCampaignAudience.all',
+      key: recipientKey,
+      neon: async () => {
+        const rows = excludeDeliveredCampaignId
+          ? await sql`
+            SELECT DISTINCT ON (s.id)
+              t.id AS token_id,
+              t.fcm_token,
+              t.token_type,
+              t.vapid_endpoint,
+              t.vapid_p256dh,
+              t.vapid_auth,
+              s.id AS subscriber_id,
+              s.external_id,
+              s.platform,
+              t.user_agent
+            FROM subscribers s
+            JOIN subscriber_tokens t ON t.subscriber_id = s.id
+            WHERE s.shop_domain = ${shopDomain}
+              AND t.shop_domain = ${shopDomain}
+              AND t.status = 'active'
+              AND (
+                (
+                  COALESCE(t.token_type, 'fcm') = 'vapid'
+                  AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+                  AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+                  AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+                )
+                OR (
+                  COALESCE(t.token_type, 'fcm') <> 'vapid'
+                  AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+                )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM campaign_deliveries cd
+                WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
+                  AND cd.subscriber_id = s.id
+                  AND cd.fcm_message_id IS NOT NULL
+              )
+            ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+          `
+          : await sql`
+            SELECT DISTINCT ON (s.id)
+              t.id AS token_id,
+              t.fcm_token,
+              t.token_type,
+              t.vapid_endpoint,
+              t.vapid_p256dh,
+              t.vapid_auth,
+              s.id AS subscriber_id,
+              s.external_id,
+              s.platform,
+              t.user_agent
+            FROM subscribers s
+            JOIN subscriber_tokens t ON t.subscriber_id = s.id
+            WHERE s.shop_domain = ${shopDomain}
+              AND t.shop_domain = ${shopDomain}
+              AND t.status = 'active'
+              AND (
+                (
+                  COALESCE(t.token_type, 'fcm') = 'vapid'
+                  AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+                  AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+                  AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+                )
+                OR (
+                  COALESCE(t.token_type, 'fcm') <> 'vapid'
+                  AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+                )
+              )
+            ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+          `;
+        return rows as unknown as CampaignRecipientRow[];
+      },
+      d1: async () => d1Recipients(undefined),
+    });
   }
 
   const segmentRows = await sql`
@@ -6690,93 +6878,87 @@ export const resolveCampaignAudience = async (
 
   const subscriberIds = Array.from(allowedIds);
 
-  const rows = excludeDeliveredCampaignId
-    ? await sql`
-      SELECT DISTINCT ON (s.id)
-        t.id AS token_id,
-        t.fcm_token,
-        t.token_type,
-        t.vapid_endpoint,
-        t.vapid_p256dh,
-        t.vapid_auth,
-        s.id AS subscriber_id,
-        s.external_id,
-        s.platform,
-        t.user_agent
-      FROM subscribers s
-      JOIN subscriber_tokens t ON t.subscriber_id = s.id
-      WHERE s.shop_domain = ${shopDomain}
-        AND t.shop_domain = ${shopDomain}
-        AND t.status = 'active'
-        AND (
-          (
-            COALESCE(t.token_type, 'fcm') = 'vapid'
-            AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
-            AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
-            AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
-          )
-          OR (
-            COALESCE(t.token_type, 'fcm') <> 'vapid'
-            AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
-          )
-        )
-        AND s.id = ANY(${subscriberIds})
-        AND NOT EXISTS (
-          SELECT 1
-          FROM campaign_deliveries cd
-          WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
-            AND cd.subscriber_id = s.id
-            AND cd.fcm_message_id IS NOT NULL
-        )
-      ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-    `
-    : await sql`
-      SELECT DISTINCT ON (s.id)
-        t.id AS token_id,
-        t.fcm_token,
-        t.token_type,
-        t.vapid_endpoint,
-        t.vapid_p256dh,
-        t.vapid_auth,
-        s.id AS subscriber_id,
-        s.external_id,
-        s.platform,
-        t.user_agent
-      FROM subscribers s
-      JOIN subscriber_tokens t ON t.subscriber_id = s.id
-      WHERE s.shop_domain = ${shopDomain}
-        AND t.shop_domain = ${shopDomain}
-        AND t.status = 'active'
-        AND (
-          (
-            COALESCE(t.token_type, 'fcm') = 'vapid'
-            AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
-            AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
-            AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
-          )
-          OR (
-            COALESCE(t.token_type, 'fcm') <> 'vapid'
-            AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
-          )
-        )
-        AND s.id = ANY(${subscriberIds})
-      ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
-    `;
-
-  return rows as Array<{
-    token_id: string | number;
-    fcm_token: string;
-    token_type: string | null;
-    vapid_endpoint: string | null;
-    vapid_p256dh: string | null;
-    vapid_auth: string | null;
-    subscriber_id: string | number;
-    external_id: string | null;
-    platform: string | null;
-  }>;
+  return audienceRead<CampaignRecipientRow[]>({
+    label: 'resolveCampaignAudience.segment',
+    key: recipientKey,
+    neon: async () => {
+      const rows = excludeDeliveredCampaignId
+        ? await sql`
+          SELECT DISTINCT ON (s.id)
+            t.id AS token_id,
+            t.fcm_token,
+            t.token_type,
+            t.vapid_endpoint,
+            t.vapid_p256dh,
+            t.vapid_auth,
+            s.id AS subscriber_id,
+            s.external_id,
+            s.platform,
+            t.user_agent
+          FROM subscribers s
+          JOIN subscriber_tokens t ON t.subscriber_id = s.id
+          WHERE s.shop_domain = ${shopDomain}
+            AND t.shop_domain = ${shopDomain}
+            AND t.status = 'active'
+            AND (
+              (
+                COALESCE(t.token_type, 'fcm') = 'vapid'
+                AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+                AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+                AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+              )
+              OR (
+                COALESCE(t.token_type, 'fcm') <> 'vapid'
+                AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+              )
+            )
+            AND s.id = ANY(${subscriberIds})
+            AND NOT EXISTS (
+              SELECT 1
+              FROM campaign_deliveries cd
+              WHERE cd.campaign_id = ${excludeDeliveredCampaignId}
+                AND cd.subscriber_id = s.id
+                AND cd.fcm_message_id IS NOT NULL
+            )
+          ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+        `
+        : await sql`
+          SELECT DISTINCT ON (s.id)
+            t.id AS token_id,
+            t.fcm_token,
+            t.token_type,
+            t.vapid_endpoint,
+            t.vapid_p256dh,
+            t.vapid_auth,
+            s.id AS subscriber_id,
+            s.external_id,
+            s.platform,
+            t.user_agent
+          FROM subscribers s
+          JOIN subscriber_tokens t ON t.subscriber_id = s.id
+          WHERE s.shop_domain = ${shopDomain}
+            AND t.shop_domain = ${shopDomain}
+            AND t.status = 'active'
+            AND (
+              (
+                COALESCE(t.token_type, 'fcm') = 'vapid'
+                AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+                AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+                AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+              )
+              OR (
+                COALESCE(t.token_type, 'fcm') <> 'vapid'
+                AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+              )
+            )
+            AND s.id = ANY(${subscriberIds})
+          ORDER BY s.id, t.last_seen_at DESC NULLS LAST, t.updated_at DESC, t.id DESC
+        `;
+      return rows as unknown as CampaignRecipientRow[];
+    },
+    d1: async () => d1Recipients(subscriberIds),
+  });
 };
-
-type CampaignRecipientRow = Awaited<ReturnType<typeof resolveCampaignAudience>>[number];
 
 const dedupeRecipientsBySubscriber = (rows: CampaignRecipientRow[]) => {
   const bySubscriber = new Map<number, CampaignRecipientRow>();
@@ -6936,25 +7118,36 @@ export const getMerchantOverview = async (shopDomain: string) => {
     LIMIT 1
   `;
 
-  const subscriberCountRows = await sql`
-    SELECT COUNT(DISTINCT s.id)::INT AS count
-    FROM subscribers s
-    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
-    WHERE s.shop_domain = ${shopDomain}
-      AND t.status = 'active'
-      AND (
-        (
-          COALESCE(t.token_type, 'fcm') = 'vapid'
-          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
-          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
-          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
-        )
-        OR (
-          COALESCE(t.token_type, 'fcm') <> 'vapid'
-          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
-        )
-      )
-  `;
+  const { audienceRead, d1CountActiveDeliverableSubscribers } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  const activeSubscriberCount = await audienceRead<number>({
+    label: 'overview.activeDeliverableCount',
+    key: (n) => String(n),
+    neon: async () => {
+      const rows = await sql`
+        SELECT COUNT(DISTINCT s.id)::INT AS count
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+        WHERE s.shop_domain = ${shopDomain}
+          AND t.status = 'active'
+          AND (
+            (
+              COALESCE(t.token_type, 'fcm') = 'vapid'
+              AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+              AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+              AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+            )
+            OR (
+              COALESCE(t.token_type, 'fcm') <> 'vapid'
+              AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+            )
+          )
+      `;
+      return Number(rows[0]?.count ?? 0);
+    },
+    d1: async () => d1CountActiveDeliverableSubscribers(shopDomain),
+  });
 
   const { isD1CustomersEnabled, d1CountCustomers } = await import(
     '@/lib/server/integrations/d1-customers'
@@ -7008,7 +7201,7 @@ export const getMerchantOverview = async (shopDomain: string) => {
     firstInstalledAt: row?.first_installed_at ? String(row.first_installed_at) : null,
     lastAuthenticatedAt: row?.last_authenticated_at ? String(row.last_authenticated_at) : null,
     uninstalledAt: row?.uninstalled_at ? String(row.uninstalled_at) : null,
-    subscriberCount: Number(subscriberCountRows[0]?.count ?? 0),
+    subscriberCount: activeSubscriberCount,
     customerCount,
     campaignCount: Number(campaignCountRows[0]?.count ?? 0),
   };
@@ -7255,28 +7448,37 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
 export const countActiveDeliverableSubscribers = async (shopDomain: string) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const { audienceRead, d1CountActiveDeliverableSubscribers } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
 
-  const rows = await sql`
-    SELECT COUNT(DISTINCT s.id)::BIGINT AS count
-    FROM subscribers s
-    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
-    WHERE s.shop_domain = ${shopDomain}
-      AND t.status = 'active'
-      AND (
-        (
-          COALESCE(t.token_type, 'fcm') = 'vapid'
-          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
-          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
-          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
-        )
-        OR (
-          COALESCE(t.token_type, 'fcm') <> 'vapid'
-          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
-        )
-      )
-  `;
-
-  return Number(rows[0]?.count ?? 0);
+  return audienceRead<number>({
+    label: 'countActiveDeliverableSubscribers',
+    key: (n) => String(n),
+    neon: async () => {
+      const rows = await sql`
+        SELECT COUNT(DISTINCT s.id)::BIGINT AS count
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+        WHERE s.shop_domain = ${shopDomain}
+          AND t.status = 'active'
+          AND (
+            (
+              COALESCE(t.token_type, 'fcm') = 'vapid'
+              AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+              AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+              AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+            )
+            OR (
+              COALESCE(t.token_type, 'fcm') <> 'vapid'
+              AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+            )
+          )
+      `;
+      return Number(rows[0]?.count ?? 0);
+    },
+    d1: async () => d1CountActiveDeliverableSubscribers(shopDomain),
+  });
 };
 
 export const recordIosHomeScreenConfirmed = async (input: RecordIosHomeScreenInput) => {
@@ -7536,80 +7738,117 @@ export const verifyAudienceD1Parity = async (shopDomain?: string) => {
 export const getSubscriberKpis = async (shopDomain: string) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const { audienceRead, d1CountSubscribers, d1CountActiveDeliverableSubscribers } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
 
-  const totalRows = await sql`
-    SELECT COUNT(*)::BIGINT AS count
-    FROM subscribers
-    WHERE shop_domain = ${shopDomain}
-  `;
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  const since7 = new Date(now - 7 * day).toISOString();
+  const since14 = new Date(now - 14 * day).toISOString();
 
-  const activeRows = await sql`
-    SELECT COUNT(DISTINCT s.id)::BIGINT AS count
-    FROM subscribers s
-    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
-    WHERE s.shop_domain = ${shopDomain}
-      AND t.status = 'active'
-      AND (
-        (
-          COALESCE(t.token_type, 'fcm') = 'vapid'
-          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
-          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
-          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
-        )
-        OR (
-          COALESCE(t.token_type, 'fcm') <> 'vapid'
-          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
-        )
-      )
-  `;
+  const totalSubscriberRecords = await audienceRead<number>({
+    label: 'kpis.totalRecords',
+    key: (n) => String(n),
+    neon: async () => {
+      const rows = await sql`
+        SELECT COUNT(*)::BIGINT AS count
+        FROM subscribers
+        WHERE shop_domain = ${shopDomain}
+      `;
+      return Number(rows[0]?.count ?? 0);
+    },
+    d1: async () => d1CountSubscribers(shopDomain),
+  });
 
-  const newLast7Rows = await sql`
-    SELECT COUNT(DISTINCT s.id)::BIGINT AS count
-    FROM subscribers s
-    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
-    WHERE s.shop_domain = ${shopDomain}
-      AND s.created_at >= NOW() - INTERVAL '7 days'
-      AND t.status = 'active'
-      AND (
-        (
-          COALESCE(t.token_type, 'fcm') = 'vapid'
-          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
-          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
-          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
-        )
-        OR (
-          COALESCE(t.token_type, 'fcm') <> 'vapid'
-          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
-        )
-      )
-  `;
+  const totalSubscribers = await audienceRead<number>({
+    label: 'kpis.active',
+    key: (n) => String(n),
+    neon: async () => {
+      const rows = await sql`
+        SELECT COUNT(DISTINCT s.id)::BIGINT AS count
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+        WHERE s.shop_domain = ${shopDomain}
+          AND t.status = 'active'
+          AND (
+            (
+              COALESCE(t.token_type, 'fcm') = 'vapid'
+              AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+              AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+              AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+            )
+            OR (
+              COALESCE(t.token_type, 'fcm') <> 'vapid'
+              AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+            )
+          )
+      `;
+      return Number(rows[0]?.count ?? 0);
+    },
+    d1: async () => d1CountActiveDeliverableSubscribers(shopDomain),
+  });
 
-  const prev7Rows = await sql`
-    SELECT COUNT(DISTINCT s.id)::BIGINT AS count
-    FROM subscribers s
-    JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
-    WHERE s.shop_domain = ${shopDomain}
-      AND s.created_at >= NOW() - INTERVAL '14 days'
-      AND s.created_at < NOW() - INTERVAL '7 days'
-      AND t.status = 'active'
-      AND (
-        (
-          COALESCE(t.token_type, 'fcm') = 'vapid'
-          AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
-          AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
-          AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
-        )
-        OR (
-          COALESCE(t.token_type, 'fcm') <> 'vapid'
-          AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
-        )
-      )
-  `;
+  const newSubscribersLast7Days = await audienceRead<number>({
+    label: 'kpis.new7d',
+    key: (n) => String(n),
+    neon: async () => {
+      const rows = await sql`
+        SELECT COUNT(DISTINCT s.id)::BIGINT AS count
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+        WHERE s.shop_domain = ${shopDomain}
+          AND s.created_at >= NOW() - INTERVAL '7 days'
+          AND t.status = 'active'
+          AND (
+            (
+              COALESCE(t.token_type, 'fcm') = 'vapid'
+              AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+              AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+              AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+            )
+            OR (
+              COALESCE(t.token_type, 'fcm') <> 'vapid'
+              AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+            )
+          )
+      `;
+      return Number(rows[0]?.count ?? 0);
+    },
+    d1: async () => d1CountActiveDeliverableSubscribers(shopDomain, { createdSince: since7 }),
+  });
 
-  const totalSubscriberRecords = Number(totalRows[0]?.count ?? 0);
-  const totalSubscribers = Number(activeRows[0]?.count ?? 0);
-  const newSubscribersLast7Days = Number(newLast7Rows[0]?.count ?? 0);
-  const previousPeriodCount = Number(prev7Rows[0]?.count ?? 0);
+  const previousPeriodCount = await audienceRead<number>({
+    label: 'kpis.prev7d',
+    key: (n) => String(n),
+    neon: async () => {
+      const rows = await sql`
+        SELECT COUNT(DISTINCT s.id)::BIGINT AS count
+        FROM subscribers s
+        JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+        WHERE s.shop_domain = ${shopDomain}
+          AND s.created_at >= NOW() - INTERVAL '14 days'
+          AND s.created_at < NOW() - INTERVAL '7 days'
+          AND t.status = 'active'
+          AND (
+            (
+              COALESCE(t.token_type, 'fcm') = 'vapid'
+              AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+              AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+              AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+            )
+            OR (
+              COALESCE(t.token_type, 'fcm') <> 'vapid'
+              AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+            )
+          )
+      `;
+      return Number(rows[0]?.count ?? 0);
+    },
+    d1: async () =>
+      d1CountActiveDeliverableSubscribers(shopDomain, { createdSince: since14, createdBefore: since7 }),
+  });
+
   const growthPercent = previousPeriodCount > 0
     ? ((newSubscribersLast7Days - previousPeriodCount) / previousPeriodCount) * 100
     : (newSubscribersLast7Days > 0 ? 100 : 0);
@@ -7630,43 +7869,79 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
   const safeLimit = Math.min(Math.max(limit, 1), 500);
   const safeOffset = Math.max(offset, 0);
 
-  const rows = sortOrder === 'asc'
-    ? await sql`
-      SELECT
-        external_id,
-        created_at,
-        COALESCE(NULLIF(browser, ''), NULLIF(device_context ->> 'browserName', ''), 'unknown') AS web_browser,
-        COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
-        COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
-        NULLIF(city, '') AS city,
-        NULLIF(country, '') AS country
-      FROM subscribers
-      WHERE shop_domain = ${shopDomain}
-      ORDER BY created_at ASC
-      LIMIT ${safeLimit}
-      OFFSET ${safeOffset}
-    `
-    : await sql`
-      SELECT
-        external_id,
-        created_at,
-        COALESCE(NULLIF(browser, ''), NULLIF(device_context ->> 'browserName', ''), 'unknown') AS web_browser,
-        COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
-        COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
-        NULLIF(city, '') AS city,
-        NULLIF(country, '') AS country
-      FROM subscribers
-      WHERE shop_domain = ${shopDomain}
-      ORDER BY created_at DESC
-      LIMIT ${safeLimit}
-      OFFSET ${safeOffset}
-    `;
+  const { audienceRead, d1ListSubscribers, d1CountSubscribers } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
 
-  const totalRows = await sql`
-    SELECT COUNT(*)::BIGINT AS count
-    FROM subscribers
-    WHERE shop_domain = ${shopDomain}
-  `;
+  type ListRow = {
+    external_id: string | null;
+    created_at: string | null;
+    web_browser: string;
+    os_name: string;
+    device_used: string;
+    city: string | null;
+    country: string | null;
+  };
+
+  const rows = await audienceRead<ListRow[]>({
+    label: `listSubscribers.${sortOrder}`,
+    key: (list) =>
+      list
+        .map(
+          (r) =>
+            `${r.external_id ?? ''}|${r.created_at ? new Date(String(r.created_at)).getTime() : 0}|${r.web_browser}|${r.os_name}|${r.device_used}|${r.city ?? ''}|${r.country ?? ''}`,
+        )
+        .join(';'),
+    neon: async () => {
+      const result = sortOrder === 'asc'
+        ? await sql`
+          SELECT
+            external_id,
+            created_at,
+            COALESCE(NULLIF(browser, ''), NULLIF(device_context ->> 'browserName', ''), 'unknown') AS web_browser,
+            COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
+            COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
+            NULLIF(city, '') AS city,
+            NULLIF(country, '') AS country
+          FROM subscribers
+          WHERE shop_domain = ${shopDomain}
+          ORDER BY created_at ASC
+          LIMIT ${safeLimit}
+          OFFSET ${safeOffset}
+        `
+        : await sql`
+          SELECT
+            external_id,
+            created_at,
+            COALESCE(NULLIF(browser, ''), NULLIF(device_context ->> 'browserName', ''), 'unknown') AS web_browser,
+            COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
+            COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
+            NULLIF(city, '') AS city,
+            NULLIF(country, '') AS country
+          FROM subscribers
+          WHERE shop_domain = ${shopDomain}
+          ORDER BY created_at DESC
+          LIMIT ${safeLimit}
+          OFFSET ${safeOffset}
+        `;
+      return result as unknown as ListRow[];
+    },
+    d1: async () => d1ListSubscribers(shopDomain, safeLimit, safeOffset, sortOrder),
+  });
+
+  const total = await audienceRead<number>({
+    label: 'listSubscribers.total',
+    key: (n) => String(n),
+    neon: async () => {
+      const totalRows = await sql`
+        SELECT COUNT(*)::BIGINT AS count
+        FROM subscribers
+        WHERE shop_domain = ${shopDomain}
+      `;
+      return Number(totalRows[0]?.count ?? 0);
+    },
+    d1: async () => d1CountSubscribers(shopDomain),
+  });
 
   const subscribers: SubscriberListRow[] = rows.map((row) => {
     const city = row?.city ? String(row.city) : null;
@@ -7689,8 +7964,6 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
       cityCountry,
     };
   });
-
-  const total = Number(totalRows[0]?.count ?? 0);
 
   return {
     subscribers,
