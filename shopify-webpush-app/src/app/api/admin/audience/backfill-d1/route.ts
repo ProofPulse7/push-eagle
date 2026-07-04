@@ -12,7 +12,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { backfillAudienceToD1, verifyAudienceD1Parity } from '@/lib/server/data/store';
+import {
+  backfillAudienceToD1,
+  getAudienceOutboxStatus,
+  reconcileAudienceOutbox,
+  verifyAudienceD1Parity,
+} from '@/lib/server/data/store';
+import { d1AudienceSelfTest } from '@/lib/server/integrations/d1-audience';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -30,6 +36,33 @@ export async function POST(request: Request) {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
     body = {};
+  }
+
+  // Isolated proof that the d1_only authoritative write path works end-to-end
+  // (write -> read -> idempotent update -> cleanup) before flipping the mode.
+  if (body.action === 'selftest') {
+    try {
+      const result = await d1AudienceSelfTest();
+      return NextResponse.json({ ok: result.ok, action: 'selftest', ...result }, {
+        status: result.ok ? 200 : 500,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      return NextResponse.json({ ok: false, action: 'selftest', error: message }, { status: 500 });
+    }
+  }
+
+  // Manually drain the zero-loss outbox (also runs automatically every cron tick).
+  if (body.action === 'reconcile-outbox') {
+    try {
+      const result = await reconcileAudienceOutbox(
+        body.limit == null ? undefined : Number(body.limit),
+      );
+      return NextResponse.json({ ok: true, action: 'reconcile-outbox', ...result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      return NextResponse.json({ ok: false, action: 'reconcile-outbox', error: message }, { status: 500 });
+    }
   }
 
   try {
@@ -54,8 +87,11 @@ export async function GET(request: Request) {
   const shop = new URL(request.url).searchParams.get('shop')?.trim() || undefined;
 
   try {
-    const parity = await verifyAudienceD1Parity(shop);
-    return NextResponse.json({ ok: true, ...parity });
+    const [parity, outbox] = await Promise.all([
+      verifyAudienceD1Parity(shop),
+      getAudienceOutboxStatus(),
+    ]);
+    return NextResponse.json({ ok: true, ...parity, outbox });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error ?? '');
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

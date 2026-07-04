@@ -457,7 +457,7 @@ const parseScopes = (value?: string | null) =>
     .map((scope) => scope.trim())
     .filter(Boolean);
 
-const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v1';
+const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v3';
 const SCHEMA_READY_TTL_SECONDS = 6 * 60 * 60;
 
 const ensureSchema = async () => {
@@ -759,6 +759,26 @@ const ensureSchema = async () => {
         revenue_cents INTEGER NOT NULL DEFAULT 0
       )`;
 
+      // Durable, permanent per-rule automation stats. The row-level
+      // automation_deliveries / automation_clicks tables are pruned at scale to
+      // keep Neon bounded, but merchants must ALWAYS see lifetime automation
+      // impressions/clicks/revenue. This table holds the FROZEN aggregate of rows
+      // that have already been pruned; all-time stats are then computed as
+      // (archived here) + (live SUM of the not-yet-pruned detail). At prune time
+      // the rows being deleted are folded into these counters in the SAME atomic
+      // statement (see pruneHighVolumeTimeSeries), so the lifetime total is always
+      // continuous with zero drift and zero double-counting. Tiny: one row per
+      // shop x rule_key (a few hundred rows even at 30 merchants), kept forever.
+      await sql`CREATE TABLE IF NOT EXISTS automation_rule_stats (
+        shop_domain TEXT NOT NULL,
+        rule_key TEXT NOT NULL,
+        archived_impressions BIGINT NOT NULL DEFAULT 0,
+        archived_clicks BIGINT NOT NULL DEFAULT 0,
+        archived_revenue_cents BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (shop_domain, rule_key)
+      )`;
+
       await sql`CREATE TABLE IF NOT EXISTS shopify_orders (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -879,6 +899,24 @@ const ensureSchema = async () => {
         error_message TEXT,
         metadata JSONB
       )`;
+
+      // Zero-loss safety net for d1_only: when the authoritative D1 token write
+      // fails, the raw payload is buffered here so a cron reconciler can replay it
+      // into D1 (which assigns the id). Deliberately NO foreign key so a missing
+      // merchant row can never block a token from being durably captured. Stays
+      // near-empty because the reconciler drains it every tick.
+      await sql`CREATE TABLE IF NOT EXISTS d1_audience_outbox (
+        id BIGSERIAL PRIMARY KEY,
+        shop_domain TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        fcm_token TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_d1_audience_outbox_shop_token ON d1_audience_outbox(shop_domain, fcm_token)`;
 
       await sql`CREATE TABLE IF NOT EXISTS merchant_daily_stats (
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -2435,7 +2473,7 @@ export const getAutomationOverview = async (shopDomain: string) => {
   await ensureAutomationRules(shopDomain);
   const sql = getNeonSql();
 
-  const [rules, deliveryStats, clickStats] = await Promise.all([
+  const [rules, deliveryStats, clickStats, archivedStats] = await Promise.all([
     listAutomationRules(shopDomain),
     sql`
       SELECT
@@ -2455,6 +2493,15 @@ export const getAutomationOverview = async (shopDomain: string) => {
       WHERE shop_domain = ${shopDomain}
       GROUP BY rule_key
     `,
+    // Lifetime totals of already-pruned rows (see automation_rule_stats). Adding
+    // these to the live detail sums keeps all-time per-rule stats permanent even
+    // after the raw rows are pruned. Zero before any pruning has happened, so this
+    // never changes displayed numbers at rollout.
+    sql`
+      SELECT rule_key, archived_impressions, archived_clicks, archived_revenue_cents
+      FROM automation_rule_stats
+      WHERE shop_domain = ${shopDomain}
+    `,
   ]);
 
   const deliveriesByRule = new Map(
@@ -2469,15 +2516,23 @@ export const getAutomationOverview = async (shopDomain: string) => {
       revenueCents: Number(row.revenue_cents ?? 0),
     }]),
   );
+  const archivedByRule = new Map(
+    archivedStats.map((row) => [String(row.rule_key), {
+      impressions: Number(row.archived_impressions ?? 0),
+      clicks: Number(row.archived_clicks ?? 0),
+      revenueCents: Number(row.archived_revenue_cents ?? 0),
+    }]),
+  );
 
   const summaries = rules.map((rule) => {
     const delivery = deliveriesByRule.get(rule.ruleKey) ?? { impressions: 0, revenueCents: 0 };
     const click = clicksByRule.get(rule.ruleKey) ?? { clicks: 0, revenueCents: 0 };
+    const archived = archivedByRule.get(rule.ruleKey) ?? { impressions: 0, clicks: 0, revenueCents: 0 };
     return {
       ...rule,
-      impressions: delivery.impressions,
-      clicks: click.clicks,
-      revenueCents: delivery.revenueCents + click.revenueCents,
+      impressions: delivery.impressions + archived.impressions,
+      clicks: click.clicks + archived.clicks,
+      revenueCents: delivery.revenueCents + click.revenueCents + archived.revenueCents,
     };
   });
 
@@ -2503,7 +2558,7 @@ export const getAutomationStats = async (
   const sql = getNeonSql();
   const hasRange = Boolean(from && to);
 
-  const [rules, deliveryStats, clickStats] = await Promise.all([
+  const [rules, deliveryStats, clickStats, archivedStats] = await Promise.all([
     listAutomationRules(shopDomain),
     hasRange
       ? sql`
@@ -2547,6 +2602,17 @@ export const getAutomationStats = async (
           WHERE shop_domain = ${shopDomain}
           GROUP BY rule_key
         `,
+    // Only all-time (no date range) folds in the archived baseline of pruned rows.
+    // A bounded date range is served purely from the retained detail (retention
+    // must stay >= the largest selectable range, currently 90d <= 120d), so adding
+    // the (non-date-bucketed) archived totals there would over-count.
+    hasRange
+      ? Promise.resolve([] as Array<Record<string, unknown>>)
+      : sql`
+          SELECT rule_key, archived_impressions, archived_clicks, archived_revenue_cents
+          FROM automation_rule_stats
+          WHERE shop_domain = ${shopDomain}
+        `,
   ]);
 
   const deliveriesByRule = new Map(
@@ -2561,15 +2627,23 @@ export const getAutomationStats = async (
       revenueCents: Number(row.revenue_cents ?? 0),
     }]),
   );
+  const archivedByRule = new Map(
+    archivedStats.map((row) => [String(row.rule_key), {
+      impressions: Number(row.archived_impressions ?? 0),
+      clicks: Number(row.archived_clicks ?? 0),
+      revenueCents: Number(row.archived_revenue_cents ?? 0),
+    }]),
+  );
 
   const summaries = rules.map((rule) => {
     const delivery = deliveriesByRule.get(rule.ruleKey) ?? { impressions: 0, revenueCents: 0 };
     const click = clicksByRule.get(rule.ruleKey) ?? { clicks: 0, revenueCents: 0 };
+    const archived = archivedByRule.get(rule.ruleKey) ?? { impressions: 0, clicks: 0, revenueCents: 0 };
     return {
       ...rule,
-      impressions: delivery.impressions,
-      clicks: click.clicks,
-      revenueCents: delivery.revenueCents + click.revenueCents,
+      impressions: delivery.impressions + archived.impressions,
+      clicks: click.clicks + archived.clicks,
+      revenueCents: delivery.revenueCents + click.revenueCents + archived.revenueCents,
     };
   });
 
@@ -3423,7 +3497,12 @@ export const pruneAutomationData = async () => {
   const sql = getNeonSql();
 
   const now = Date.now();
-  const webhookCutoff = new Date(now - readRetentionDays('PE_RETENTION_WEBHOOK_EVENT_DAYS', 30) * DAY_MS);
+  // webhook_events is ONLY an idempotency/dedup log (INSERT ... ON CONFLICT DO
+  // NOTHING) plus a short diagnostics list. Shopify only retries a webhook for
+  // ~48h, so a 5-day window fully covers dedup with buffer while keeping what is
+  // otherwise the single largest Neon table (it was ~34% of the DB at 30 days)
+  // tiny. Env-tunable if a longer diagnostics history is ever wanted.
+  const webhookCutoff = new Date(now - readRetentionDays('PE_RETENTION_WEBHOOK_EVENT_DAYS', 5) * DAY_MS);
   const activityCutoff = new Date(now - readRetentionDays('PE_RETENTION_ACTIVITY_DAYS', 45) * DAY_MS);
   // automation_jobs is the high-volume automation queue. We only ever prune jobs
   // in a terminal state (never pending/processing work), keeping Neon bounded the
@@ -3576,13 +3655,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * Prunes the unbounded per-recipient delivery/click history and old Shopify
  * order/fulfillment cache rows from Neon. This is the single biggest lever for
  * staying inside the Neon free tier at scale: it caps row count (and therefore
- * storage + scan cost) regardless of total lifetime volume, without touching any
- * read path — recent data (attribution, welcome-step dedup, campaign detail
- * views) is fully retained, and all-time stats live in merchant_daily_stats.
+ * storage + scan cost) regardless of total lifetime volume. Recent data
+ * (attribution, welcome-step dedup, campaign detail views) is fully retained, and
+ * lifetime merchant-visible stats are preserved durably: per-campaign totals on
+ * the campaigns row, and per-rule automation totals in automation_rule_stats
+ * (folded in atomically as rows are deleted, below).
  *
- * We deliberately do NOT use RETURNING here: at scale that would stream every
- * deleted id back over the wire and burn the very network transfer we are trying
- * to conserve.
+ * The plain campaign deletes deliberately omit RETURNING: at scale that would
+ * stream every deleted id back over the wire and burn the very network transfer
+ * we are trying to conserve. The automation folds DO use RETURNING, but it is
+ * consumed server-side by the INSERT (never streamed to the app).
  */
 export const pruneHighVolumeTimeSeries = async () => {
   await ensureSchema();
@@ -3598,10 +3680,53 @@ export const pruneHighVolumeTimeSeries = async () => {
   const fulfillmentCutoff = new Date(now - fulfillmentDays * DAY_MS);
 
   // Sequential to keep peak Neon compute/connections low during maintenance.
+  //
+  // Campaign detail can be deleted outright: per-campaign lifetime
+  // impressions/clicks/revenue live durably on the campaigns row
+  // (delivery_count / click_count / revenue_cents), which is maintained during
+  // send/click/attribution and never derived from these rows.
   await sql`DELETE FROM campaign_deliveries WHERE delivered_at < ${deliveryCutoff}`;
   await sql`DELETE FROM campaign_clicks WHERE clicked_at < ${deliveryCutoff}`;
-  await sql`DELETE FROM automation_deliveries WHERE delivered_at < ${deliveryCutoff}`;
-  await sql`DELETE FROM automation_clicks WHERE clicked_at < ${deliveryCutoff}`;
+
+  // Automations have NO other durable stat source, so before deleting the rows we
+  // fold their aggregate into automation_rule_stats in the SAME statement. The
+  // DELETE ... RETURNING feeds the INSERT server-side (nothing is streamed back to
+  // the app), so this stays cheap on network while guaranteeing lifetime per-rule
+  // totals never drop and can never double-count (folded rows are gone).
+  await sql`
+    WITH deleted AS (
+      DELETE FROM automation_deliveries
+      WHERE delivered_at < ${deliveryCutoff}
+      RETURNING shop_domain, rule_key, revenue_cents
+    )
+    INSERT INTO automation_rule_stats (
+      shop_domain, rule_key, archived_impressions, archived_clicks, archived_revenue_cents, updated_at
+    )
+    SELECT shop_domain, rule_key, COUNT(*)::BIGINT, 0::BIGINT, COALESCE(SUM(revenue_cents), 0)::BIGINT, NOW()
+    FROM deleted
+    GROUP BY shop_domain, rule_key
+    ON CONFLICT (shop_domain, rule_key) DO UPDATE SET
+      archived_impressions = automation_rule_stats.archived_impressions + EXCLUDED.archived_impressions,
+      archived_revenue_cents = automation_rule_stats.archived_revenue_cents + EXCLUDED.archived_revenue_cents,
+      updated_at = NOW()
+  `;
+  await sql`
+    WITH deleted AS (
+      DELETE FROM automation_clicks
+      WHERE clicked_at < ${deliveryCutoff}
+      RETURNING shop_domain, rule_key, revenue_cents
+    )
+    INSERT INTO automation_rule_stats (
+      shop_domain, rule_key, archived_impressions, archived_clicks, archived_revenue_cents, updated_at
+    )
+    SELECT shop_domain, rule_key, 0::BIGINT, COUNT(*)::BIGINT, COALESCE(SUM(revenue_cents), 0)::BIGINT, NOW()
+    FROM deleted
+    GROUP BY shop_domain, rule_key
+    ON CONFLICT (shop_domain, rule_key) DO UPDATE SET
+      archived_clicks = automation_rule_stats.archived_clicks + EXCLUDED.archived_clicks,
+      archived_revenue_cents = automation_rule_stats.archived_revenue_cents + EXCLUDED.archived_revenue_cents,
+      updated_at = NOW()
+  `;
   // order_items cascade via shopify_order_items.order_event_id ON DELETE CASCADE.
   await sql`DELETE FROM shopify_orders WHERE created_at < ${orderCutoff}`;
   await sql`DELETE FROM shopify_order_items WHERE created_at < ${orderCutoff}`;
@@ -7495,6 +7620,242 @@ export const getMerchantCapabilitySnapshot = async (shopDomain: string) => {
   };
 };
 
+/** Retry a D1 write a few times to ride out transient blips before we buffer. */
+const withD1WriteRetries = async <T>(fn: () => Promise<T>, attempts = 3): Promise<T> => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError;
+};
+
+/**
+ * Zero-loss safety net for d1_only. When the authoritative D1 token write fails
+ * (D1 outage/blip), the full payload is durably captured in Neon so the cron
+ * reconciler can replay it into D1. Deduped on (shop_domain, fcm_token) so repeat
+ * attempts refresh the same row instead of piling up.
+ */
+const enqueueAudienceOutbox = async (input: UpsertTokenInput) => {
+  const sql = getNeonSql();
+  const payload = JSON.stringify(input);
+  await sql`
+    INSERT INTO d1_audience_outbox (shop_domain, external_id, fcm_token, payload)
+    VALUES (${input.shopDomain}, ${input.externalId}, ${input.token}, ${payload}::jsonb)
+    ON CONFLICT (shop_domain, fcm_token)
+    DO UPDATE SET
+      payload = EXCLUDED.payload,
+      external_id = EXCLUDED.external_id,
+      updated_at = NOW()
+  `;
+};
+
+/**
+ * Enqueue the welcome automation for a genuinely new token. Extracted so both the
+ * live token write and the outbox reconciler trigger it identically. The existing
+ * job/delivery dedupe below makes it safe to call more than once for the same
+ * subscriber (idempotent).
+ */
+const maybeEnqueueWelcomeAutomation = async (params: {
+  shopDomain: string;
+  externalId: string;
+  subscriberId: number;
+  tokenId: number;
+  tokenWasInserted: boolean;
+}) => {
+  const { shopDomain, externalId, subscriberId, tokenId, tokenWasInserted } = params;
+  const sql = getNeonSql();
+
+  const welcomeRuleRows = await sql`
+    SELECT enabled, config
+    FROM automation_rules
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+    LIMIT 1
+  `;
+
+  if (!(Boolean(welcomeRuleRows[0]?.enabled) && tokenWasInserted)) {
+    return;
+  }
+
+  const existingWelcomeJobRows = await sql`
+    SELECT id
+    FROM automation_jobs
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+      AND payload ->> 'externalId' = ${externalId}
+      AND status IN ('pending', 'processing', 'sent')
+    LIMIT 1
+  `;
+
+  const existingWelcomeDeliveryRows = await sql`
+    SELECT id
+    FROM automation_deliveries
+    WHERE shop_domain = ${shopDomain}
+      AND rule_key = 'welcome_subscriber'
+      AND external_id = ${externalId}
+    LIMIT 1
+  `;
+
+  if (existingWelcomeJobRows.length > 0 || existingWelcomeDeliveryRows.length > 0) {
+    return;
+  }
+
+  const welcomeConfig = parseWelcomeRuleConfig(welcomeRuleRows[0]?.config ?? null);
+  const now = Date.now();
+  const immediateWelcomeJobIds: string[] = [];
+
+  for (const stepKey of Object.keys(welcomeConfig.steps) as WelcomeStepKey[]) {
+    const step = welcomeConfig.steps[stepKey];
+    if (!step.enabled) {
+      continue;
+    }
+
+    // Small scheduler-boundary compensation so minute-level cron polling does
+    // not systematically deliver delayed reminders one minute late.
+    const adjustedDelayMs = step.delayMinutes > 0
+      ? Math.max(0, step.delayMinutes * 60_000 - 45_000)
+      : 0;
+    const dueAt = new Date(now + adjustedDelayMs);
+
+    const jobId = await enqueueAutomationJob({
+      shopDomain,
+      ruleKey: 'welcome_subscriber',
+      tokenId,
+      subscriberId,
+      dedupeKey: `welcome:${shopDomain}:external:${externalId}:${stepKey}`,
+      dueAt,
+      payload: {
+        title: step.title,
+        body: step.body,
+        targetUrl: step.targetUrl ?? null,
+        iconUrl: step.iconUrl ?? null,
+        imageUrl: step.imageUrl ?? null,
+        windowsImageUrl: step.windowsImageUrl ?? null,
+        macosImageUrl: step.macosImageUrl ?? null,
+        androidImageUrl: step.androidImageUrl ?? null,
+        metadata: {
+          stepKey,
+          actionButtons: step.actionButtons ?? [],
+        },
+        campaignLabel: `welcome_subscriber:${stepKey}`,
+        ruleKey: 'welcome_subscriber',
+        externalId,
+        triggeredAt: new Date().toISOString(),
+      },
+    });
+
+    if (step.delayMinutes <= 0 && jobId) {
+      immediateWelcomeJobIds.push(jobId);
+    }
+  }
+
+  if (immediateWelcomeJobIds.length > 0) {
+    await Promise.all(immediateWelcomeJobIds.map((jobId) => processAutomationJob(jobId)));
+  }
+};
+
+/**
+ * Drain the d1_only zero-loss outbox: replay each buffered token into D1 (which
+ * assigns the id, avoiding any Neon/D1 id-sequence collision), fire the welcome
+ * automation if it was a new token, then delete the row. Runs every cron tick and
+ * is a no-op (single count query) when the outbox is empty. Returns counts so the
+ * tick can stay awake while rows remain.
+ */
+export const reconcileAudienceOutbox = async (limit = 500) => {
+  const { isD1AudienceWriteEnabled, d1UpsertAudienceAuthoritative } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  // Only replayable when D1 is a write target. Rows stay safely buffered otherwise.
+  if (!isD1AudienceWriteEnabled()) {
+    return { processed: 0, failed: 0, remaining: 0, skipped: true };
+  }
+
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT id, payload
+    FROM d1_audience_outbox
+    ORDER BY created_at ASC
+    LIMIT ${limit}
+  `;
+
+  if (rows.length === 0) {
+    return { processed: 0, failed: 0, remaining: 0 };
+  }
+
+  let processed = 0;
+  let failed = 0;
+
+  for (const row of rows) {
+    const input = row.payload as UpsertTokenInput;
+    const serializedDeviceContext = input.deviceContext ? JSON.stringify(input.deviceContext) : null;
+    try {
+      const result = await d1UpsertAudienceAuthoritative({
+        shopDomain: input.shopDomain,
+        externalId: input.externalId,
+        browser: input.browser ?? null,
+        platform: input.platform ?? null,
+        locale: input.locale ?? null,
+        country: input.country ?? null,
+        city: input.city ?? null,
+        deviceContext: serializedDeviceContext,
+        token: input.token,
+        userAgent: input.userAgent ?? null,
+        tokenType: input.tokenType ?? 'fcm',
+        vapidEndpoint: input.vapidEndpoint ?? null,
+        vapidP256dh: input.vapidP256dh ?? null,
+        vapidAuth: input.vapidAuth ?? null,
+      });
+      await maybeEnqueueWelcomeAutomation({
+        shopDomain: input.shopDomain,
+        externalId: input.externalId,
+        subscriberId: result.subscriberId,
+        tokenId: result.tokenId,
+        tokenWasInserted: result.tokenWasInserted,
+      });
+      await sql`DELETE FROM d1_audience_outbox WHERE id = ${row.id}`;
+      processed += 1;
+    } catch (error) {
+      failed += 1;
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      await sql`
+        UPDATE d1_audience_outbox
+        SET attempts = attempts + 1, last_error = ${message}, updated_at = NOW()
+        WHERE id = ${row.id}
+      `;
+    }
+  }
+
+  const remainingRows = await sql`SELECT COUNT(*)::int AS c FROM d1_audience_outbox`;
+  return { processed, failed, remaining: Number(remainingRows[0]?.c ?? 0) };
+};
+
+/** Health/monitoring view of the zero-loss outbox — should read 0 pending. */
+export const getAudienceOutboxStatus = async () => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const rows = await sql`
+    SELECT
+      COUNT(*)::int AS pending,
+      COALESCE(MAX(attempts), 0)::int AS max_attempts,
+      MIN(created_at) AS oldest_created_at
+    FROM d1_audience_outbox
+  `;
+  return {
+    pending: Number(rows[0]?.pending ?? 0),
+    maxAttempts: Number(rows[0]?.max_attempts ?? 0),
+    oldestCreatedAt: rows[0]?.oldest_created_at ?? null,
+  };
+};
+
 export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   await ensureSchema();
   const sql = getNeonSql();
@@ -7517,26 +7878,51 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
 
   if (isD1AudienceOnly()) {
     // d1_only: D1 is the sole store and assigns the ids. Neon audience tables are
-    // no longer written. Throws on failure (no Neon copy to fall back to).
-    const result = await d1UpsertAudienceAuthoritative({
-      shopDomain: input.shopDomain,
-      externalId: input.externalId,
-      browser: input.browser ?? null,
-      platform: input.platform ?? null,
-      locale: input.locale ?? null,
-      country: input.country ?? null,
-      city: input.city ?? null,
-      deviceContext: serializedDeviceContext,
-      token: input.token,
-      userAgent: input.userAgent ?? null,
-      tokenType: input.tokenType ?? 'fcm',
-      vapidEndpoint: input.vapidEndpoint ?? null,
-      vapidP256dh: input.vapidP256dh ?? null,
-      vapidAuth: input.vapidAuth ?? null,
-    });
-    subscriberId = result.subscriberId;
-    tokenId = result.tokenId;
-    tokenWasInserted = result.tokenWasInserted;
+    // no longer written. We retry a few times to ride out transient D1 blips; if
+    // it still fails we durably buffer the payload to the Neon outbox so the cron
+    // reconciler can replay it into D1 — a token is NEVER lost, even during a D1
+    // outage.
+    try {
+      const result = await withD1WriteRetries(() =>
+        d1UpsertAudienceAuthoritative({
+          shopDomain: input.shopDomain,
+          externalId: input.externalId,
+          browser: input.browser ?? null,
+          platform: input.platform ?? null,
+          locale: input.locale ?? null,
+          country: input.country ?? null,
+          city: input.city ?? null,
+          deviceContext: serializedDeviceContext,
+          token: input.token,
+          userAgent: input.userAgent ?? null,
+          tokenType: input.tokenType ?? 'fcm',
+          vapidEndpoint: input.vapidEndpoint ?? null,
+          vapidP256dh: input.vapidP256dh ?? null,
+          vapidAuth: input.vapidAuth ?? null,
+        }),
+      );
+      subscriberId = result.subscriberId;
+      tokenId = result.tokenId;
+      tokenWasInserted = result.tokenWasInserted;
+    } catch (d1Error) {
+      await enqueueAudienceOutbox(input);
+      // Wake the cron promptly so the reconciler drains the buffered token within a
+      // tick instead of waiting out the idle sleep window.
+      try {
+        const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+        void bumpCronWakeNow();
+      } catch {
+        // best-effort wake
+      }
+      console.error(
+        '[audience] d1_only token write failed; buffered to outbox for replay',
+        d1Error instanceof Error ? d1Error.message : d1Error,
+      );
+      const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+      void invalidateShopDashboardCaches(input.shopDomain);
+      // The token is safely captured; ids will be assigned by D1 on replay.
+      return { subscriberId: 0, tokenId: 0, buffered: true };
+    }
   } else {
     const subscriberRows = await sql`
       INSERT INTO subscribers (shop_domain, external_id, browser, platform, locale, country, city, device_context, last_seen_at)
@@ -7626,94 +8012,13 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     }
   }
 
-  const welcomeRuleRows = await sql`
-    SELECT enabled, config
-    FROM automation_rules
-    WHERE shop_domain = ${input.shopDomain}
-      AND rule_key = 'welcome_subscriber'
-    LIMIT 1
-  `;
-
-  if (Boolean(welcomeRuleRows[0]?.enabled) && tokenWasInserted) {
-    const existingWelcomeJobRows = await sql`
-      SELECT id
-      FROM automation_jobs
-      WHERE shop_domain = ${input.shopDomain}
-        AND rule_key = 'welcome_subscriber'
-        AND payload ->> 'externalId' = ${input.externalId}
-        AND status IN ('pending', 'processing', 'sent')
-      LIMIT 1
-    `;
-
-    const existingWelcomeDeliveryRows = await sql`
-      SELECT id
-      FROM automation_deliveries
-      WHERE shop_domain = ${input.shopDomain}
-        AND rule_key = 'welcome_subscriber'
-        AND external_id = ${input.externalId}
-      LIMIT 1
-    `;
-
-    if (existingWelcomeJobRows.length > 0 || existingWelcomeDeliveryRows.length > 0) {
-      return {
-        subscriberId,
-        tokenId,
-      };
-    }
-
-    const welcomeConfig = parseWelcomeRuleConfig(welcomeRuleRows[0]?.config ?? null);
-    const now = Date.now();
-    const immediateWelcomeJobIds: string[] = [];
-
-    for (const stepKey of Object.keys(welcomeConfig.steps) as WelcomeStepKey[]) {
-      const step = welcomeConfig.steps[stepKey];
-      if (!step.enabled) {
-        continue;
-      }
-
-      // Small scheduler-boundary compensation so minute-level cron polling does
-      // not systematically deliver delayed reminders one minute late.
-      const adjustedDelayMs = step.delayMinutes > 0
-        ? Math.max(0, step.delayMinutes * 60_000 - 45_000)
-        : 0;
-      const dueAt = new Date(now + adjustedDelayMs);
-
-      const jobId = await enqueueAutomationJob({
-        shopDomain: input.shopDomain,
-        ruleKey: 'welcome_subscriber',
-        tokenId,
-        subscriberId,
-        dedupeKey: `welcome:${input.shopDomain}:external:${input.externalId}:${stepKey}`,
-        dueAt,
-        payload: {
-          title: step.title,
-          body: step.body,
-          targetUrl: step.targetUrl ?? null,
-          iconUrl: step.iconUrl ?? null,
-          imageUrl: step.imageUrl ?? null,
-          windowsImageUrl: step.windowsImageUrl ?? null,
-          macosImageUrl: step.macosImageUrl ?? null,
-          androidImageUrl: step.androidImageUrl ?? null,
-          metadata: {
-            stepKey,
-            actionButtons: step.actionButtons ?? [],
-          },
-          campaignLabel: `welcome_subscriber:${stepKey}`,
-          ruleKey: 'welcome_subscriber',
-          externalId: input.externalId,
-          triggeredAt: new Date().toISOString(),
-        },
-      });
-
-      if (step.delayMinutes <= 0 && jobId) {
-        immediateWelcomeJobIds.push(jobId);
-      }
-    }
-
-    if (immediateWelcomeJobIds.length > 0) {
-      await Promise.all(immediateWelcomeJobIds.map((jobId) => processAutomationJob(jobId)));
-    }
-  }
+  await maybeEnqueueWelcomeAutomation({
+    shopDomain: input.shopDomain,
+    externalId: input.externalId,
+    subscriberId,
+    tokenId,
+    tokenWasInserted,
+  });
 
   const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
   void invalidateShopDashboardCaches(input.shopDomain);
@@ -8700,7 +9005,14 @@ export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, 
   await ensureSchema();
   const sql = getNeonSql();
 
-  const start = from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  // No explicit `from` means "all time": scan from the epoch so the date filters
+  // include every retained row, and fold in the archived baseline of already-pruned
+  // automation rows (campaign totals live durably on the campaigns row, so summing
+  // all campaigns is already all-time-correct). A bounded window keeps the existing
+  // behavior exactly (archived is only added for all-time, so displayed numbers for
+  // any dated range are unchanged).
+  const isAllTime = !from;
+  const start = isAllTime ? new Date(0) : from!;
   const end = to ?? new Date();
 
   const [
@@ -8712,6 +9024,7 @@ export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, 
     topCampaignRows,
     topAutoRows,
     topAutoClickRows,
+    archivedAutoRows,
   ] = await Promise.all([
     sql`
       SELECT
@@ -8775,18 +9088,32 @@ export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, 
       ORDER BY revenue_cents DESC NULLS LAST
       LIMIT 5
     `,
-    sql`
-      SELECT
-        rule_key,
-        COUNT(*)::BIGINT AS impressions,
-        COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-      FROM automation_deliveries
-      WHERE shop_domain = ${shopDomain}
-        AND delivered_at >= ${start} AND delivered_at <= ${end}
-      GROUP BY rule_key
-      ORDER BY revenue_cents DESC NULLS LAST
-      LIMIT 5
-    `,
+    // For all-time we must merge the archived baseline in per rule (below) before
+    // ranking, so fetch every rule's live totals (only ~9 rule keys exist). For a
+    // bounded range the top-5 SQL limit is kept exactly as before.
+    isAllTime
+      ? sql`
+          SELECT
+            rule_key,
+            COUNT(*)::BIGINT AS impressions,
+            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
+          FROM automation_deliveries
+          WHERE shop_domain = ${shopDomain}
+            AND delivered_at >= ${start} AND delivered_at <= ${end}
+          GROUP BY rule_key
+        `
+      : sql`
+          SELECT
+            rule_key,
+            COUNT(*)::BIGINT AS impressions,
+            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
+          FROM automation_deliveries
+          WHERE shop_domain = ${shopDomain}
+            AND delivered_at >= ${start} AND delivered_at <= ${end}
+          GROUP BY rule_key
+          ORDER BY revenue_cents DESC NULLS LAST
+          LIMIT 5
+        `,
     sql`
       SELECT rule_key, COUNT(*)::BIGINT AS clicks
       FROM automation_clicks
@@ -8794,18 +9121,55 @@ export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, 
         AND clicked_at >= ${start} AND clicked_at <= ${end}
       GROUP BY rule_key
     `,
+    // Archived baseline of already-pruned automation rows (per rule). Only needed
+    // for all-time; a bounded range is served purely from retained detail.
+    isAllTime
+      ? sql`
+          SELECT
+            rule_key,
+            archived_impressions,
+            archived_clicks,
+            archived_revenue_cents
+          FROM automation_rule_stats
+          WHERE shop_domain = ${shopDomain}
+        `
+      : (Promise.resolve([]) as unknown as ReturnType<typeof sql>),
   ]);
 
   const clicksByRule = new Map(topAutoClickRows.map((r) => [String(r.rule_key), Number(r.clicks ?? 0)]));
+
+  // Fold the archived (pruned) baseline into the automation aggregates so all-time
+  // stats stay permanent even after raw detail rows are deleted. Empty for any
+  // bounded range, so dated queries are byte-for-byte unchanged.
+  const archivedByRule = new Map(
+    archivedAutoRows.map((r) => [
+      String(r.rule_key),
+      {
+        impressions: Number(r.archived_impressions ?? 0),
+        clicks: Number(r.archived_clicks ?? 0),
+        revenueCents: Number(r.archived_revenue_cents ?? 0),
+      },
+    ]),
+  );
+  let archivedAutoImpressions = 0;
+  let archivedAutoClicks = 0;
+  let archivedAutoRevenueCents = 0;
+  for (const v of archivedByRule.values()) {
+    archivedAutoImpressions += v.impressions;
+    archivedAutoClicks += v.clicks;
+    archivedAutoRevenueCents += v.revenueCents;
+  }
 
   const campaignImpressions = Number(campaignKpiRows[0]?.impressions ?? 0);
   const campaignClicks = Number(campaignKpiRows[0]?.clicks ?? 0);
   const campaignRevenueCents = Number(campaignKpiRows[0]?.revenue_cents ?? 0);
 
-  const autoImpressions = Number(autoDeliveryRows[0]?.impressions ?? 0);
-  const autoClicks = Number(autoClickRows[0]?.clicks ?? 0);
+  const autoImpressions = Number(autoDeliveryRows[0]?.impressions ?? 0) + archivedAutoImpressions;
+  const autoClicks = Number(autoClickRows[0]?.clicks ?? 0) + archivedAutoClicks;
   const autoRevenueCents =
-    Number(autoDeliveryRows[0]?.revenue_cents ?? 0) + Number(autoClickRows[0]?.revenue_cents ?? 0);
+    Number(autoDeliveryRows[0]?.revenue_cents ?? 0) +
+    Number(autoClickRows[0]?.revenue_cents ?? 0) +
+    archivedAutoRevenueCents;
 
   const totalImpressions = campaignImpressions + autoImpressions;
   const totalClicks = campaignClicks + autoClicks;
@@ -8842,13 +9206,53 @@ export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, 
       clicks: Number(r.click_count ?? 0),
       revenueCents: Number(r.revenue_cents ?? 0),
     })),
-    topAutomations: topAutoRows.map((r) => ({
-      ruleKey: String(r.rule_key),
-      name: ruleKeyLabels[String(r.rule_key)] ?? String(r.rule_key),
-      impressions: Number(r.impressions ?? 0),
-      clicks: clicksByRule.get(String(r.rule_key)) ?? 0,
-      revenueCents: Number(r.revenue_cents ?? 0),
-    })),
+    topAutomations: (() => {
+      // Bounded range: unchanged — topAutoRows is already the top-5 by revenue and
+      // archivedByRule is empty.
+      if (!isAllTime) {
+        return topAutoRows.map((r) => ({
+          ruleKey: String(r.rule_key),
+          name: ruleKeyLabels[String(r.rule_key)] ?? String(r.rule_key),
+          impressions: Number(r.impressions ?? 0),
+          clicks: clicksByRule.get(String(r.rule_key)) ?? 0,
+          revenueCents: Number(r.revenue_cents ?? 0),
+        }));
+      }
+      // All-time: combine live detail with the archived baseline per rule, then rank.
+      const combined = new Map<string, { impressions: number; clicks: number; revenueCents: number }>();
+      const ensure = (key: string) => {
+        let entry = combined.get(key);
+        if (!entry) {
+          entry = { impressions: 0, clicks: 0, revenueCents: 0 };
+          combined.set(key, entry);
+        }
+        return entry;
+      };
+      for (const r of topAutoRows) {
+        const entry = ensure(String(r.rule_key));
+        entry.impressions += Number(r.impressions ?? 0);
+        entry.revenueCents += Number(r.revenue_cents ?? 0);
+      }
+      for (const [key, clicks] of clicksByRule.entries()) {
+        ensure(key).clicks += clicks;
+      }
+      for (const [key, v] of archivedByRule.entries()) {
+        const entry = ensure(key);
+        entry.impressions += v.impressions;
+        entry.clicks += v.clicks;
+        entry.revenueCents += v.revenueCents;
+      }
+      return Array.from(combined.entries())
+        .map(([ruleKey, v]) => ({
+          ruleKey,
+          name: ruleKeyLabels[ruleKey] ?? ruleKey,
+          impressions: v.impressions,
+          clicks: v.clicks,
+          revenueCents: v.revenueCents,
+        }))
+        .sort((a, b) => b.revenueCents - a.revenueCents)
+        .slice(0, 5);
+    })(),
     attribution: {
       campaignRevenueCents,
       automationRevenueCents: autoRevenueCents,

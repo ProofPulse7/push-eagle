@@ -228,16 +228,21 @@ const queueFcmBatchSend = async (input: {
 export const getCampaignDeliveryStats = async (campaignId: string): Promise<NotificationDeliveryStats> => {
   const sql = getNeonSql();
 
+  // Read the DURABLE per-campaign counters on the campaigns row (maintained during
+  // send / click / attribution) rather than scanning campaign_deliveries. The
+  // detail rows are pruned at scale, so a live scan would report 0 for any campaign
+  // older than the retention window; the campaigns row keeps these totals forever.
   const rows = await sql`
-    SELECT 
-      COUNT(DISTINCT token_id)::INT AS total_tokens,
-      COUNT(CASE WHEN delivered_at IS NOT NULL THEN 1 END)::INT AS delivered_count,
-      COUNT(CASE WHEN clicked_at IS NOT NULL THEN 1 END)::INT AS clicked_count
-    FROM campaign_deliveries
-    WHERE campaign_id = ${campaignId}
+    SELECT
+      COALESCE(target_recipient_count, delivery_count, 0)::INT AS total_tokens,
+      COALESCE(delivery_count, 0)::INT AS delivered_count,
+      COALESCE(click_count, 0)::INT AS clicked_count
+    FROM campaigns
+    WHERE id = ${campaignId}
+    LIMIT 1
   `;
 
-  const row = rows[0];
+  const row = rows[0] ?? {};
   const totalTokens = Number(row.total_tokens ?? 0);
   const deliveredCount = Number(row.delivered_count ?? 0);
   const clickedCount = Number(row.clicked_count ?? 0);
@@ -251,7 +256,7 @@ export const getCampaignDeliveryStats = async (campaignId: string): Promise<Noti
     deliveryStarted: deliveredCount,
     deliveredCount: clickedCount,
     failedCount: 0, // Would need to track separately
-    queuedCount: totalTokens - deliveredCount,
+    queuedCount: Math.max(0, totalTokens - deliveredCount),
     estimatedTimeMinutes,
   };
 };

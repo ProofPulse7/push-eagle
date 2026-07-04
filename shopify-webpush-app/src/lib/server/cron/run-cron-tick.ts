@@ -4,6 +4,7 @@ import {
   listQueuedCampaigns,
   processAutomationJob,
   processIngestionQueue,
+  reconcileAudienceOutbox,
   runRetentionMaintenance,
   sendCampaign,
 } from '@/lib/server/data/store';
@@ -115,7 +116,31 @@ export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick'
   const hasImmediateWork = cronProbeHasImmediateWork(probe);
   const needsPromotion = runQueuePromotion && probe.promoteableAutomationJobs > 0;
 
-  if (!hasImmediateWork && !needsPromotion && !runHeavyMaintenance && !runAutomationSafetyNet) {
+  // Zero-loss audience outbox drain: replay any buffered d1_only token writes into
+  // D1. This is a cheap no-op (single SELECT returning 0 rows) when the outbox is
+  // empty, so it is safe to run on every executed tick. If rows remain (e.g. D1 is
+  // still degraded), we keep the tick awake so it retries every minute instead of
+  // idling for the full sleep window.
+  let audienceOutbox: Awaited<ReturnType<typeof reconcileAudienceOutbox>> | null = null;
+  try {
+    audienceOutbox = await reconcileAudienceOutbox();
+  } catch (error) {
+    // Assume rows remain so we stay awake and retry on the next tick.
+    audienceOutbox = { processed: 0, failed: 0, remaining: 1 };
+    console.error(
+      '[cron] audience outbox reconcile failed',
+      error instanceof Error ? error.message : error,
+    );
+  }
+  const hasOutboxWork = Boolean(audienceOutbox && (audienceOutbox.remaining ?? 0) > 0);
+
+  if (
+    !hasImmediateWork &&
+    !needsPromotion &&
+    !runHeavyMaintenance &&
+    !runAutomationSafetyNet &&
+    !hasOutboxWork
+  ) {
     const sleepUntil = resolveIdleSleepUntil(probe);
     await writeCronSleepUntil(sleepUntil);
     return {
@@ -124,6 +149,7 @@ export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick'
       workerId,
       sleepUntil: sleepUntil.toISOString(),
       probe,
+      audienceOutbox,
     };
   }
 
@@ -239,6 +265,7 @@ export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick'
       ok: true,
       workerId,
       probe,
+      audienceOutbox,
       retention,
       queuePromotion,
       campaigns: {

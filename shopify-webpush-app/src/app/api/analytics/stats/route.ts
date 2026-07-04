@@ -52,11 +52,13 @@ export async function GET(request: Request) {
       }
     }
 
-    const stats = await getAnalyticsStats(
-      shopDomain,
-      from ? new Date(from) : null,
-      to ? new Date(to) : null,
-    );
+    // Treat an absent or explicit 'all' bound as null so getAnalyticsStats takes its
+    // durable all-time path (which folds in the archived automation baseline) instead
+    // of parsing an Invalid Date.
+    const fromParam = from && from !== 'all' ? new Date(from) : null;
+    const toParam = to && to !== 'all' ? new Date(to) : null;
+
+    const stats = await getAnalyticsStats(shopDomain, fromParam, toParam);
 
     const payload = { ok: true as const, ...stats };
 

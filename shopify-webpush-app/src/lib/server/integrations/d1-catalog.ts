@@ -117,27 +117,34 @@ export const d1GetExistingVariants = async (
 
   await ensureD1CatalogSchema();
 
-  const placeholders = variantIds.map(() => '?').join(', ');
-  const rows = await runD1Query(
-    `
-      SELECT variant_id, price_cents, compare_at_price_cents, available
-      FROM shopify_product_variants
-      WHERE shop_domain = ?
-        AND variant_id IN (${placeholders})
-    `,
-    [shopDomain, ...variantIds],
-  );
+  // D1 caps a query at 100 bound parameters; one slot is the shop_domain, so
+  // chunk the variant-id IN(...) list well under that (a product can carry more
+  // than 100 variants).
+  const chunkSize = 90;
+  for (let start = 0; start < variantIds.length; start += chunkSize) {
+    const chunkIds = variantIds.slice(start, start + chunkSize);
+    const placeholders = chunkIds.map(() => '?').join(', ');
+    const rows = await runD1Query(
+      `
+        SELECT variant_id, price_cents, compare_at_price_cents, available
+        FROM shopify_product_variants
+        WHERE shop_domain = ?
+          AND variant_id IN (${placeholders})
+      `,
+      [shopDomain, ...chunkIds],
+    );
 
-  for (const row of rows as Array<Record<string, unknown>>) {
-    const variantId = String(row.variant_id ?? '');
-    if (!variantId) {
-      continue;
+    for (const row of rows as Array<Record<string, unknown>>) {
+      const variantId = String(row.variant_id ?? '');
+      if (!variantId) {
+        continue;
+      }
+      result.set(variantId, {
+        priceCents: toNumberOrNull(row.price_cents),
+        compareAtPriceCents: toNumberOrNull(row.compare_at_price_cents),
+        available: toNumberOrNull(row.available),
+      });
     }
-    result.set(variantId, {
-      priceCents: toNumberOrNull(row.price_cents),
-      compareAtPriceCents: toNumberOrNull(row.compare_at_price_cents),
-      available: toNumberOrNull(row.available),
-    });
   }
 
   return result;
