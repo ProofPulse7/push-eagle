@@ -45,8 +45,32 @@ const EnvSchema = z.object({
   CLOUDFLARE_ACCOUNT_ID: z.string().default(''),
   CLOUDFLARE_API_TOKEN: z.string().default(''),
   CLOUDFLARE_KV_NAMESPACE_ID: z.string().default(''),
+  // Primary/default D1 database. Every D1 layer falls back to this id, so with
+  // only this set behavior is exactly as before (one shared DB). Today this DB
+  // holds raw events + the product-variant catalog.
   CLOUDFLARE_D1_DATABASE_ID: z.string().default(''),
+  // Dedicated D1 database for the crown-jewel audience (subscribers +
+  // subscriber_tokens). Isolating the audience means high-volume event churn on
+  // another DB can never exhaust storage/limits and block a token write — a lost
+  // token means a lost subscriber for the merchant, so this is the priority.
+  // Falls back to CLOUDFLARE_D1_DATABASE_ID when unset.
+  CLOUDFLARE_D1_AUDIENCE_DATABASE_ID: z.string().default(''),
+  // Dedicated D1 database for the high-volume, ephemeral raw event data
+  // (pixel_events + subscriber_activity_events). Optional second layer of
+  // isolation. Falls back to CLOUDFLARE_D1_DATABASE_ID when unset.
+  CLOUDFLARE_D1_EVENTS_DATABASE_ID: z.string().default(''),
   CLOUDFLARE_WORKER_URL: z.string().default(''),
+  // Retention window (days) for raw events in D1. Must stay >= the longest
+  // automation lookback (browse-abandonment/abandoned-cart use up to 14 days)
+  // or attribution breaks. Lower it to shrink the events DB and stay free
+  // longer. Clamped to a 2-day floor for safety.
+  D1_EVENTS_RETENTION_DAYS: z
+    .string()
+    .default('14')
+    .transform((value) => {
+      const parsed = Number.parseInt(value.trim(), 10);
+      return Number.isFinite(parsed) ? Math.max(2, parsed) : 14;
+    }),
   AUTOMATION_QUEUE_ENABLED: z
     .string()
     .default('false')
@@ -150,7 +174,10 @@ export const resolveAppEnv = (): AppEnv => {
       || (
         Boolean(parsed.CLOUDFLARE_ACCOUNT_ID.trim())
         && Boolean(parsed.CLOUDFLARE_API_TOKEN.trim())
-        && Boolean(parsed.CLOUDFLARE_D1_DATABASE_ID.trim())
+        && (
+          Boolean(parsed.CLOUDFLARE_D1_EVENTS_DATABASE_ID.trim())
+          || Boolean(parsed.CLOUDFLARE_D1_DATABASE_ID.trim())
+        )
       ),
     AUTOMATION_QUEUE_ENABLED:
       parsed.AUTOMATION_QUEUE_ENABLED || Boolean(parsed.CLOUDFLARE_WORKER_URL.trim()),

@@ -31,10 +31,19 @@ import { env } from '@/lib/config/env';
 
 export type D1AudienceMode = 'off' | 'dual_write' | 'shadow' | 'read' | 'd1_only';
 
+/**
+ * Database id for the audience. Prefers the dedicated audience DB so the
+ * crown-jewel subscribers + subscriber_tokens are physically isolated from the
+ * high-volume event/catalog data. Falls back to the primary DB id so nothing
+ * changes until the dedicated DB is provisioned.
+ */
+const getAudienceDatabaseId = () =>
+  env.CLOUDFLARE_D1_AUDIENCE_DATABASE_ID.trim() || env.CLOUDFLARE_D1_DATABASE_ID.trim();
+
 const hasD1Creds = () =>
   Boolean(env.CLOUDFLARE_ACCOUNT_ID.trim())
   && Boolean(env.CLOUDFLARE_API_TOKEN.trim())
-  && Boolean(env.CLOUDFLARE_D1_DATABASE_ID.trim());
+  && Boolean(getAudienceDatabaseId());
 
 export const getD1AudienceMode = (): D1AudienceMode => {
   const mode = env.D1_AUDIENCE_MODE as D1AudienceMode;
@@ -149,7 +158,7 @@ type D1QueryResult = {
 
 const runD1Query = async (sql: string, params: unknown[] = []) => {
   const accountId = env.CLOUDFLARE_ACCOUNT_ID.trim();
-  const databaseId = env.CLOUDFLARE_D1_DATABASE_ID.trim();
+  const databaseId = getAudienceDatabaseId();
 
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,

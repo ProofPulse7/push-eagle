@@ -3674,7 +3674,8 @@ export const runRetentionMaintenance = async () => {
   const pixelArchive = await archiveOldPixelEvents(14, 2000);
 
   const { pruneD1TrackingEvents, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
-  const d1Prune = isD1EventsEnabled() ? await pruneD1TrackingEvents(14, 2000) : null;
+  // Pass undefined so the env-configured D1_EVENTS_RETENTION_DAYS applies.
+  const d1Prune = isD1EventsEnabled() ? await pruneD1TrackingEvents(undefined, 2000) : null;
   const campaignMediaPrune = await pruneUnusedCampaignDeviceImages(30);
 
   return {

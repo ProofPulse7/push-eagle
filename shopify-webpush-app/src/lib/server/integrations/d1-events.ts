@@ -1,10 +1,19 @@
 import { env } from '@/lib/config/env';
 
+/**
+ * The database id used for raw events. Prefers the dedicated events DB so the
+ * high-volume pixel/activity tables are isolated from the crown-jewel audience
+ * (subscribers + subscriber_tokens) on the primary DB. Falls back to the
+ * primary DB id so nothing breaks before the dedicated DB is provisioned.
+ */
+const getEventsDatabaseId = () =>
+  env.CLOUDFLARE_D1_EVENTS_DATABASE_ID.trim() || env.CLOUDFLARE_D1_DATABASE_ID.trim();
+
 export const isD1EventsEnabled = () =>
   env.D1_EVENTS_ENABLED
   && Boolean(env.CLOUDFLARE_ACCOUNT_ID.trim())
   && Boolean(env.CLOUDFLARE_API_TOKEN.trim())
-  && Boolean(env.CLOUDFLARE_D1_DATABASE_ID.trim());
+  && Boolean(getEventsDatabaseId());
 
 type D1QueryResult = {
   success: boolean;
@@ -17,7 +26,7 @@ type D1QueryResult = {
 
 const runD1Query = async (sql: string, params: unknown[] = []) => {
   const accountId = env.CLOUDFLARE_ACCOUNT_ID.trim();
-  const databaseId = env.CLOUDFLARE_D1_DATABASE_ID.trim();
+  const databaseId = getEventsDatabaseId();
 
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,
@@ -352,13 +361,16 @@ export const queryD1TrackingRowsForAutomation = async (input: {
     .slice(0, 100);
 };
 
-export const pruneD1TrackingEvents = async (hotRetentionDays = 14, batchSize = 2000) => {
+export const pruneD1TrackingEvents = async (hotRetentionDays?: number, batchSize = 2000) => {
   if (!isD1EventsEnabled()) {
     return { pixelDeleted: 0, activityDeleted: 0 };
   }
 
   await ensureD1EventsSchema();
-  const cutoffIso = new Date(Date.now() - hotRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+  // Default to the env-configured retention so the events DB can be shrunk
+  // without a code change (kept >= the longest automation lookback upstream).
+  const retentionDays = hotRetentionDays ?? env.D1_EVENTS_RETENTION_DAYS;
+  const cutoffIso = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
 
   await runD1Query(
     `
