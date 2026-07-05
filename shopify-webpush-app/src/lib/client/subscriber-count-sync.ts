@@ -78,43 +78,40 @@ export const bumpSubscriberGrowthCharts = (
   }
 
   const todayKey = new Date().toISOString().slice(0, 10);
-  const growthQueries = queryClient.getQueryCache().findAll({
-    queryKey: ['pe', shop, 'subscribers', 'growth'],
-  });
 
-  for (const query of growthQueries) {
-    queryClient.setQueryData(query.queryKey, (current) => {
-      if (!current || typeof current !== 'object') {
-        return current;
-      }
+  const patchSeries = (current: unknown) => {
+    if (!current || typeof current !== 'object') {
+      return current;
+    }
 
-      const payload = current as Record<string, unknown>;
-      if (!payload.ok || !Array.isArray(payload.points)) {
-        return current;
-      }
+    const payload = current as Record<string, unknown>;
+    if (!payload.ok || !Array.isArray(payload.points)) {
+      return current;
+    }
 
-      const points = (payload.points as Array<{ date?: string; subscribers?: number }>).map((point) => ({
-        date: String(point.date ?? ''),
-        subscribers: Number(point.subscribers ?? 0),
-      }));
+    const points = (payload.points as Array<{ date?: string; subscribers?: number }>).map((point) => ({
+      date: String(point.date ?? ''),
+      subscribers: Number(point.subscribers ?? 0),
+    }));
 
-      const todayIndex = points.findIndex((point) => point.date.startsWith(todayKey));
-      if (todayIndex >= 0) {
-        points[todayIndex] = {
-          ...points[todayIndex],
-          subscribers: points[todayIndex].subscribers + delta,
-        };
-      } else {
-        points.push({ date: todayKey, subscribers: delta });
-      }
-
-      return {
-        ...payload,
-        points,
-        totalNewSubscribers: Number(payload.totalNewSubscribers ?? 0) + delta,
+    const todayIndex = points.findIndex((point) => point.date.startsWith(todayKey));
+    if (todayIndex >= 0) {
+      points[todayIndex] = {
+        ...points[todayIndex],
+        subscribers: points[todayIndex].subscribers + delta,
       };
-    });
-  }
+    } else {
+      points.push({ date: todayKey, subscribers: delta });
+    }
+
+    return {
+      ...payload,
+      points,
+      totalNewSubscribers: Number(payload.totalNewSubscribers ?? 0) + delta,
+    };
+  };
+
+  queryClient.setQueryData(queryKeys.subscribersGrowthSeries(shop), patchSeries);
 };
 
 /** Refetch subscriber stats, graphs, and lists that are currently mounted. */
@@ -128,7 +125,7 @@ export const invalidateSubscriberQueries = (
     refetchType: 'active',
   });
   void queryClient.invalidateQueries({
-    queryKey: ['pe', shop, 'subscribers', 'growth'],
+    queryKey: queryKeys.subscribersGrowthSeries(shop),
     refetchType: 'active',
   });
   void queryClient.invalidateQueries({

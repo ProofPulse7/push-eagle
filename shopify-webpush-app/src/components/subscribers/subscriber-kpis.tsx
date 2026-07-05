@@ -3,13 +3,14 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Users, UserPlus } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useSubscribersOverview } from '@/hooks/queries/use-app-queries';
+import { useSubscriberTotalCount, useSubscribersOverview } from '@/hooks/queries/use-app-queries';
 
 export function SubscriberKpis() {
   const { data, isLoading } = useSubscribersOverview();
+  const totalSubscribers = useSubscriberTotalCount();
 
   const stats = {
-    totalSubscribers: Number(data?.totalSubscribers ?? 0),
+    totalSubscribers,
     newSubscribersLast7Days: Number(data?.newSubscribersLast7Days ?? 0),
     growthPercent: Number(data?.growthPercent ?? 0),
   };
@@ -21,7 +22,7 @@ export function SubscriberKpis() {
       title: 'Total Subscribers',
       value: stats.totalSubscribers.toLocaleString(),
       icon: Users,
-      description: 'Saved in subscriber database',
+      description: 'All-time active notification subscribers',
     },
     {
       title: 'New Subscribers (last 7 days)',

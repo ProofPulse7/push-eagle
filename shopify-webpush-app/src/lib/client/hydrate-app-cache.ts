@@ -16,6 +16,7 @@ export type AppBootstrapPayload = {
   subscriberKpis: Record<string, unknown>;
   subscriberOverview?: Record<string, unknown>;
   subscriberGrowth?: Record<string, unknown>;
+  subscriberGrowthSeries?: Record<string, unknown>;
   automationsOverview?: Record<string, unknown>;
   campaigns: unknown[];
   segments: unknown[];
@@ -158,14 +159,8 @@ export const hydrateAppCache = (
     });
   }
 
-  if (payload.subscriberGrowth) {
-    const chartRange = resolveAnalyticsDateRange({
-      from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-      to: new Date(),
-    });
-    queryClient.setQueryData(
-      queryKeys.subscribersGrowth(shopDomain, chartRange.fromIso, chartRange.toIso),
-      payload.subscriberGrowth,
-    );
+  if (payload.subscriberGrowthSeries ?? payload.subscriberGrowth) {
+    const series = payload.subscriberGrowthSeries ?? payload.subscriberGrowth;
+    queryClient.setQueryData(queryKeys.subscribersGrowthSeries(shopDomain), series);
   }
 };

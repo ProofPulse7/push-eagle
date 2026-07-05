@@ -18,7 +18,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { PlusCircle, FileUp, BookOpen, Trash2, ChevronLeft, ChevronRight, X, Plus, Info } from 'lucide-react';
+import { PlusCircle, BookOpen, Trash2, ChevronLeft, ChevronRight, X, Plus, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -391,10 +391,6 @@ export default function SegmentsPage() {
           <p className="text-muted-foreground">Create and manage your user segments.</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline">
-            <FileUp className="mr-2 h-4 w-4" />
-            Import CSV
-          </Button>
           <Button asChild>
             <Link href="/segments/new">
                 <PlusCircle className="mr-2 h-4 w-4" />

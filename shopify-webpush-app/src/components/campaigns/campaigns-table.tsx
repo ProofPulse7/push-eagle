@@ -16,6 +16,7 @@ import { Skeleton } from "../ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
 import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import { applyLaunchMediaToCampaign } from '@/lib/client/campaign-launch-media-cache';
+import { resolveCampaignRowMetrics } from '@/lib/client/campaign-row-metrics';
 import { useCampaigns } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { formatCampaignScheduleLabel } from '@/lib/client/campaign-schedule';
@@ -64,44 +65,17 @@ const TableSkeleton = () => (
 
 const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campaign => {
     const enriched = applyLaunchMediaToCampaign(shop, campaign);
-    const statusMap: Record<string, Campaign['status']> = {
-        draft: 'Draft',
-        scheduled: 'Scheduled',
-        queued: 'Sending',
-        sending: 'Sending',
-        sent: 'Sent',
-        archived: 'Archived',
-        paused: 'Paused',
-    };
-
-    const clickCount = Number(enriched.click_count ?? enriched.clickCount ?? 0);
-    const deliveryCount = Number(enriched.delivery_count ?? enriched.deliveryCount ?? 0);
-    const targetRecipientCount = Number(
-        enriched.target_recipient_count ?? enriched.targetRecipientCount ?? 0,
-    );
-    let rawStatus = String(enriched.status ?? '').toLowerCase();
-    const sentAtRaw = enriched.sent_at ?? enriched.sentAt;
-    if (
-        rawStatus === 'draft'
-        && (sentAtRaw || targetRecipientCount > 0)
-        && deliveryCount === 0
-    ) {
-        rawStatus = 'sending';
-    }
-    const mappedStatus = statusMap[rawStatus] ?? 'Draft';
+    const metrics = resolveCampaignRowMetrics(enriched);
     const scheduledAtRaw = enriched.scheduled_at ?? enriched.scheduledAt;
     const scheduledAt = scheduledAtRaw ? String(scheduledAtRaw) : null;
+    const sentAtRaw = enriched.sent_at ?? enriched.sentAt;
     const sentAt = sentAtRaw ? String(sentAtRaw) : null;
     const flashSaleEndsAtRaw = enriched.flash_sale_ends_at ?? enriched.flashSaleEndsAt;
     const flashSaleEndsAt = flashSaleEndsAtRaw ? String(flashSaleEndsAtRaw) : null;
     const smartDelivery = Boolean(enriched.smart_send_enabled ?? enriched.smartSendEnabled);
-    const impressions =
-        mappedStatus === 'Sending'
-            ? Math.max(targetRecipientCount, deliveryCount, 0)
-            : deliveryCount;
     const ctr =
-        mappedStatus === 'Sent' && deliveryCount > 0
-            ? `${((clickCount / deliveryCount) * 100).toFixed(1)}%`
+        metrics.status === 'Sent' && metrics.deliveryCount > 0
+            ? `${metrics.clickRatePercent.toFixed(1)}%`
             : '0.0%';
 
     return {
@@ -114,11 +88,7 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
             macosImageUrl: (enriched.macos_image_url ?? enriched.macosImageUrl) as string | null | undefined,
             androidImageUrl: (enriched.android_image_url ?? enriched.androidImageUrl) as string | null | undefined,
         }),
-        sendTime: String(
-            mappedStatus === 'Scheduled' && scheduledAt
-                ? scheduledAt
-                : sentAt ?? scheduledAt ?? enriched.created_at ?? enriched.createdAt ?? new Date().toISOString(),
-        ),
+        sendTime: metrics.sendTime,
         scheduledAt,
         sentAt,
         flashSaleEndsAt,
@@ -126,11 +96,11 @@ const mapApiCampaign = (shop: string, campaign: Record<string, unknown>): Campai
         segment: enriched.segment_id === 'all' || !enriched.segment_id
             ? 'All Subscribers'
             : `Segment ${String(enriched.segment_id ?? enriched.segmentId ?? '')}`,
-        impressions,
-        deliveryCount,
+        impressions: metrics.impressions,
+        deliveryCount: metrics.deliveryCount,
         clickRate: ctr,
-        sales: Number(enriched.revenue_cents ?? enriched.revenueCents ?? 0) / 100,
-        status: mappedStatus,
+        sales: metrics.revenueCents / 100,
+        status: metrics.status,
         createdAt: String(enriched.created_at ?? enriched.createdAt ?? new Date().toISOString()),
     };
 };

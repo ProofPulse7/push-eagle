@@ -13,6 +13,7 @@ export const queryKeys = {
     ['pe', shop, 'automations', 'stats', from, to] as const,
   segments: (shop: string) => ['pe', shop, 'segments'] as const,
   subscribersOverview: (shop: string) => ['pe', shop, 'subscribers', 'overview'] as const,
+  subscribersGrowthSeries: (shop: string) => ['pe', shop, 'subscribers', 'growth-series'] as const,
   subscribersGrowth: (shop: string, from: string, to: string) =>
     ['pe', shop, 'subscribers', 'growth', from, to] as const,
   subscribersList: (shop: string, limit: number, offset: number, sort: string) =>

@@ -9972,6 +9972,14 @@ export const sendCampaign = async (
 
   try {
     const messaging = getFirebaseAdminMessaging();
+    const { selectCampaignImageForDevice, absolutizeNotificationMediaUrl } = await import(
+      '@/lib/server/push/fcm-web-push-message'
+    );
+    const { env } = await import('@/lib/config/env');
+    const appBaseUrl = (env.SHOPIFY_ROOT_APP_URL || env.NEXT_PUBLIC_APP_URL || 'https://push-eagle.vercel.app').replace(
+      /\/$/,
+      '',
+    );
     const chunkSize = 500;
     let successCount = 0;
     let failureCount = 0;
@@ -9986,13 +9994,19 @@ export const sendCampaign = async (
       const chunkSuccessBaseline = successCount;
       const chunk = recipients.slice(i, i + chunkSize);
       const chunkWithPayload = chunk.map((item) => {
-        const platform = String((item as { platform?: string }).platform ?? '').toLowerCase();
-        const platformImage =
-          platform === 'windows'
-            ? campaign.windows_image_url
-            : platform === 'android'
-              ? campaign.android_image_url
-              : campaign.macos_image_url ?? campaign.image_url;
+        const platformImage = absolutizeNotificationMediaUrl(
+          selectCampaignImageForDevice(
+            {
+              imageUrl: campaign.image_url,
+              windowsImageUrl: campaign.windows_image_url,
+              macosImageUrl: campaign.macos_image_url,
+              androidImageUrl: campaign.android_image_url,
+            },
+            (item as { platform?: string }).platform,
+            (item as { user_agent?: string | null }).user_agent,
+          ),
+          appBaseUrl,
+        );
 
         const trackedUrl = buildTrackedUrl(campaign.target_url, campaignId, shopDomain, item.external_id, 'primary');
         const actionButtons = Array.isArray(campaign.action_buttons)
@@ -10075,7 +10089,7 @@ export const sendCampaign = async (
               token: item.fcm_token,
               title: campaign.title,
               body: campaign.body,
-              iconUrl: campaign.icon_url,
+              iconUrl: absolutizeNotificationMediaUrl(campaign.icon_url, appBaseUrl),
               imageUrl: platformImage,
               linkUrl: trackedUrl,
               campaignId,
@@ -10169,7 +10183,7 @@ export const sendCampaign = async (
             {
               title: campaign.title,
               body: campaign.body,
-              icon: campaign.icon_url,
+              icon: absolutizeNotificationMediaUrl(campaign.icon_url, appBaseUrl),
               image: platformImage,
               url: trackedUrl,
               actions,

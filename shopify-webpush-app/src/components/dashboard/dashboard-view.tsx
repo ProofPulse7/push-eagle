@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
-import { useDashboardSummary } from '@/hooks/queries/use-app-queries';
+import { useDashboardSummary, useSubscriberTotalCount, useSubscribersOverview } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { BASIC_PLAN } from '@/lib/client/billing-plans';
@@ -41,11 +41,12 @@ export function DashboardView() {
   const impressionsUsed = billingImpressions;
   const impressionLimit = Number(billing.impressionLimit ?? BASIC_PLAN.impressions);
   const impressionsRemaining = Math.max(0, impressionLimit - impressionsUsed);
-  const totalSubscribers = Number(
-    subscriberKpis.totalSubscribers ?? overview.subscriberCount ?? 0,
+  const { data: subscribersOverview } = useSubscribersOverview();
+  const totalSubscribers = useSubscriberTotalCount();
+  const growthPercent = Number(
+    subscribersOverview?.growthPercent ?? subscriberKpis.growthPercent ?? 0,
   );
   const campaignsSent = Number(campaignStats.sentCount ?? campaignStats.sent ?? overview.campaignCount ?? 0);
-  const growthPercent = Number(subscriberKpis.growthPercent ?? 0);
   const showValueSkeleton = isLoading && !effectiveData;
   const showInitialLoad = Boolean(shopDomain) && isLoading && !effectiveData;
 
@@ -65,9 +66,9 @@ export function DashboardView() {
       accent: 'text-blue-600 dark:text-blue-400',
     },
     {
-      title: 'Subscribers',
+      title: 'Total Subscribers',
       value: totalSubscribers.toLocaleString(),
-      hint: `${growthPercent > 0 ? '+' : ''}${growthPercent.toFixed(1)}% vs last 7 days · active notification tokens`,
+      hint: `All-time active notification subscribers · ${growthPercent > 0 ? '+' : ''}${growthPercent.toFixed(1)}% vs last 7 days`,
       icon: Users,
       accent: 'text-violet-600 dark:text-violet-400',
     },

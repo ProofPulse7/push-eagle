@@ -49,9 +49,6 @@ export async function GET(request: Request) {
       return NextResponse.json(cached, { headers: CACHE_HEADERS });
     }
 
-    const chartFrom = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const chartTo = new Date();
-
     const [
       merchantOverview,
       campaignStats,
@@ -77,8 +74,16 @@ export async function GET(request: Request) {
       getOptInSettings(shopDomain),
       getMerchantBillingFast(shopDomain),
       getAutomationOverview(shopDomain),
-      getSubscriberGrowth(shopDomain, chartFrom, chartTo),
+      getSubscriberGrowth(shopDomain),
     ]);
+
+    const subscriberGrowthSeries = {
+      ok: true,
+      shopDomain,
+      from: subscriberGrowth.from.toISOString(),
+      to: subscriberGrowth.to.toISOString(),
+      ...subscriberGrowth,
+    };
 
     const payload = {
       ok: true as const,
@@ -98,13 +103,8 @@ export async function GET(request: Request) {
       optIn,
       billing,
       automationsOverview,
-      subscriberGrowth: {
-        ok: true,
-        shopDomain,
-        from: chartFrom.toISOString(),
-        to: chartTo.toISOString(),
-        ...subscriberGrowth,
-      },
+      subscriberGrowth: subscriberGrowthSeries,
+      subscriberGrowthSeries,
     };
 
     writeBootstrapCache(shopDomain, payload);

@@ -1,5 +1,79 @@
 type FcmWebPushAction = { action: string; title: string };
 
+export type CampaignDeviceImages = {
+  imageUrl?: string | null;
+  windowsImageUrl?: string | null;
+  macosImageUrl?: string | null;
+  androidImageUrl?: string | null;
+};
+
+export const absolutizeNotificationMediaUrl = (
+  url: string | null | undefined,
+  appBaseUrl: string,
+): string | null => {
+  const trimmed = String(url ?? '').trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    if (/^https?:\/\//i.test(trimmed)) {
+      return new URL(trimmed).toString();
+    }
+
+    const base = appBaseUrl.replace(/\/$/, '');
+    const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    return new URL(path, `${base}/`).toString();
+  } catch {
+    return null;
+  }
+};
+
+const pickImageUrl = (...candidates: Array<string | null | undefined>) => {
+  for (const candidate of candidates) {
+    const value = String(candidate ?? '').trim();
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+};
+
+/** Pick the hero image for a campaign notification based on device signals. */
+export const selectCampaignImageForDevice = (
+  campaign: CampaignDeviceImages,
+  platform?: string | null,
+  userAgent?: string | null,
+): string | null => {
+  const device = `${String(platform ?? '').toLowerCase()} ${String(userAgent ?? '').toLowerCase()}`.trim();
+
+  if (device.includes('android')) {
+    return pickImageUrl(campaign.androidImageUrl, campaign.imageUrl);
+  }
+
+  if (device.includes('windows')) {
+    return pickImageUrl(campaign.windowsImageUrl, campaign.imageUrl);
+  }
+
+  if (
+    device.includes('mac')
+    || device.includes('osx')
+    || device.includes('iphone')
+    || device.includes('ipad')
+    || device.includes('ios')
+    || device.includes('safari')
+  ) {
+    return pickImageUrl(campaign.macosImageUrl, campaign.imageUrl);
+  }
+
+  return pickImageUrl(
+    campaign.imageUrl,
+    campaign.macosImageUrl,
+    campaign.windowsImageUrl,
+    campaign.androidImageUrl,
+  );
+};
+
 export type FcmWebPushMessageInput = {
   token: string;
   title: string;
@@ -29,11 +103,14 @@ const toFcmDataValue = (value: unknown) => (value == null ? '' : String(value));
  * when combined with firebase.messaging() and a custom push handler.
  */
 export const buildFcmDataOnlyWebPushMessage = (input: FcmWebPushMessageInput) => {
+  const imageUrl = String(input.imageUrl ?? '').trim();
+  const iconUrl = String(input.iconUrl ?? '').trim();
+
   const data: Record<string, string> = {
     title: input.title,
     body: input.body,
-    icon: toFcmDataValue(input.iconUrl),
-    image: toFcmDataValue(input.imageUrl),
+    icon: iconUrl,
+    ...(imageUrl ? { image: imageUrl } : {}),
     url: toFcmDataValue(input.linkUrl ?? input.primaryUrl),
     primaryUrl: toFcmDataValue(input.primaryUrl ?? input.linkUrl),
     button1Url: toFcmDataValue(input.button1Url),

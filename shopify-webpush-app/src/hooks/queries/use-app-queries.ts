@@ -20,6 +20,12 @@ import { fetchAppBootstrap, fetchCampaignsList, fetchDashboardSummary } from '@/
 import { clearPendingSettings } from '@/lib/client/pending-settings';
 import { type AppBootstrapPayload } from '@/lib/client/hydrate-app-cache';
 import { queryKeys } from '@/lib/client/query-keys';
+import { isCampaignActivelySending } from '@/lib/client/campaign-row-metrics';
+import { readCachedSubscriberCount } from '@/lib/client/subscriber-count-sync';
+import {
+  sliceSubscriberGrowthSeries,
+  type SubscriberGrowthPayload,
+} from '@/lib/client/subscriber-growth-series';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
 export function useAppBootstrap() {
@@ -68,12 +74,7 @@ export function useCampaigns() {
         return false;
       }
 
-      const hasActiveSend = campaigns.some((campaign) => {
-        const status = String(campaign.status ?? '').toLowerCase();
-        return status === 'sending' || status === 'queued';
-      });
-
-      return hasActiveSend ? 15_000 : false;
+      return campaigns.some((campaign) => isCampaignActivelySending(campaign)) ? 15_000 : false;
     },
     refetchIntervalInBackground: false,
     placeholderData: (previous) => previous ?? (shop ? queryClient.getQueryData(queryKeys.campaigns(shop)) : undefined),
@@ -352,40 +353,58 @@ export function useAnalyticsStats(from: Date, to: Date, enabled = true) {
   });
 }
 
-export function useSubscriberGrowth(from?: Date, to?: Date) {
+export function useSubscriberTotalCount() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
-  const isAllTime = !from && !to;
-  const { fromIso, toIso } = useMemo(() => {
-    if (isAllTime) {
-      return { fromIso: 'all', toIso: 'all' };
-    }
+  const { data: overview } = useSubscribersOverview();
 
-    const range = resolveAnalyticsDateRange(
-      from ? { from, to: to ?? from } : undefined,
-    );
-    return { fromIso: range.fromIso, toIso: range.toIso };
-  }, [from?.getTime(), to?.getTime(), isAllTime]);
+  return useMemo(() => {
+    if (overview?.totalSubscribers != null) {
+      return Number(overview.totalSubscribers);
+    }
+    if (overview?.activeSubscribers != null) {
+      return Number(overview.activeSubscribers);
+    }
+    return readCachedSubscriberCount(queryClient, shop);
+  }, [overview?.totalSubscribers, overview?.activeSubscribers, queryClient, shop]);
+}
+
+/** Full daily new-subscriber series — fetched once, sliced client-side for charts. */
+export function useSubscriberGrowthSeries() {
+  const shop = useShopDomain();
+  const queryClient = useQueryClient();
 
   return useQuery({
-    queryKey: queryKeys.subscribersGrowth(shop, fromIso, toIso),
-    queryFn: () => {
-      const params = new URLSearchParams({ shop });
-      if (!isAllTime) {
-        params.set('from', fromIso);
-        params.set('to', toIso);
-      }
-      return fetchJson<Record<string, unknown>>(`/api/subscribers/growth?${params.toString()}`);
-    },
+    queryKey: queryKeys.subscribersGrowthSeries(shop),
+    queryFn: () => fetchJson<SubscriberGrowthPayload>(`/api/subscribers/growth?shop=${encodeURIComponent(shop)}`),
     enabled: Boolean(shop),
-    staleTime: 60_000,
-    refetchOnMount: true,
+    staleTime: 5 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
     initialData: () => {
       const bootstrap = queryClient.getQueryData<AppBootstrapPayload>(queryKeys.bootstrap(shop));
-      return bootstrap?.subscriberGrowth as Record<string, unknown> | undefined;
+      const series = bootstrap?.subscriberGrowthSeries ?? bootstrap?.subscriberGrowth;
+      return series as SubscriberGrowthPayload | undefined;
     },
     placeholderData: (previous) => previous,
   });
+}
+
+export function useSubscriberGrowth(from?: Date, to?: Date) {
+  const { data: series, isLoading, isFetching } = useSubscriberGrowthSeries();
+
+  const payload = useMemo(() => {
+    if (!series?.ok || !from || !to) {
+      return series;
+    }
+    return sliceSubscriberGrowthSeries(series, from, to);
+  }, [series, from?.getTime(), to?.getTime()]);
+
+  return {
+    data: payload,
+    isLoading: isLoading && !series,
+    isFetching: isFetching && !series,
+  };
 }
 
 export function useSaveBrandingSettings() {
@@ -583,10 +602,9 @@ export async function prefetchAppPages(queryClient: QueryClient, shop: string) {
         fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
       ),
     () =>
-      prefetchIfMissing(queryClient, queryKeys.subscribersGrowth(shop, fromIso, toIso), () => {
-        const params = new URLSearchParams({ shop, from: fromIso, to: toIso });
-        return fetchJson<Record<string, unknown>>(`/api/subscribers/growth?${params.toString()}`);
-      }),
+      prefetchIfMissing(queryClient, queryKeys.subscribersGrowthSeries(shop), () =>
+        fetchJson<SubscriberGrowthPayload>(`/api/subscribers/growth?shop=${encodeURIComponent(shop)}`),
+      ),
     () =>
       prefetchIfMissing(queryClient, queryKeys.automationsOverview(shop), async () => {
         const fresh = await fetchJsonWithShop<{

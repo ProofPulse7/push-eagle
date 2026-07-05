@@ -93,10 +93,14 @@ self.addEventListener('push', function(event) {
   const trackPrimaryUrl = payload.data?.trackPrimaryUrl || '';
   const trackButton1Url = payload.data?.trackButton1Url || '';
   const trackButton2Url = payload.data?.trackButton2Url || '';
+  const rawImage = payload.data?.image || payload.image || payload.notification?.image;
+  const image = rawImage && String(rawImage).trim() ? String(rawImage).trim() : undefined;
+  const rawIcon = payload.data?.icon || payload.icon || payload.notification?.icon;
+  const icon = rawIcon && String(rawIcon).trim() ? String(rawIcon).trim() : undefined;
   const options = {
     body: payload.data?.body || payload.body || payload.notification?.body,
-    icon: payload.data?.icon || payload.icon || payload.notification?.icon,
-    image: payload.data?.image || payload.image || payload.notification?.image,
+    icon: icon,
+    image: image,
     tag: payload.data?.tag || payload.data?.campaignId || payload.tag || undefined,
     actions: buildPushEagleActions(payload),
     data: {

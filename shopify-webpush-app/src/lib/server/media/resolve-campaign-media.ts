@@ -1,5 +1,18 @@
+import { env } from '@/lib/config/env';
 import { createMediaAsset } from '@/lib/server/data/store';
 import { uploadImageToR2 } from '@/lib/server/media/r2';
+
+const appMediaBaseUrl = () =>
+  (env.SHOPIFY_ROOT_APP_URL || env.NEXT_PUBLIC_APP_URL || 'https://push-eagle.vercel.app').replace(/\/$/, '');
+
+const toAbsoluteAppMediaUrl = (value: string): string => {
+  if (value.startsWith('http://') || value.startsWith('https://')) {
+    return value;
+  }
+
+  const path = value.startsWith('/') ? value : `/${value}`;
+  return `${appMediaBaseUrl()}${path}`;
+};
 
 const parseDataUrl = (dataUrl: string) => {
   const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
@@ -49,5 +62,5 @@ export const resolveServerCampaignMediaUrl = async (
     publicUrl: uploaded.publicUrl,
   });
 
-  return uploaded.publicUrl || `/api/media/${asset.id}`;
+  return uploaded.publicUrl || toAbsoluteAppMediaUrl(`/api/media/${asset.id}`);
 };
