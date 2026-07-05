@@ -4,7 +4,7 @@ import { BASIC_PLAN } from '@/lib/client/billing-plans';
 import { useBillingStatus } from '@/hooks/queries/use-billing';
 
 export function useImpressionLimit(options?: { refetchOnMount?: boolean }) {
-  const { data, isLoading, isFetching } = useBillingStatus(options);
+  const { data, isLoading, isFetching } = useBillingStatus({ ...options, reconcile: true });
   const billing = (data?.billing ?? null) as Record<string, unknown> | null;
 
   const impressionsUsed = Number(billing?.impressionsUsed ?? 0);

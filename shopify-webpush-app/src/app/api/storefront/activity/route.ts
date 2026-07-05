@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { recordSubscriberActivity } from '@/lib/server/data/store';
+import { shouldCollectEventType } from '@/lib/server/automation/collection-gate';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { shouldRunStorefrontAutomationInline } from '@/lib/server/storefront-automation-inline';
 import {
@@ -59,6 +60,16 @@ export async function POST(request: Request) {
     if (isLowValueStorefrontActivityEvent(body.eventType)) {
       return NextResponse.json(
         { ok: true, skipped: true, reason: 'page_view_handled_by_pixel' },
+        { headers: buildCorsHeaders(origin) },
+      );
+    }
+
+    // Collection gate: only accept the raw event when the automation that
+    // consumes it is active for this shop. Cheap (cached) and short-circuits
+    // before any throttle write or DB work when the automation is off.
+    if (!(await shouldCollectEventType(shopDomain, body.eventType))) {
+      return NextResponse.json(
+        { ok: true, skipped: true, reason: 'automation_inactive' },
         { headers: buildCorsHeaders(origin) },
       );
     }

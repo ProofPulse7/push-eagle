@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { ingestStorefrontPixelEventDirect, enqueueIngestionJob, processIngestionJob } from '@/lib/server/data/store';
+import { shouldCollectEventType } from '@/lib/server/automation/collection-gate';
 import { isD1EventsEnabled } from '@/lib/server/integrations/d1-events';
 import { extractShopDomain, parseShopDomain } from '@/lib/server/shop-context';
 import { shouldThrottleStorefrontEvent } from '@/lib/server/storefront-event-throttle';
@@ -91,6 +92,17 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { ok: false, error: 'Unable to derive externalId from pixel payload.' },
         { status: 400, headers: buildCorsHeaders(origin) },
+      );
+    }
+
+    // Collection gate: the abandonment trigger events (product_view / add_to_cart
+    // / checkout_start) are only stored when their automation is active. page_view
+    // and checkout_complete pass through (analytics + conversion attribution).
+    const GATED_EVENT_TYPES = new Set(['product_view', 'add_to_cart', 'checkout_start']);
+    if (GATED_EVENT_TYPES.has(body.eventType) && !(await shouldCollectEventType(shopDomain, body.eventType))) {
+      return NextResponse.json(
+        { ok: true, skipped: true, reason: 'automation_inactive' },
+        { headers: buildCorsHeaders(origin) },
       );
     }
 

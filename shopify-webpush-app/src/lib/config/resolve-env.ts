@@ -59,6 +59,9 @@ const EnvSchema = z.object({
   // (pixel_events + subscriber_activity_events). Optional second layer of
   // isolation. Falls back to CLOUDFLARE_D1_DATABASE_ID when unset.
   CLOUDFLARE_D1_EVENTS_DATABASE_ID: z.string().default(''),
+  // Dedicated D1 for delivery/click detail (campaign + automation deliveries/clicks).
+  // Falls back to CLOUDFLARE_D1_DATABASE_ID when unset.
+  CLOUDFLARE_D1_DELIVERIES_DATABASE_ID: z.string().default(''),
   CLOUDFLARE_WORKER_URL: z.string().default(''),
   // Retention window (days) for raw events in D1. Must stay >= the longest
   // automation lookback (browse-abandonment/abandoned-cart use up to 14 days)
@@ -88,6 +91,22 @@ const EnvSchema = z.object({
   // Explicit opt-in for moving the Shopify customer cache to D1 (segmentation,
   // GDPR, attribution). Independent from D1_CATALOG_ENABLED for staged rollout.
   D1_CUSTOMERS_ENABLED: z
+    .string()
+    .default('false')
+    .transform((value) => value.trim().toLowerCase() === 'true'),
+  // Explicit opt-in for moving the high-volume commerce tables (shopify_orders,
+  // shopify_order_items, shopify_fulfillments) to D1. These are the biggest
+  // scale threat on Neon (hundreds of orders/day/merchant). All order<->subscriber
+  // usage is via the subscriber_id NUMBER only (never an in-DB JOIN to subscribers),
+  // so orders move cleanly to D1 with a one-time backfill + self-healing webhooks.
+  // Ships dormant; when off everything stays on Neon byte-for-byte.
+  D1_COMMERCE_ENABLED: z
+    .string()
+    .default('false')
+    .transform((value) => value.trim().toLowerCase() === 'true'),
+  // Explicit opt-in for moving delivery/click detail tables to D1. Lifetime stats
+  // (campaigns row + automation_rule_stats) stay on Neon; detail rows move here.
+  D1_DELIVERIES_ENABLED: z
     .string()
     .default('false')
     .transform((value) => value.trim().toLowerCase() === 'true'),

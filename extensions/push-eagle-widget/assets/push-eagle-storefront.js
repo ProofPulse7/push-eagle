@@ -197,6 +197,55 @@
     });
   }
 
+  function withTimeout(promise, ms, fallbackValue) {
+    return new Promise(function (resolve) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (!settled) {
+          settled = true;
+          resolve(fallbackValue);
+        }
+      }, Math.max(0, Number(ms) || 0));
+
+      Promise.resolve(promise).then(function (value) {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        }
+      }).catch(function () {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(fallbackValue);
+        }
+      });
+    });
+  }
+
+  function fetchWithTimeout(url, options, timeoutMs) {
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var fetchOptions = Object.assign({}, options || {});
+    if (controller) {
+      fetchOptions.signal = controller.signal;
+    }
+
+    var fetchPromise = fetch(url, fetchOptions);
+    if (!controller) {
+      return withTimeout(fetchPromise, timeoutMs, null);
+    }
+
+    var timeoutPromise = delay(timeoutMs).then(function () {
+      controller.abort();
+      return null;
+    });
+
+    return Promise.race([
+      fetchPromise.catch(function () { return null; }),
+      timeoutPromise
+    ]);
+  }
+
   function getRemainingDelayMs(startedAt, delayMs) {
     var started = Number(startedAt || 0);
     var configuredDelay = Math.max(0, Number(delayMs || 0));
@@ -474,81 +523,165 @@
     }
   }
 
+  // Raw abandonment-trigger events are only collected for visitors who have
+  // allowed notifications. Before consent we keep them in sessionStorage
+  // ("noted on the merchant site") and replay them to the server only once the
+  // visitor subscribes in the same session.
+  var GATED_ACTIVITY_EVENTS = { add_to_cart: true, product_view: true, checkout_start: true };
+  var PENDING_ACTIVITY_MAX = 25;
+
+  function pendingActivityKey(shopDomain) {
+    return getStorageKey(shopDomain, 'pending_activity_v1');
+  }
+
+  function readPendingActivity(shopDomain) {
+    try {
+      var raw = safeSessionStorageGet(pendingActivityKey(shopDomain));
+      if (!raw) {
+        return [];
+      }
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_readError) {
+      return [];
+    }
+  }
+
+  function writePendingActivity(shopDomain, list) {
+    try {
+      safeSessionStorageSet(pendingActivityKey(shopDomain), JSON.stringify(list.slice(-PENDING_ACTIVITY_MAX)));
+    } catch (_writeError) {
+      // ignore quota / disabled storage
+    }
+  }
+
+  function buildActivityPayload(boot, eventType, metadata) {
+    var url = window.location.href;
+    var productMatch = window.location.pathname.match(/\/products\/([^/?#]+)/i);
+    var detectedProductId = null;
+    var productIdNode = document.querySelector('[data-product-id], [data-productid], [data-product_id], [data-product]');
+
+    if (productIdNode) {
+      detectedProductId = productIdNode.getAttribute('data-product-id')
+        || productIdNode.getAttribute('data-productid')
+        || productIdNode.getAttribute('data-product_id')
+        || productIdNode.getAttribute('data-product');
+    }
+
+    if (!detectedProductId && metadata && metadata.productId) {
+      detectedProductId = metadata.productId;
+    }
+
+    var payload = {
+      shopDomain: boot.shopDomain,
+      externalId: boot.externalId,
+      eventType: eventType,
+      pageUrl: url,
+      productId: detectedProductId || (productMatch ? productMatch[1] : null),
+      cartToken: (metadata && metadata.cartToken) || null,
+      metadata: metadata || {}
+    };
+    payload.metadata.clientId = boot.clientId || null;
+    payload.metadata.shopifyAnalyticsClientId = getShopifyAnalyticsClientId();
+    return payload;
+  }
+
+  async function postActivityPayload(boot, payload) {
+    var endpoints = [];
+    if (boot.bootstrapSource === 'proxy') {
+      if (boot.activityEndpoint) {
+        endpoints.push(boot.activityEndpoint);
+      }
+      if (boot.activityFallbackEndpoint && endpoints.indexOf(boot.activityFallbackEndpoint) === -1) {
+        endpoints.push(boot.activityFallbackEndpoint);
+      }
+    } else {
+      if (boot.activityFallbackEndpoint) {
+        endpoints.push(boot.activityFallbackEndpoint);
+      }
+      if (boot.activityEndpoint && endpoints.indexOf(boot.activityEndpoint) === -1) {
+        endpoints.push(boot.activityEndpoint);
+      }
+    }
+
+    for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {
+      var endpoint = endpoints[endpointIndex];
+
+      try {
+        var response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        // Shopify can return storefront HTML (200 text/html) when app proxy is misrouted.
+        // Treat non-JSON as failure so we continue to fallback endpoint.
+        if (response.ok && isJsonResponse(response)) {
+          break;
+        }
+      } catch (_endpointError) {
+        if (endpointIndex === endpoints.length - 1) {
+          throw _endpointError;
+        }
+      }
+    }
+  }
+
   async function sendActivityEvent(boot, eventType, metadata) {
     if (!boot || !boot.activityEndpoint || !boot.shopDomain || !boot.externalId) {
       return;
     }
 
     try {
-      var url = window.location.href;
-      var productMatch = window.location.pathname.match(/\/products\/([^/?#]+)/i);
-      var detectedProductId = null;
-      var productIdNode = document.querySelector('[data-product-id], [data-productid], [data-product_id], [data-product]');
+      var payload = buildActivityPayload(boot, eventType, metadata);
 
-      if (productIdNode) {
-        detectedProductId = productIdNode.getAttribute('data-product-id')
-          || productIdNode.getAttribute('data-productid')
-          || productIdNode.getAttribute('data-product_id')
-          || productIdNode.getAttribute('data-product');
+      // Consent gate: only send raw trigger events for visitors who have allowed
+      // notifications. Otherwise stash them in-session and replay on subscribe.
+      if (GATED_ACTIVITY_EVENTS[eventType] && !isMarkedSubscribed(boot.shopDomain)) {
+        var pending = readPendingActivity(boot.shopDomain);
+        pending.push({ payload: payload, at: Date.now() });
+        writePendingActivity(boot.shopDomain, pending);
+        return;
       }
 
-      if (!detectedProductId && metadata && metadata.productId) {
-        detectedProductId = metadata.productId;
-      }
-
-      var payload = {
-        shopDomain: boot.shopDomain,
-        externalId: boot.externalId,
-        eventType: eventType,
-        pageUrl: url,
-        productId: detectedProductId || (productMatch ? productMatch[1] : null),
-        cartToken: (metadata && metadata.cartToken) || null,
-        metadata: metadata || {}
-      };
-      payload.metadata.clientId = boot.clientId || null;
-      payload.metadata.shopifyAnalyticsClientId = getShopifyAnalyticsClientId();
-      var endpoints = [];
-      if (boot.bootstrapSource === 'proxy') {
-        if (boot.activityEndpoint) {
-          endpoints.push(boot.activityEndpoint);
-        }
-        if (boot.activityFallbackEndpoint && endpoints.indexOf(boot.activityFallbackEndpoint) === -1) {
-          endpoints.push(boot.activityFallbackEndpoint);
-        }
-      } else {
-        if (boot.activityFallbackEndpoint) {
-          endpoints.push(boot.activityFallbackEndpoint);
-        }
-        if (boot.activityEndpoint && endpoints.indexOf(boot.activityEndpoint) === -1) {
-          endpoints.push(boot.activityEndpoint);
-        }
-      }
-
-      for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {
-        var endpoint = endpoints[endpointIndex];
-
-        try {
-          var response = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(payload)
-          });
-
-          // Shopify can return storefront HTML (200 text/html) when app proxy is misrouted.
-          // Treat non-JSON as failure so we continue to fallback endpoint.
-          if (response.ok && isJsonResponse(response)) {
-            break;
-          }
-        } catch (_endpointError) {
-          if (endpointIndex === endpoints.length - 1) {
-            throw _endpointError;
-          }
-        }
-      }
+      await postActivityPayload(boot, payload);
     } catch (_error) {
       // best effort only
+    }
+  }
+
+  async function flushPendingActivity(boot) {
+    if (!boot || !boot.shopDomain || !boot.externalId) {
+      return;
+    }
+
+    var pending = readPendingActivity(boot.shopDomain);
+    if (!pending.length) {
+      return;
+    }
+
+    // Clear up front so a mid-flush error can't cause an infinite replay/growth loop.
+    writePendingActivity(boot.shopDomain, []);
+
+    for (var i = 0; i < pending.length; i += 1) {
+      var item = pending[i];
+      if (!item || !item.payload) {
+        continue;
+      }
+      // Refresh identity fields — externalId/clientId are stable but re-stamp to be safe.
+      item.payload.shopDomain = boot.shopDomain;
+      item.payload.externalId = boot.externalId;
+      if (item.payload.metadata) {
+        item.payload.metadata.clientId = boot.clientId || item.payload.metadata.clientId || null;
+      }
+
+      try {
+        await postActivityPayload(boot, item.payload);
+      } catch (_flushError) {
+        // best effort; already cleared to avoid retry storms
+      }
     }
   }
 
@@ -811,6 +944,12 @@
 
   function normalizeBrowserName(value) {
     var raw = String(value || '').toLowerCase();
+    if (raw.indexOf('brave') !== -1) return 'brave';
+    if (raw.indexOf('duckduckgo') !== -1 || raw.indexOf('ddg') !== -1) return 'duckduckgo';
+    if (raw.indexOf('ucbrowser') !== -1 || raw === 'uc' || raw.indexOf('uc browser') !== -1) return 'uc';
+    if (raw.indexOf('miui') !== -1 || raw.indexOf('mi browser') !== -1) return 'mi';
+    if (raw.indexOf('phoenix') !== -1) return 'phoenix';
+    if (raw.indexOf('bing') !== -1) return 'bing';
     if (raw.indexOf('edge') !== -1 || raw.indexOf('edg') !== -1) return 'edge';
     if (raw.indexOf('opera') !== -1 || raw.indexOf('opr') !== -1) return 'opera';
     if (raw.indexOf('samsung') !== -1) return 'samsung';
@@ -835,6 +974,18 @@
   function detectBrowserFromUserAgent(ua) {
     var match;
     if ((match = ua.match(/SamsungBrowser\/([\d.]+)/i))) return { name: 'samsung', version: match[1], source: 'userAgent' };
+    if ((match = ua.match(/DuckDuckGo\/([\d.]+)/i))) return { name: 'duckduckgo', version: match[1], source: 'userAgent' };
+    if (/UCBrowser|UCWEB/i.test(ua)) {
+      match = ua.match(/UCBrowser\/([\d.]+)/i);
+      return { name: 'uc', version: match ? match[1] : null, source: 'userAgent' };
+    }
+    if (/MiuiBrowser|Mi Browser/i.test(ua)) {
+      match = ua.match(/MiuiBrowser\/([\d.]+)/i);
+      return { name: 'mi', version: match ? match[1] : null, source: 'userAgent' };
+    }
+    if ((match = ua.match(/Phoenix\/([\d.]+)/i))) return { name: 'phoenix', version: match[1], source: 'userAgent' };
+    if (/BingWeb|BingBrowser/i.test(ua)) return { name: 'bing', version: null, source: 'userAgent' };
+    if ((match = ua.match(/Brave\/([\d.]+)/i))) return { name: 'brave', version: match[1], source: 'userAgent' };
     if ((match = ua.match(/EdgA?\/([\d.]+)/i))) return { name: 'edge', version: match[1], source: 'userAgent' };
     if ((match = ua.match(/OPR\/([\d.]+)/i))) return { name: 'opera', version: match[1], source: 'userAgent' };
     if ((match = ua.match(/FxiOS\/([\d.]+)/i))) return { name: 'firefox', version: match[1], source: 'userAgent' };
@@ -844,6 +995,44 @@
     if ((match = ua.match(/Chrome\/([\d.]+)/i))) return { name: 'chrome', version: match[1], source: 'userAgent' };
     if ((match = ua.match(/Version\/([\d.]+).+Safari/i))) return { name: 'safari', version: match[1], source: 'userAgent' };
     return { name: 'unknown', version: null, source: 'userAgent' };
+  }
+
+  async function isBraveBrowser() {
+    if (/Brave/i.test(navigator.userAgent || '')) {
+      return true;
+    }
+
+    try {
+      if (navigator.brave && typeof navigator.brave.isBrave === 'function') {
+        return await navigator.brave.isBrave();
+      }
+    } catch (_error) {
+      return false;
+    }
+
+    return false;
+  }
+
+  async function resolveBrowserIdentity(ua, uaData) {
+    var uaBrowser = detectBrowserFromUserAgent(ua);
+    var hintBrowser = getUaDataBrandInfo(uaData);
+    var browserName = hintBrowser.name !== 'unknown' ? hintBrowser.name : uaBrowser.name;
+    var browserVersion = hintBrowser.version || uaBrowser.version;
+    var browserSource = hintBrowser.name !== 'unknown' ? hintBrowser.source : uaBrowser.source;
+
+    if (await isBraveBrowser()) {
+      return {
+        browserName: 'brave',
+        browserVersion: browserVersion,
+        browserSource: 'navigator.brave'
+      };
+    }
+
+    return {
+      browserName: browserName,
+      browserVersion: browserVersion,
+      browserSource: browserSource
+    };
   }
 
   function detectOsFromUserAgent(ua) {
@@ -888,7 +1077,7 @@
         ? uaData.brands
         : [];
 
-    var preferred = ['Microsoft Edge', 'Google Chrome', 'Opera', 'Samsung Internet', 'Chromium'];
+    var preferred = ['Brave', 'DuckDuckGo', 'Microsoft Edge', 'Opera', 'Samsung Internet', 'UC Browser', 'MiuiBrowser', 'Google Chrome', 'Chromium'];
     for (var preferredIndex = 0; preferredIndex < preferred.length; preferredIndex += 1) {
       for (var brandIndex = 0; brandIndex < brands.length; brandIndex += 1) {
         if (brands[brandIndex] && brands[brandIndex].brand === preferred[preferredIndex]) {
@@ -1128,6 +1317,108 @@
     };
   }
 
+  function detectPushManagerSupport() {
+    if ('PushManager' in window) {
+      return true;
+    }
+
+    try {
+      return !!(
+        window.ServiceWorkerRegistration &&
+        window.ServiceWorkerRegistration.prototype &&
+        'pushManager' in window.ServiceWorkerRegistration.prototype
+      );
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function detectServiceWorkerSupport() {
+    return 'serviceWorker' in navigator;
+  }
+
+  function detectNotificationSupport() {
+    return 'Notification' in window;
+  }
+
+  function isIosDeviceUserAgent(ua) {
+    return /iPhone|iPad|iPod/i.test(String(ua || ''));
+  }
+
+  function buildClientProfileSync(root, runtimeConfig) {
+    var ua = navigator.userAgent || '';
+    var uaOs = detectOsFromUserAgent(ua);
+    var uaBrowser = detectBrowserFromUserAgent(ua);
+    var osName = uaOs.name;
+    var deviceType = detectDeviceType(ua, osName, /Mobile|Android/i.test(ua));
+
+    if (isIosDeviceUserAgent(ua) && (navigator.platform === 'MacIntel' || osName === 'macos')) {
+      osName = 'ios';
+      if (deviceType === 'desktop') {
+        deviceType = 'tablet';
+      }
+    }
+
+    return {
+      browserName: uaBrowser.name,
+      browserVersion: uaBrowser.version,
+      browserSource: uaBrowser.source,
+      osName: osName,
+      osVersion: uaOs.version,
+      osSource: uaOs.source,
+      deviceType: deviceType,
+      deviceModel: detectDeviceModel(ua, null),
+      isMobile: deviceType === 'mobile' || deviceType === 'tablet',
+      isStandalone: getCurrentStandaloneState(),
+      isSecureContext: window.isSecureContext === true,
+      supportsServiceWorker: detectServiceWorkerSupport(),
+      supportsNotifications: detectNotificationSupport(),
+      supportsPushManager: detectPushManagerSupport(),
+      supportsPermissionsApi: 'permissions' in navigator,
+      permissionState: detectNotificationSupport() ? Notification.permission : 'unsupported',
+      userAgent: ua
+    };
+  }
+
+  async function refreshNotificationPermission(profile) {
+    if (!profile) {
+      return profile;
+    }
+
+    if (detectNotificationSupport()) {
+      profile.permissionState = Notification.permission;
+    }
+
+    try {
+      if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+        var status = await withTimeout(
+          navigator.permissions.query({ name: 'notifications' }),
+          1500,
+          null
+        );
+        if (status && status.state) {
+          profile.permissionState = status.state === 'prompt' ? 'default' : status.state;
+        }
+      }
+    } catch (_error) {
+      // Some browsers expose notifications permission query only after a gesture.
+    }
+
+    return profile;
+  }
+
+  function canShowOptInUi(profile) {
+    if (!profile || !profile.isSecureContext) {
+      return false;
+    }
+
+    if (profile.osName === 'ios' && !profile.isStandalone && isIosDeviceUserAgent(profile.userAgent)) {
+      return false;
+    }
+
+    return true;
+  }
+
   async function getUserAgentDataDetails() {
     var uaData = navigator.userAgentData;
     if (!uaData) {
@@ -1146,14 +1437,18 @@
     }
 
     try {
-      var highEntropy = await uaData.getHighEntropyValues([
-        'architecture',
-        'bitness',
-        'fullVersionList',
-        'model',
-        'platform',
-        'platformVersion'
-      ]);
+      var highEntropy = await withTimeout(
+        uaData.getHighEntropyValues([
+          'architecture',
+          'bitness',
+          'fullVersionList',
+          'model',
+          'platform',
+          'platformVersion'
+        ]),
+        2500,
+        null
+      );
       return Object.assign({}, base, highEntropy || {});
     } catch (_error) {
       return base;
@@ -1161,46 +1456,47 @@
   }
 
   async function buildClientProfile(root, boot, runtimeConfig) {
+    var syncProfile = buildClientProfileSync(root, runtimeConfig);
     var ua = navigator.userAgent || '';
-    var uaData = await getUserAgentDataDetails();
-    var uaBrowser = detectBrowserFromUserAgent(ua);
+    var uaData = await withTimeout(getUserAgentDataDetails(), 3000, null);
     var uaOs = detectOsFromUserAgent(ua);
-    var hintBrowser = getUaDataBrandInfo(uaData);
+    var browserIdentity = await resolveBrowserIdentity(ua, uaData);
     var hintOsName = uaData && uaData.platform ? normalizeOsName(uaData.platform) : null;
     var hintOsVersion = uaData && uaData.platformVersion ? normalizeVersion(uaData.platformVersion) : null;
     var osName = hintOsName || uaOs.name;
     var shopifyContext = getShopifyContext(root, boot);
     var deviceType = detectDeviceType(ua, osName, uaData && uaData.mobile);
-    var geoHints = await getBrowserGeoHints();
+    var geoHints = await withTimeout(getBrowserGeoHints(), 2000, {
+      country: null,
+      city: null,
+      geolocationPermission: null,
+      timezone: (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || null
+    });
 
-    if ((navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) && osName === 'macos') {
+    if (isIosDeviceUserAgent(ua) && (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) && osName === 'macos') {
       osName = 'ios';
       if (deviceType === 'desktop') {
         deviceType = 'tablet';
       }
     }
 
-    var browserName = hintBrowser.name !== 'unknown' ? hintBrowser.name : uaBrowser.name;
-    var browserVersion = hintBrowser.version || uaBrowser.version;
-    var standalone = getCurrentStandaloneState();
-
-    return {
-      browserName: browserName,
-      browserVersion: browserVersion,
-      browserSource: hintBrowser.name !== 'unknown' ? hintBrowser.source : uaBrowser.source,
+    var profile = Object.assign({}, syncProfile, {
+      browserName: browserIdentity.browserName,
+      browserVersion: browserIdentity.browserVersion,
+      browserSource: browserIdentity.browserSource,
       osName: osName,
       osVersion: hintOsVersion || uaOs.version,
       osSource: hintOsName ? 'userAgentData' : uaOs.source,
       deviceType: deviceType,
       deviceModel: detectDeviceModel(ua, uaData && uaData.model),
       isMobile: deviceType === 'mobile' || deviceType === 'tablet',
-      isStandalone: standalone,
+      isStandalone: getCurrentStandaloneState(),
       isSecureContext: window.isSecureContext === true,
-      supportsServiceWorker: 'serviceWorker' in navigator,
-      supportsNotifications: 'Notification' in window,
-      supportsPushManager: 'PushManager' in window,
+      supportsServiceWorker: detectServiceWorkerSupport(),
+      supportsNotifications: detectNotificationSupport(),
+      supportsPushManager: detectPushManagerSupport(),
       supportsPermissionsApi: 'permissions' in navigator,
-      permissionState: 'Notification' in window ? Notification.permission : 'unsupported',
+      permissionState: detectNotificationSupport() ? Notification.permission : 'unsupported',
       language: navigator.language || shopifyContext.locale || null,
       languages: Array.isArray(navigator.languages) ? navigator.languages.slice(0, 5) : [],
       timezone: geoHints.timezone,
@@ -1236,7 +1532,9 @@
       shopifyThemeId: shopifyContext.themeId,
       shopifyRoutesRoot: shopifyContext.routesRoot,
       shopifyCapabilities: shopifyContext.capabilities
-    };
+    });
+
+    return refreshNotificationPermission(profile);
   }
 
   function refreshClientProfile(profile) {
@@ -1245,11 +1543,11 @@
     }
 
     profile.isStandalone = getCurrentStandaloneState();
-    profile.permissionState = 'Notification' in window ? Notification.permission : 'unsupported';
+    profile.permissionState = detectNotificationSupport() ? Notification.permission : 'unsupported';
     profile.isSecureContext = window.isSecureContext === true;
-    profile.supportsServiceWorker = 'serviceWorker' in navigator;
-    profile.supportsNotifications = 'Notification' in window;
-    profile.supportsPushManager = 'PushManager' in window;
+    profile.supportsServiceWorker = detectServiceWorkerSupport();
+    profile.supportsNotifications = detectNotificationSupport();
+    profile.supportsPushManager = detectPushManagerSupport();
     return profile;
   }
 
@@ -1306,7 +1604,11 @@
   }
 
   function detectBrowser() {
-    return detectBrowserFromUserAgent(navigator.userAgent || '').name;
+    var ua = navigator.userAgent || '';
+    if (/Brave/i.test(ua)) {
+      return 'brave';
+    }
+    return detectBrowserFromUserAgent(ua).name;
   }
 
   function detectPlatform() {
@@ -1317,15 +1619,118 @@
     return platform;
   }
 
-  function getBrowserSupport(profile) {
-    var clientProfile = refreshClientProfile(profile) || {
-      osName: detectPlatform(),
-      isStandalone: getCurrentStandaloneState(),
-      isSecureContext: window.isSecureContext === true,
-      supportsServiceWorker: 'serviceWorker' in navigator,
-      supportsNotifications: 'Notification' in window,
-      supportsPushManager: 'PushManager' in window
+  function requiresNotificationUserGesture(profile) {
+    if (!profile) {
+      return true;
+    }
+
+    if (profile.isMobile) {
+      return true;
+    }
+
+    var chromiumBrowsers = ['chrome', 'edge', 'opera', 'brave', 'samsung', 'uc', 'mi', 'phoenix', 'bing', 'webview'];
+    return chromiumBrowsers.indexOf(profile.browserName) !== -1;
+  }
+
+  function getPermissionDeniedHelpMessage(profile) {
+    var browser = profile && profile.browserName ? profile.browserName : 'unknown';
+    var instructions = {
+      edge: 'Open browser menu → Settings → Site permissions → Notifications, then allow this store.',
+      opera: 'Open browser menu → Settings → Site settings → Notifications, then allow this store.',
+      brave: 'Open Brave Settings → Site settings → Notifications, then allow this store.',
+      chrome: 'Tap the lock icon in the address bar → Permissions → Notifications → Allow.',
+      samsung: 'Open menu → Settings → Sites and downloads → Notifications, then allow this store.',
+      uc: 'Open menu → Settings → Advanced → Website permissions → Notifications.',
+      mi: 'Open Settings → Privacy → Website permissions → Notifications.',
+      firefox: 'Open menu → Settings → Site permissions → Notifications, then allow this store.',
+      duckduckgo: 'Open Settings → Site Settings → Notifications, then allow this store.',
+      phoenix: 'Open browser settings → Site permissions → Notifications, then allow this store.',
+      bing: 'Open browser settings → Site permissions → Notifications, then allow this store.'
     };
+
+    return instructions[browser] || 'Notifications are blocked. Enable them in your browser settings for this site, then tap Allow again.';
+  }
+
+  function showPermissionDeniedHelp(root, profile) {
+    showStatus(root, getPermissionDeniedHelpMessage(profile), 'error');
+  }
+
+  async function requestNotificationPermissionFromUserGesture(clientProfile) {
+    if (!('Notification' in window)) {
+      return 'unsupported';
+    }
+
+    if (Notification.permission === 'granted') {
+      if (clientProfile) {
+        clientProfile.permissionState = 'granted';
+      }
+      return 'granted';
+    }
+
+    if (Notification.permission === 'denied') {
+      if (clientProfile) {
+        clientProfile.permissionState = 'denied';
+      }
+      return 'denied';
+    }
+
+    var permission;
+    try {
+      permission = await Notification.requestPermission();
+    } catch (_error) {
+      permission = 'denied';
+    }
+
+    if (clientProfile) {
+      clientProfile.permissionState = permission;
+    }
+
+    return permission;
+  }
+
+  var pushPrewarmState = {
+    promise: null,
+    registration: null,
+    messaging: null
+  };
+
+  function prewarmPushInfrastructure(runtimeConfig, boot) {
+    var support = getBrowserSupport();
+    if (!support.supported) {
+      return null;
+    }
+
+    if (!pushPrewarmState.promise) {
+      pushPrewarmState.promise = (async function () {
+        try {
+          var messaging = await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
+          pushPrewarmState.messaging = messaging;
+          var swPath = normalizeServiceWorkerPath(
+            (boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH
+          );
+          var swScope = deriveServiceWorkerScope(swPath);
+          var registration;
+
+          try {
+            registration = await navigator.serviceWorker.register(swPath, { scope: swScope });
+          } catch (_scopedRegisterError) {
+            registration = await navigator.serviceWorker.register(swPath);
+          }
+
+          await waitForActiveServiceWorker(registration, 12000);
+          pushPrewarmState.registration = registration;
+          return { messaging: messaging, registration: registration };
+        } catch (_error) {
+          return null;
+        }
+      })();
+    }
+
+    return pushPrewarmState.promise;
+  }
+
+  function getBrowserSupport(profile) {
+    var clientProfile = refreshClientProfile(profile) || buildClientProfileSync(null, null);
 
     if (typeof window === 'undefined') {
       return { supported: false, reason: 'unsupported' };
@@ -1335,11 +1740,15 @@
       return { supported: false, reason: 'https-required' };
     }
 
-    if (clientProfile.osName === 'ios' && !clientProfile.isStandalone) {
+    if (clientProfile.osName === 'ios' && !clientProfile.isStandalone && isIosDeviceUserAgent(clientProfile.userAgent)) {
       return { supported: false, reason: 'ios-home-screen' };
     }
 
-    if (!clientProfile.supportsServiceWorker || !clientProfile.supportsNotifications || !clientProfile.supportsPushManager) {
+    if (!clientProfile.supportsNotifications) {
+      return { supported: false, reason: 'unsupported' };
+    }
+
+    if (!clientProfile.supportsServiceWorker || !clientProfile.supportsPushManager) {
       return { supported: false, reason: 'unsupported' };
     }
 
@@ -1786,7 +2195,11 @@
       if (withCredentials) {
         fetchOptions.credentials = 'include';
       }
-      var response = await fetch(url, fetchOptions);
+      var response = await fetchWithTimeout(url, fetchOptions, 8000);
+      if (!response) {
+        console.error('[PushEagle] Bootstrap fetch timed out', url);
+        return null;
+      }
       var contentType = response.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
         console.error('[PushEagle] Bootstrap non-JSON response', response.status, url);
@@ -1889,7 +2302,9 @@
       if (settings.silent) {
         return { ok: false, reason: 'permission-default' };
       }
-      permission = await Notification.requestPermission();
+      if (!settings.skipPermissionRequest) {
+        permission = await Notification.requestPermission();
+      }
     }
 
     if (permission !== 'granted') {
@@ -1901,57 +2316,61 @@
     }
 
     try {
-      var messaging = null;
-      try {
-        messaging = await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
-      } catch (_firebaseInitError) {
-        messaging = null;
+      var messaging = pushPrewarmState.messaging;
+      if (!messaging) {
+        try {
+          messaging = await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
+        } catch (_firebaseInitError) {
+          messaging = null;
+        }
       }
 
       var swPath = normalizeServiceWorkerPath((boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH);
       var swScope = deriveServiceWorkerScope(swPath);
-      var registration;
+      var registration = pushPrewarmState.registration;
 
-      try {
-        registration = await navigator.serviceWorker.register(swPath, { scope: swScope });
-      } catch (_scopedRegisterError) {
+      if (!registration) {
         try {
-          // Fallback to default scope derived from script directory for stricter browser/proxy combinations.
-          registration = await navigator.serviceWorker.register(swPath);
-        } catch (swRegisterError) {
-          var reusedExistingRegistration = false;
+          registration = await navigator.serviceWorker.register(swPath, { scope: swScope });
+        } catch (_scopedRegisterError) {
           try {
-            var existingRegistrations = await navigator.serviceWorker.getRegistrations();
-            for (var r = 0; r < existingRegistrations.length; r += 1) {
-              var existing = existingRegistrations[r];
-              if (existing && typeof existing.scope === 'string' && existing.scope.indexOf('/apps/push-eagle/') !== -1) {
-                registration = existing;
-                reusedExistingRegistration = true;
-                break;
+            // Fallback to default scope derived from script directory for stricter browser/proxy combinations.
+            registration = await navigator.serviceWorker.register(swPath);
+          } catch (swRegisterError) {
+            var reusedExistingRegistration = false;
+            try {
+              var existingRegistrations = await navigator.serviceWorker.getRegistrations();
+              for (var r = 0; r < existingRegistrations.length; r += 1) {
+                var existing = existingRegistrations[r];
+                if (existing && typeof existing.scope === 'string' && existing.scope.indexOf('/apps/push-eagle/') !== -1) {
+                  registration = existing;
+                  reusedExistingRegistration = true;
+                  break;
+                }
               }
-            }
-            if (!reusedExistingRegistration) {
+              if (!reusedExistingRegistration) {
+                throw swRegisterError;
+              }
+            } catch (_existingRegistrationLookupError) {
               throw swRegisterError;
             }
-          } catch (_existingRegistrationLookupError) {
-            throw swRegisterError;
-          }
 
-          if (!reusedExistingRegistration) {
-            var swMessage = swRegisterError && swRegisterError.message ? String(swRegisterError.message) : '';
-            if (/404|bad http response|script/i.test(swMessage)) {
-              return { ok: false, reason: 'sw-script-missing', message: swMessage };
+            if (!reusedExistingRegistration) {
+              var swMessage = swRegisterError && swRegisterError.message ? String(swRegisterError.message) : '';
+              if (/404|bad http response|script/i.test(swMessage)) {
+                return { ok: false, reason: 'sw-script-missing', message: swMessage };
+              }
+              throw swRegisterError;
             }
-            throw swRegisterError;
           }
         }
-      }
 
-      try {
-        await waitForActiveServiceWorker(registration, 12000);
-      } catch (activationError) {
-        var activationMessage = activationError && activationError.message ? String(activationError.message) : '';
-        return { ok: false, reason: 'sw-not-active', message: activationMessage };
+        try {
+          await waitForActiveServiceWorker(registration, 12000);
+        } catch (activationError) {
+          var activationMessage = activationError && activationError.message ? String(activationError.message) : '';
+          return { ok: false, reason: 'sw-not-active', message: activationMessage };
+        }
       }
 
       var firebaseVapidKey = (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey;
@@ -2125,6 +2544,9 @@
       }
 
       markSubscribed(boot.shopDomain, token);
+      // The visitor just consented — replay any add-to-cart / product-view events
+      // we buffered earlier this session so the matching automations can fire.
+      void flushPendingActivity(boot);
       scheduleWelcomeWakeupPings(runtimeConfig, boot);
       return { ok: true, token: token, tokenType: tokenType };
     } catch (error) {
@@ -2198,11 +2620,13 @@
 
   function closePrompt(root) {
     root.hidden = true;
+    root.style.display = 'none';
     root.setAttribute('aria-hidden', 'true');
   }
 
   function openPrompt(root) {
     root.hidden = false;
+    root.style.display = 'block';
     root.setAttribute('aria-hidden', 'false');
   }
 
@@ -2292,6 +2716,7 @@
       startedAt: Date.now()
     };
 
+    try {
     if (!config.enabled) {
       closePrompt(root);
       return;
@@ -2303,7 +2728,22 @@
       return;
     }
 
-    var boot = await bootstrap(config);
+    var syncProfile = buildClientProfileSync(root, config);
+    var bootPromise = bootstrap(config);
+    var boot = await withTimeout(bootPromise, 12000, null);
+    if (!boot) {
+      boot = {
+        ok: true,
+        shopDomain: config.shopDomain,
+        externalId: getOrCreateAnonExternalId(config.shopDomain),
+        clientId: getOrCreateStableClientId(config.shopDomain),
+        bootstrapSource: 'timeout-fallback',
+        tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
+        optIn: defaultOptInSettings,
+        firebase: fallbackFirebaseConfig
+      };
+    }
+
     syncExternalIdToCart(
       boot && boot.externalId ? boot.externalId : null,
       boot && boot.clientId ? boot.clientId : getOrCreateStableClientId(config.shopDomain),
@@ -2315,11 +2755,17 @@
         referrer: document.referrer || null
       });
     }
-    var clientProfile = await buildClientProfile(root, boot, config);
+
     applyOptInSettings(root, config, boot);
+    var clientProfile = await withTimeout(
+      buildClientProfile(root, boot, config),
+      5000,
+      syncProfile
+    );
+    await refreshNotificationPermission(clientProfile);
 
     var settings = config.resolvedOptIn || getResolvedOptInSettings(boot);
-    var isOnIos = clientProfile.osName === 'ios';
+    var isOnIos = clientProfile.osName === 'ios' && isIosDeviceUserAgent(clientProfile.userAgent);
     var iosWatcherCleanup = null;
 
     function cleanupIosWatcher() {
@@ -2346,6 +2792,12 @@
       var support = getBrowserSupport(clientProfile);
       var effectiveMode = config.mode;
 
+      // Every supported browser must show our opt-in card first, then the native
+      // permission dialog only after an Allow tap (prevents silent auto-denial).
+      if (effectiveMode === 'browser') {
+        effectiveMode = 'custom';
+      }
+
       await maybeReportIosHomeScreen();
 
       // Best-effort token reconciliation: if permission is already granted,
@@ -2356,22 +2808,10 @@
         return;
       }
 
-      if (clientProfile.permissionState !== 'default' && effectiveMode === 'custom') {
+      if (!canShowOptInUi(clientProfile)) {
+        explainUnsupported(root, support.reason || 'unsupported');
         closePrompt(root);
         return;
-      }
-
-      if (effectiveMode === 'browser') {
-        if (isMarkedSubscribed(config.shopDomain)) {
-          await registerToken(config, boot, { silent: true }, clientProfile);
-          closePrompt(root);
-          return;
-        }
-
-        if (clientProfile.permissionState !== 'default') {
-          closePrompt(root);
-          return;
-        }
       }
 
       if (secondaryButton) {
@@ -2383,26 +2823,8 @@
         };
       }
 
-      if (!support.supported && effectiveMode !== 'custom') {
-        explainUnsupported(root, support.reason);
-        if (config.displayTrigger === 'manual') {
-          bindManualTrigger(root, config, function () {
-            openPrompt(root);
-          });
-          return;
-        }
-
-        var unsupportedDelayMs = getRemainingDelayMs(config.startedAt, config.delayMs);
-        if (unsupportedDelayMs > 0) {
-          await delay(unsupportedDelayMs);
-        }
-
-        openPrompt(root);
-        return;
-      }
-
       var showPrompt = function () {
-        if (effectiveMode === 'browser' && hasReachedBrowserPromptLimit(config.shopDomain)) {
+        if (!canShowOptInUi(clientProfile)) {
           closePrompt(root);
           return;
         }
@@ -2413,9 +2835,14 @@
         }
 
         incrementSessionDisplayCount(config.shopDomain);
-        if (effectiveMode === 'browser') {
-          recordPromptAttempt(config.shopDomain);
+
+        if (clientProfile.permissionState === 'denied') {
+          showPermissionDeniedHelp(root, clientProfile);
+        } else if (!support.supported) {
+          explainUnsupported(root, support.reason);
         }
+
+        prewarmPushInfrastructure(config, boot);
         openPrompt(root);
       };
 
@@ -2442,29 +2869,6 @@
         await delay(standardDelayMs);
       }
 
-      // Browser mode: fire native dialog directly — no custom popup shown at all
-      if (effectiveMode === 'browser') {
-        if (hasReachedBrowserPromptLimit(config.shopDomain)) { closePrompt(root); return; }
-        if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) { closePrompt(root); return; }
-        incrementSessionDisplayCount(config.shopDomain);
-        recordPromptAttempt(config.shopDomain);
-        var browserModeResult = await registerToken(config, boot, { silent: false }, clientProfile);
-        if (!browserModeResult.ok) {
-          if (browserModeResult.reason === 'sw-script-missing') {
-            showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
-          } else if (browserModeResult.reason === 'permission-denied') {
-            showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
-          } else if (browserModeResult.reason === 'unsupported' || browserModeResult.reason === 'https-required') {
-            explainUnsupported(root, browserModeResult.reason);
-          } else {
-            showStatus(root, 'Setup failed (' + browserModeResult.reason + '). Please retry.', 'error');
-          }
-          openPrompt(root);
-          return;
-        }
-        return;
-      }
-
       showPrompt();
 
       if (primaryButton) {
@@ -2474,17 +2878,40 @@
             return;
           }
 
+          await refreshNotificationPermission(clientProfile);
           refreshClientProfile(clientProfile);
 
           primaryButton.disabled = true;
           primaryButton.setAttribute('aria-busy', 'true');
 
-          // Custom mode should dismiss instantly after click.
+          if (clientProfile.permissionState === 'denied') {
+            showPermissionDeniedHelp(root, clientProfile);
+            openPrompt(root);
+            primaryButton.disabled = false;
+            primaryButton.removeAttribute('aria-busy');
+            return;
+          }
+
+          var permission = await requestNotificationPermissionFromUserGesture(clientProfile);
+          if (permission !== 'granted') {
+            if (permission === 'denied') {
+              showPermissionDeniedHelp(root, clientProfile);
+            } else if (permission === 'unsupported') {
+              explainUnsupported(root, 'unsupported');
+            } else {
+              showStatus(root, 'Notification permission was not granted. Please try again.', 'error');
+            }
+            openPrompt(root);
+            primaryButton.disabled = false;
+            primaryButton.removeAttribute('aria-busy');
+            return;
+          }
+
           if (effectiveMode === 'custom') {
             closePrompt(root);
           }
 
-          var result = await registerToken(config, boot, { silent: false }, clientProfile);
+          var result = await registerToken(config, boot, { silent: false, skipPermissionRequest: true }, clientProfile);
 
           if (effectiveMode === 'custom') {
             if (!result.ok) {
@@ -2494,7 +2921,7 @@
               } else if (result.reason === 'sw-not-active') {
                 showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
               } else if (result.reason === 'permission-denied') {
-                showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+                showPermissionDeniedHelp(root, clientProfile);
               } else {
                 showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
               }
@@ -2514,7 +2941,7 @@
           } else if (result.reason === 'unsupported' || result.reason === 'https-required') {
             explainUnsupported(root, result.reason);
           } else if (result.reason === 'permission-denied') {
-            showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+            showPermissionDeniedHelp(root, clientProfile);
           } else {
             showStatus(root, 'Setup failed (' + result.reason + '). Please retry.', 'error');
           }
@@ -2651,6 +3078,11 @@
     }
 
     await startStandardPromptFlow();
+    } catch (error) {
+      console.error('[PushEagle] Prompt flow failed', error);
+      openPrompt(root);
+      showStatus(root, 'Tap Allow to enable store notifications.', 'info');
+    }
   }
 
   function schedulePrompt(root) {

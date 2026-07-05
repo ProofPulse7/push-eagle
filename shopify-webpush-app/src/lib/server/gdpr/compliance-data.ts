@@ -92,15 +92,16 @@ export const exportCustomerGdprData = async (
         )
     `;
 
-  const { isD1AudienceReadActive, d1GetGdprSubscriberRows } = await import(
-    '@/lib/server/integrations/d1-audience'
-  );
+  const { isD1CommerceEnabled, d1GetOrderSubscriberIdsForCompliance, d1GetOrdersForCompliance } =
+    await import('@/lib/server/integrations/d1-commerce');
+  const commerceOnD1 = isD1CommerceEnabled();
 
-  const subscribers = isD1AudienceReadActive()
-    ? await (async () => {
-        // The subscriber<->order link stays on Neon (shopify_orders.subscriber_id);
-        // fetch matching ids there, then read the subscriber rows from D1.
-        const orderSubRows = await sql`
+  // Subscriber ids linked through orders (by customer/email), read from wherever
+  // orders live. Used to include order-linked subscribers in the export.
+  const orderLinkedSubscriberIds = commerceOnD1
+    ? await d1GetOrderSubscriberIdsForCompliance(shopDomain, { customerId, email })
+    : (
+        await sql`
           SELECT DISTINCT subscriber_id
           FROM shopify_orders
           WHERE shop_domain = ${shopDomain}
@@ -109,33 +110,37 @@ export const exportCustomerGdprData = async (
               (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
               OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
             )
-        `;
-        const extraIds = orderSubRows
-          .map((row) => Number(row.subscriber_id))
-          .filter((id) => Number.isFinite(id));
-        return d1GetGdprSubscriberRows(shopDomain, { externalId: customerId, extraIds });
-      })()
+        `
+      )
+        .map((row) => Number(row.subscriber_id))
+        .filter((id) => Number.isFinite(id));
+
+  const { isD1AudienceReadActive, d1GetGdprSubscriberRows } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+
+  const subscribers = isD1AudienceReadActive()
+    ? await d1GetGdprSubscriberRows(shopDomain, {
+        externalId: customerId,
+        extraIds: orderLinkedSubscriberIds,
+      })
     : await sql`
       SELECT id, external_id, browser, platform, locale, country, city, created_at, last_seen_at
       FROM subscribers
       WHERE shop_domain = ${shopDomain}
         AND (
           (${customerId}::text IS NOT NULL AND external_id = ${customerId})
-          OR id IN (
-            SELECT subscriber_id
-            FROM shopify_orders
-            WHERE shop_domain = ${shopDomain}
-              AND subscriber_id IS NOT NULL
-              AND (
-                (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
-                OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
-              )
-          )
+          OR id = ANY(${orderLinkedSubscriberIds})
         )
     `;
 
-  const orders =
+  const orderScope =
     ordersRequested.length > 0
+      ? { ordersRequested, customerId: null, email: null }
+      : { customerId, email };
+  const orders = commerceOnD1
+    ? await d1GetOrdersForCompliance(shopDomain, orderScope)
+    : ordersRequested.length > 0
       ? await sql`
           SELECT order_id, customer_id, email, total_price_cents, created_at
           FROM shopify_orders
@@ -186,78 +191,54 @@ export const redactCustomerGdprData = async (
   // pixel purge can target them directly (Neon no longer has the subscriber rows).
   let subscriberExternalIds: string[] | null = null;
 
+  const { isD1CommerceEnabled, d1GetOrderSubscriberIdsForCompliance, d1DeleteOrders } =
+    await import('@/lib/server/integrations/d1-commerce');
+  const commerceOnD1 = isD1CommerceEnabled();
+
+  // Subscriber ids linked through the redacted orders (order ids OR customer/email),
+  // read from wherever orders live. An empty ordersToRedact makes `order_id = ANY('{}')`
+  // false, collapsing to the customer/email match exactly like the old else-branch.
+  const orderLinkedSubscriberIds = commerceOnD1
+    ? await d1GetOrderSubscriberIdsForCompliance(shopDomain, {
+        ordersRequested: ordersToRedact,
+        customerId,
+        email,
+      })
+    : (
+        await sql`
+          SELECT DISTINCT subscriber_id
+          FROM shopify_orders
+          WHERE shop_domain = ${shopDomain}
+            AND subscriber_id IS NOT NULL
+            AND (
+              order_id = ANY(${ordersToRedact})
+              OR (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
+              OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
+            )
+        `
+      )
+        .map((row) => Number(row.subscriber_id))
+        .filter((id) => Number.isFinite(id));
+
   if (readActive) {
-    const orderSubRows =
-      ordersToRedact.length > 0
-        ? await sql`
-            SELECT DISTINCT subscriber_id
-            FROM shopify_orders
-            WHERE shop_domain = ${shopDomain}
-              AND subscriber_id IS NOT NULL
-              AND (
-                order_id = ANY(${ordersToRedact})
-                OR (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
-                OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
-              )
-          `
-        : await sql`
-            SELECT DISTINCT subscriber_id
-            FROM shopify_orders
-            WHERE shop_domain = ${shopDomain}
-              AND subscriber_id IS NOT NULL
-              AND (
-                (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
-                OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
-              )
-          `;
-    const extraIds = orderSubRows
-      .map((row) => Number(row.subscriber_id))
-      .filter((id) => Number.isFinite(id));
-    const d1Rows = await d1GetGdprSubscriberRows(shopDomain, { externalId: customerId, extraIds });
+    const d1Rows = await d1GetGdprSubscriberRows(shopDomain, {
+      externalId: customerId,
+      extraIds: orderLinkedSubscriberIds,
+    });
     subscriberIds = d1Rows.map((row) => Number(row.id)).filter(Number.isFinite);
     subscriberExternalIds = Array.from(
       new Set(d1Rows.map((row) => row.external_id).filter((value): value is string => Boolean(value))),
     );
   } else {
-    const subscriberRows =
-      ordersToRedact.length > 0
-        ? await sql`
-            SELECT id
-            FROM subscribers
-            WHERE shop_domain = ${shopDomain}
-              AND (
-                (${customerId}::text IS NOT NULL AND external_id = ${customerId})
-                OR id IN (
-                  SELECT subscriber_id
-                  FROM shopify_orders
-                  WHERE shop_domain = ${shopDomain}
-                    AND subscriber_id IS NOT NULL
-                    AND (
-                      order_id = ANY(${ordersToRedact})
-                      OR (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
-                      OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
-                    )
-                )
-              )
-          `
-        : await sql`
-            SELECT id
-            FROM subscribers
-            WHERE shop_domain = ${shopDomain}
-              AND (
-                (${customerId}::text IS NOT NULL AND external_id = ${customerId})
-                OR id IN (
-                  SELECT subscriber_id
-                  FROM shopify_orders
-                  WHERE shop_domain = ${shopDomain}
-                    AND subscriber_id IS NOT NULL
-                    AND (
-                      (${customerId}::text IS NOT NULL AND customer_id = ${customerId})
-                      OR (${email}::text IS NOT NULL AND LOWER(COALESCE(email, '')) = ${email})
-                    )
-                )
-              )
-          `;
+    const subscriberRows = await sql`
+      SELECT id
+      FROM subscribers
+      WHERE shop_domain = ${shopDomain}
+        AND (
+          (${customerId}::text IS NOT NULL AND external_id = ${customerId})
+          OR id = ANY(${orderLinkedSubscriberIds})
+        )
+    `;
     subscriberIds = subscriberRows.map((row) => Number(row.id)).filter(Number.isFinite);
   }
 
@@ -304,7 +285,16 @@ export const redactCustomerGdprData = async (
     }
   }
 
-  if (ordersToRedact.length > 0) {
+  if (commerceOnD1) {
+    // Same exclusive semantics as Neon: redact by order ids when provided, else by
+    // customer/email. d1DeleteOrders removes the child items first (no FK cascade).
+    await d1DeleteOrders(
+      shopDomain,
+      ordersToRedact.length > 0
+        ? { ordersRequested: ordersToRedact, customerId: null, email: null }
+        : { customerId, email },
+    );
+  } else if (ordersToRedact.length > 0) {
     await sql`
       DELETE FROM shopify_order_items
       WHERE shop_domain = ${shopDomain}
@@ -387,6 +377,13 @@ export const purgeShopGdprData = async (shopDomainInput: string) => {
   );
   if (isD1AudienceWriteEnabled()) {
     await d1DeleteAllAudienceForShop(shopDomain);
+  }
+  // And the D1 commerce cache (orders / order_items / fulfillments).
+  const { isD1CommerceEnabled, d1DeleteAllCommerceForShop } = await import(
+    '@/lib/server/integrations/d1-commerce'
+  );
+  if (isD1CommerceEnabled()) {
+    await d1DeleteAllCommerceForShop(shopDomain);
   }
   await sql`DELETE FROM merchants WHERE shop_domain = ${shopDomain}`;
 

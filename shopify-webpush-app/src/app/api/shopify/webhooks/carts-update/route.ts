@@ -4,6 +4,8 @@ import { getNeonSql } from '@/lib/integrations/database/neon';
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
 import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { recordSubscriberActivity, registerWebhookEvent } from '@/lib/server/data/store';
+import { shouldCollectEventType } from '@/lib/server/automation/collection-gate';
+import { isD1EventsEnabled } from '@/lib/server/integrations/d1-events';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -61,6 +63,18 @@ const getCartAttribute = (payload: ShopifyCartPayload, key: string) => {
 const resolveIdentityFromCartSignals = async (shopDomain: string, token?: string | null) => {
   const normalizedToken = token ? String(token).trim() : '';
   if (!normalizedToken) {
+    return {
+      externalId: null as string | null,
+      clientId: null as string | null,
+    };
+  }
+
+  // When raw events live on Cloudflare D1, the Neon pixel/activity tables this
+  // stitch query scans are empty, so it would burn Neon compute for a guaranteed
+  // empty result. Consented carts carry the identity on the cart attribute
+  // (_push_eagle_external_id, set client-side), and anonymous carts intentionally
+  // resolve to nothing so they are not collected.
+  if (isD1EventsEnabled()) {
     return {
       externalId: null as string | null,
       clientId: null as string | null,
@@ -221,6 +235,13 @@ export async function POST(request: Request) {
     const payload = JSON.parse(rawBody) as ShopifyCartPayload;
     const shopDomain = parseShopDomain(request.headers.get('x-shopify-shop-domain'));
     const eventId = request.headers.get('x-shopify-event-id');
+
+    // Collection gate FIRST: carts/update fires on every cart change for every
+    // visitor and is ~94% of all webhook volume. If Abandoned Cart Recovery is
+    // off for this shop, do zero work (no dedup, no Neon, no D1) and just ack.
+    if (!(await shouldCollectEventType(shopDomain, 'add_to_cart'))) {
+      return NextResponse.json({ ok: true, shopDomain, skipped: 'cart_automation_inactive' });
+    }
 
     if (eventId) {
       const accepted = await registerWebhookEvent({

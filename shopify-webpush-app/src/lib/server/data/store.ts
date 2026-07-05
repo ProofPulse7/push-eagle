@@ -457,7 +457,7 @@ const parseScopes = (value?: string | null) =>
     .map((scope) => scope.trim())
     .filter(Boolean);
 
-const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v3';
+const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v4';
 const SCHEMA_READY_TTL_SECONDS = 6 * 60 * 60;
 
 const ensureSchema = async () => {
@@ -479,6 +479,8 @@ const ensureSchema = async () => {
       }
 
       const sql = getNeonSql();
+      const { getNeonLegacySchemaSkip } = await import('@/lib/server/integrations/neon-legacy-tables');
+      const legacySkip = getNeonLegacySchemaSkip();
 
       await sql`CREATE TABLE IF NOT EXISTS merchants (
         shop_domain TEXT PRIMARY KEY,
@@ -556,6 +558,7 @@ const ensureSchema = async () => {
         $$
       `;
 
+      if (!legacySkip.customers) {
       await sql`CREATE TABLE IF NOT EXISTS shopify_customers (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -571,6 +574,7 @@ const ensureSchema = async () => {
       )`;
       await sql`ALTER TABLE shopify_customers ADD COLUMN IF NOT EXISTS external_id TEXT`;
       await sql`ALTER TABLE shopify_customers ADD COLUMN IF NOT EXISTS tags TEXT`;
+      }
 
       await sql`CREATE TABLE IF NOT EXISTS subscribers (
         id BIGSERIAL PRIMARY KEY,
@@ -687,6 +691,7 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS vapid_p256dh TEXT`;
       await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS vapid_auth TEXT`;
 
+      if (!legacySkip.deliveries) {
       await sql`CREATE TABLE IF NOT EXISTS campaign_deliveries (
         id BIGSERIAL PRIMARY KEY,
         campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -758,6 +763,7 @@ const ensureSchema = async () => {
         converted_at TIMESTAMPTZ,
         revenue_cents INTEGER NOT NULL DEFAULT 0
       )`;
+      }
 
       // Durable, permanent per-rule automation stats. The row-level
       // automation_deliveries / automation_clicks tables are pruned at scale to
@@ -779,6 +785,7 @@ const ensureSchema = async () => {
         PRIMARY KEY (shop_domain, rule_key)
       )`;
 
+      if (!legacySkip.commerce) {
       await sql`CREATE TABLE IF NOT EXISTS shopify_orders (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -802,6 +809,7 @@ const ensureSchema = async () => {
         collection_hint TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      }
 
       await sql`CREATE TABLE IF NOT EXISTS segments (
         id TEXT PRIMARY KEY,
@@ -813,6 +821,7 @@ const ensureSchema = async () => {
         UNIQUE (shop_domain, name)
       )`;
 
+      if (!legacySkip.webhooks) {
       await sql`CREATE TABLE IF NOT EXISTS webhook_events (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -821,6 +830,7 @@ const ensureSchema = async () => {
         received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (shop_domain, topic, event_id)
       )`;
+      }
 
       await sql`CREATE TABLE IF NOT EXISTS automation_rules (
         id TEXT PRIMARY KEY,
@@ -850,6 +860,7 @@ const ensureSchema = async () => {
         sent_at TIMESTAMPTZ
       )`;
 
+      if (!legacySkip.events) {
       await sql`CREATE TABLE IF NOT EXISTS subscriber_activity_events (
         id TEXT PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -874,6 +885,7 @@ const ensureSchema = async () => {
         metadata JSONB,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      }
 
       await sql`CREATE TABLE IF NOT EXISTS ingestion_jobs (
         id TEXT PRIMARY KEY,
@@ -967,6 +979,7 @@ const ensureSchema = async () => {
         UNIQUE (shop_domain, external_id)
       )`;
 
+      if (!legacySkip.catalog) {
       await sql`CREATE TABLE IF NOT EXISTS shopify_product_variants (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -984,7 +997,9 @@ const ensureSchema = async () => {
         last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (shop_domain, variant_id)
       )`;
+      }
 
+      if (!legacySkip.commerce) {
       await sql`CREATE TABLE IF NOT EXISTS shopify_fulfillments (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -999,6 +1014,7 @@ const ensureSchema = async () => {
         last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (shop_domain, fulfillment_id)
       )`;
+      }
 
       // Backfill constraints for legacy databases that were created before unique keys existed.
       await sql`
@@ -1015,7 +1031,9 @@ const ensureSchema = async () => {
       `;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_subscribers_shop_external_id ON subscribers(shop_domain, external_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_subscribers_shop_created ON subscribers(shop_domain, created_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_webhook_events_shop_received ON webhook_events(shop_domain, received_at DESC)`;
+      if (!legacySkip.webhooks) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_webhook_events_shop_received ON webhook_events(shop_domain, received_at DESC)`;
+      }
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_subscriber ON subscriber_tokens(shop_domain, subscriber_id)`;
 
       await sql`
@@ -1032,6 +1050,7 @@ const ensureSchema = async () => {
       `;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_subscriber_tokens_shop_fcm_token ON subscriber_tokens(shop_domain, fcm_token)`;
 
+      if (!legacySkip.commerce) {
       await sql`
         WITH ranked AS (
           SELECT ctid, ROW_NUMBER() OVER (
@@ -1045,40 +1064,49 @@ const ensureSchema = async () => {
         WHERE f.ctid = r.ctid AND r.rn > 1
       `;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_shopify_fulfillments_shop_fulfillment ON shopify_fulfillments(shop_domain, fulfillment_id)`;
+      }
 
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_status ON subscriber_tokens(shop_domain, status)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_created ON campaigns(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_scheduled ON campaigns(shop_domain, status, scheduled_at)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_created ON pixel_events(shop_domain, created_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_external ON pixel_events(shop_domain, external_id, created_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_cart ON pixel_events(shop_domain, cart_token, created_at DESC) WHERE cart_token IS NOT NULL`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_client ON pixel_events(shop_domain, client_id, created_at DESC) WHERE client_id IS NOT NULL`;
+      if (!legacySkip.events) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_created ON pixel_events(shop_domain, created_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_external ON pixel_events(shop_domain, external_id, created_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_cart ON pixel_events(shop_domain, cart_token, created_at DESC) WHERE cart_token IS NOT NULL`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_pixel_events_shop_client ON pixel_events(shop_domain, client_id, created_at DESC) WHERE client_id IS NOT NULL`;
+      }
       await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_due ON ingestion_jobs(status, due_at)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_shop_type ON ingestion_jobs(shop_domain, job_type, status, due_at)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_ingestion_jobs_dedupe ON ingestion_jobs(shop_domain, job_type, dedupe_key) WHERE dedupe_key IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_cron_heartbeats_job_started ON cron_heartbeats(job_name, started_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaign_schedules_send_at ON campaign_schedules(send_at) WHERE send_at IS NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS idx_smart_delivery_metrics_shop ON smart_delivery_metrics(shop_domain)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_delivered_at ON campaign_deliveries(shop_domain, delivered_at)`;
-      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_token ON campaign_deliveries(campaign_id, token_id)`;
-      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_subscriber ON campaign_deliveries(campaign_id, subscriber_id)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_external_time ON campaign_deliveries(shop_domain, external_id, delivered_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_user_agent_time ON campaign_deliveries(shop_domain, user_agent, delivered_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_external_time ON campaign_clicks(shop_domain, external_id, clicked_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_rule_time ON automation_deliveries(shop_domain, rule_key, delivered_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_external_time ON automation_deliveries(shop_domain, external_id, delivered_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_user_agent_time ON automation_deliveries(shop_domain, user_agent, delivered_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_automation_clicks_shop_rule_time ON automation_clicks(shop_domain, rule_key, clicked_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_automation_clicks_shop_external_time ON automation_clicks(shop_domain, external_id, clicked_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_customers_shop_email ON shopify_customers(shop_domain, email)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_customers_shop_external ON shopify_customers(shop_domain, external_id)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_orders_shop_subscriber ON shopify_orders(shop_domain, subscriber_id, created_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_orders_shop_external ON shopify_orders(shop_domain, external_id, created_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_order ON shopify_order_items(shop_domain, order_id)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_product ON shopify_order_items(shop_domain, product_title)`;
+      if (!legacySkip.deliveries) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign ON campaign_deliveries(campaign_id)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_delivered_at ON campaign_deliveries(shop_domain, delivered_at)`;
+        await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_token ON campaign_deliveries(campaign_id, token_id)`;
+        await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_deliveries_campaign_subscriber ON campaign_deliveries(campaign_id, subscriber_id)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_campaign_time ON campaign_clicks(campaign_id, clicked_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_subscriber ON campaign_clicks(shop_domain, subscriber_id, clicked_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_external_time ON campaign_deliveries(shop_domain, external_id, delivered_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_campaign_deliveries_shop_user_agent_time ON campaign_deliveries(shop_domain, user_agent, delivered_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_campaign_clicks_shop_external_time ON campaign_clicks(shop_domain, external_id, clicked_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_rule_time ON automation_deliveries(shop_domain, rule_key, delivered_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_external_time ON automation_deliveries(shop_domain, external_id, delivered_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_automation_deliveries_shop_user_agent_time ON automation_deliveries(shop_domain, user_agent, delivered_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_automation_clicks_shop_rule_time ON automation_clicks(shop_domain, rule_key, clicked_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_automation_clicks_shop_external_time ON automation_clicks(shop_domain, external_id, clicked_at DESC)`;
+      }
+      if (!legacySkip.customers) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_customers_shop_email ON shopify_customers(shop_domain, email)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_customers_shop_external ON shopify_customers(shop_domain, external_id)`;
+      }
+      if (!legacySkip.commerce) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_orders_shop_subscriber ON shopify_orders(shop_domain, subscriber_id, created_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_orders_shop_external ON shopify_orders(shop_domain, external_id, created_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_order ON shopify_order_items(shop_domain, order_id)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_order_items_shop_product ON shopify_order_items(shop_domain, product_title)`;
+      }
       await sql`CREATE INDEX IF NOT EXISTS idx_segments_shop_created ON segments(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_merchant_daily_stats_shop_date ON merchant_daily_stats(shop_domain, stat_date DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_processed_at ON ingestion_jobs(processed_at) WHERE status = 'processed'`;
@@ -1088,13 +1116,19 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_queue_promote ON automation_jobs(status, queue_enqueued_at, due_at) WHERE status = 'pending'`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_payload_external ON automation_jobs(shop_domain, ((payload ->> 'externalId'))) WHERE (payload ->> 'externalId') IS NOT NULL`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_jobs_dedupe ON automation_jobs(shop_domain, dedupe_key) WHERE dedupe_key IS NOT NULL`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_external_created ON subscriber_activity_events(shop_domain, external_id, created_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_product_created ON subscriber_activity_events(shop_domain, product_id, created_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_cart_created ON subscriber_activity_events(shop_domain, cart_token, created_at DESC)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_variant ON shopify_product_variants(shop_domain, variant_id)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_inventory ON shopify_product_variants(shop_domain, inventory_item_id)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_product ON shopify_product_variants(shop_domain, product_id)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_shopify_fulfillments_shop_order ON shopify_fulfillments(shop_domain, order_id, updated_at DESC)`;
+      if (!legacySkip.events) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_external_created ON subscriber_activity_events(shop_domain, external_id, created_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_product_created ON subscriber_activity_events(shop_domain, product_id, created_at DESC)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_cart_created ON subscriber_activity_events(shop_domain, cart_token, created_at DESC)`;
+      }
+      if (!legacySkip.catalog) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_variant ON shopify_product_variants(shop_domain, variant_id)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_inventory ON shopify_product_variants(shop_domain, inventory_item_id)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_product_variants_shop_product ON shopify_product_variants(shop_domain, product_id)`;
+      }
+      if (!legacySkip.commerce) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_shopify_fulfillments_shop_order ON shopify_fulfillments(shop_domain, order_id, updated_at DESC)`;
+      }
 
       try {
         const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
@@ -2446,6 +2480,14 @@ export const upsertAutomationRule = async (
     await cleanupUnusedMediaAssets(shopDomain, removedMediaRefs);
   }
 
+  // Raw-event collection is gated on whether the consuming automation is on, and
+  // that decision is cached (in-process + KV). Drop the cache immediately so the
+  // webhook/storefront gates react to this toggle without waiting for TTL expiry.
+  if (currentEnabled !== nextEnabled) {
+    const { invalidateCollectionFlags } = await import('@/lib/server/automation/collection-gate');
+    void invalidateCollectionFlags(shopDomain);
+  }
+
   if (!nextEnabled) {
     await sql`
       UPDATE automation_jobs
@@ -2472,27 +2514,11 @@ export const upsertAutomationRule = async (
 export const getAutomationOverview = async (shopDomain: string) => {
   await ensureAutomationRules(shopDomain);
   const sql = getNeonSql();
+  const { getAutomationStatsByRule } = await import('@/lib/server/integrations/deliveries-data');
 
-  const [rules, deliveryStats, clickStats, archivedStats] = await Promise.all([
+  const [rules, { deliveries: deliveryStats, clicks: clickStats }, archivedStats] = await Promise.all([
     listAutomationRules(shopDomain),
-    sql`
-      SELECT
-        rule_key,
-        COUNT(*)::BIGINT AS impressions,
-        COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-      FROM automation_deliveries
-      WHERE shop_domain = ${shopDomain}
-      GROUP BY rule_key
-    `,
-    sql`
-      SELECT
-        rule_key,
-        COUNT(*)::BIGINT AS clicks,
-        COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-      FROM automation_clicks
-      WHERE shop_domain = ${shopDomain}
-      GROUP BY rule_key
-    `,
+    getAutomationStatsByRule(shopDomain),
     // Lifetime totals of already-pruned rows (see automation_rule_stats). Adding
     // these to the live detail sums keeps all-time per-rule stats permanent even
     // after the raw rows are pruned. Zero before any pruning has happened, so this
@@ -2557,51 +2583,11 @@ export const getAutomationStats = async (
   await ensureAutomationRules(shopDomain);
   const sql = getNeonSql();
   const hasRange = Boolean(from && to);
+  const { getAutomationStatsByRule } = await import('@/lib/server/integrations/deliveries-data');
 
-  const [rules, deliveryStats, clickStats, archivedStats] = await Promise.all([
+  const [rules, { deliveries: deliveryStats, clicks: clickStats }, archivedStats] = await Promise.all([
     listAutomationRules(shopDomain),
-    hasRange
-      ? sql`
-          SELECT
-            rule_key,
-            COUNT(*)::BIGINT AS impressions,
-            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-          FROM automation_deliveries
-          WHERE shop_domain = ${shopDomain}
-            AND delivered_at >= ${from}
-            AND delivered_at <= ${to}
-          GROUP BY rule_key
-        `
-      : sql`
-          SELECT
-            rule_key,
-            COUNT(*)::BIGINT AS impressions,
-            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-          FROM automation_deliveries
-          WHERE shop_domain = ${shopDomain}
-          GROUP BY rule_key
-        `,
-    hasRange
-      ? sql`
-          SELECT
-            rule_key,
-            COUNT(*)::BIGINT AS clicks,
-            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-          FROM automation_clicks
-          WHERE shop_domain = ${shopDomain}
-            AND clicked_at >= ${from}
-            AND clicked_at <= ${to}
-          GROUP BY rule_key
-        `
-      : sql`
-          SELECT
-            rule_key,
-            COUNT(*)::BIGINT AS clicks,
-            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-          FROM automation_clicks
-          WHERE shop_domain = ${shopDomain}
-          GROUP BY rule_key
-        `,
+    getAutomationStatsByRule(shopDomain, from, to),
     // Only all-time (no date range) folds in the archived baseline of pruned rows.
     // A bounded date range is served purely from the retained detail (retention
     // must stay >= the largest selectable range, currently 90d <= 120d), so adding
@@ -3362,6 +3348,18 @@ const hasRecentOrder = async (input: {
     return false;
   }
 
+  const { isD1CommerceEnabled, d1HasRecentOrder } = await import(
+    '@/lib/server/integrations/d1-commerce'
+  );
+  if (isD1CommerceEnabled()) {
+    return d1HasRecentOrder({
+      shopDomain: input.shopDomain,
+      externalId,
+      customerId,
+      since: input.since,
+    });
+  }
+
   const sql = getNeonSql();
   const since = new Date(input.since);
 
@@ -3495,29 +3493,26 @@ const enqueueProductInterestAutomation = async (input: {
 export const pruneAutomationData = async () => {
   await ensureSchema();
   const sql = getNeonSql();
+  const { neonTableExists } = await import('@/lib/server/integrations/neon-legacy-tables');
 
   const now = Date.now();
-  // webhook_events is ONLY an idempotency/dedup log (INSERT ... ON CONFLICT DO
-  // NOTHING) plus a short diagnostics list. Shopify only retries a webhook for
-  // ~48h, so a 5-day window fully covers dedup with buffer while keeping what is
-  // otherwise the single largest Neon table (it was ~34% of the DB at 30 days)
-  // tiny. Env-tunable if a longer diagnostics history is ever wanted.
   const webhookCutoff = new Date(now - readRetentionDays('PE_RETENTION_WEBHOOK_EVENT_DAYS', 5) * DAY_MS);
   const activityCutoff = new Date(now - readRetentionDays('PE_RETENTION_ACTIVITY_DAYS', 45) * DAY_MS);
-  // automation_jobs is the high-volume automation queue. We only ever prune jobs
-  // in a terminal state (never pending/processing work), keeping Neon bounded the
-  // same way the delivery/click tables are. Window is env-tunable.
   const jobCutoff = new Date(now - readRetentionDays('PE_RETENTION_AUTOMATION_JOB_DAYS', 60) * DAY_MS);
 
-  await sql`
-    DELETE FROM webhook_events
-    WHERE received_at < ${webhookCutoff}
-  `;
+  if (await neonTableExists('webhook_events')) {
+    await sql`
+      DELETE FROM webhook_events
+      WHERE received_at < ${webhookCutoff}
+    `;
+  }
 
-  await sql`
-    DELETE FROM subscriber_activity_events
-    WHERE created_at < ${activityCutoff}
-  `;
+  if (await neonTableExists('subscriber_activity_events')) {
+    await sql`
+      DELETE FROM subscriber_activity_events
+      WHERE created_at < ${activityCutoff}
+    `;
+  }
 
   await sql`
     DELETE FROM automation_jobs
@@ -3529,13 +3524,18 @@ export const pruneAutomationData = async () => {
 export const rollupMerchantDailyStats = async () => {
   await ensureSchema();
   const sql = getNeonSql();
+  const { neonTableExists } = await import('@/lib/server/integrations/neon-legacy-tables');
+  const automationTablesOnNeon =
+    (await neonTableExists('automation_deliveries')) &&
+    (await neonTableExists('automation_clicks'));
 
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const statDate = yesterday.toISOString().slice(0, 10);
   const dayStart = new Date(`${statDate}T00:00:00.000Z`);
   const dayEnd = new Date(`${statDate}T23:59:59.999Z`);
 
-  const rows = await sql`
+  const rows = automationTablesOnNeon
+    ? await sql`
     INSERT INTO merchant_daily_stats (
       shop_domain,
       stat_date,
@@ -3608,6 +3608,60 @@ export const rollupMerchantDailyStats = async () => {
       new_subscribers = EXCLUDED.new_subscribers,
       updated_at = NOW()
     RETURNING shop_domain
+  `
+    : await sql`
+    INSERT INTO merchant_daily_stats (
+      shop_domain,
+      stat_date,
+      campaign_impressions,
+      campaign_clicks,
+      campaign_revenue_cents,
+      automation_impressions,
+      automation_clicks,
+      automation_revenue_cents,
+      new_subscribers,
+      updated_at
+    )
+    SELECT
+      m.shop_domain,
+      ${statDate}::date,
+      COALESCE(campaign_stats.impressions, 0)::BIGINT,
+      COALESCE(campaign_stats.clicks, 0)::BIGINT,
+      COALESCE(campaign_stats.revenue_cents, 0)::BIGINT,
+      0::BIGINT,
+      0::BIGINT,
+      0::BIGINT,
+      COALESCE(subscriber_stats.new_subscribers, 0)::BIGINT,
+      NOW()
+    FROM merchants m
+    LEFT JOIN LATERAL (
+      SELECT
+        COALESCE(SUM(delivery_count), 0) AS impressions,
+        COALESCE(SUM(click_count), 0) AS clicks,
+        COALESCE(SUM(revenue_cents), 0) AS revenue_cents
+      FROM campaigns
+      WHERE shop_domain = m.shop_domain
+        AND created_at >= ${dayStart}
+        AND created_at <= ${dayEnd}
+    ) campaign_stats ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*) AS new_subscribers
+      FROM subscribers
+      WHERE shop_domain = m.shop_domain
+        AND created_at >= ${dayStart}
+        AND created_at <= ${dayEnd}
+    ) subscriber_stats ON TRUE
+    WHERE m.uninstalled_at IS NULL
+    ON CONFLICT (shop_domain, stat_date) DO UPDATE SET
+      campaign_impressions = EXCLUDED.campaign_impressions,
+      campaign_clicks = EXCLUDED.campaign_clicks,
+      campaign_revenue_cents = EXCLUDED.campaign_revenue_cents,
+      automation_impressions = EXCLUDED.automation_impressions,
+      automation_clicks = EXCLUDED.automation_clicks,
+      automation_revenue_cents = EXCLUDED.automation_revenue_cents,
+      new_subscribers = EXCLUDED.new_subscribers,
+      updated_at = NOW()
+    RETURNING shop_domain
   `;
 
   // In d1_only the subscribers LATERAL above sees an empty Neon table, so patch the
@@ -3628,6 +3682,30 @@ export const rollupMerchantDailyStats = async () => {
         UPDATE merchant_daily_stats
         SET new_subscribers = ${count}, updated_at = NOW()
         WHERE shop_domain = ${shop_domain} AND stat_date = ${statDate}::date
+      `;
+    }
+  }
+
+  const { isD1DeliveriesEnabled, d1GetAutomationDailyStatsPerShop } = await import(
+    '@/lib/server/integrations/d1-deliveries'
+  );
+  if (isD1DeliveriesEnabled()) {
+    const autoStats = await d1GetAutomationDailyStatsPerShop(
+      dayStart.toISOString(),
+      dayEnd.toISOString(),
+    );
+    for (const row of autoStats) {
+      if (!row.shop_domain) {
+        continue;
+      }
+      await sql`
+        UPDATE merchant_daily_stats
+        SET
+          automation_impressions = ${row.impressions},
+          automation_clicks = ${row.clicks},
+          automation_revenue_cents = ${row.revenue_cents},
+          updated_at = NOW()
+        WHERE shop_domain = ${row.shop_domain} AND stat_date = ${statDate}::date
       `;
     }
   }
@@ -3685,52 +3763,98 @@ export const pruneHighVolumeTimeSeries = async () => {
   // impressions/clicks/revenue live durably on the campaigns row
   // (delivery_count / click_count / revenue_cents), which is maintained during
   // send/click/attribution and never derived from these rows.
-  await sql`DELETE FROM campaign_deliveries WHERE delivered_at < ${deliveryCutoff}`;
-  await sql`DELETE FROM campaign_clicks WHERE clicked_at < ${deliveryCutoff}`;
+  const {
+    pruneCampaignDetail,
+    pruneAutomationDeliveriesWithAggregates,
+    pruneAutomationClicksWithAggregates,
+    isD1DeliveriesEnabled,
+  } = await import('@/lib/server/integrations/deliveries-data');
 
-  // Automations have NO other durable stat source, so before deleting the rows we
-  // fold their aggregate into automation_rule_stats in the SAME statement. The
-  // DELETE ... RETURNING feeds the INSERT server-side (nothing is streamed back to
-  // the app), so this stays cheap on network while guaranteeing lifetime per-rule
-  // totals never drop and can never double-count (folded rows are gone).
-  await sql`
-    WITH deleted AS (
-      DELETE FROM automation_deliveries
-      WHERE delivered_at < ${deliveryCutoff}
-      RETURNING shop_domain, rule_key, revenue_cents
-    )
-    INSERT INTO automation_rule_stats (
-      shop_domain, rule_key, archived_impressions, archived_clicks, archived_revenue_cents, updated_at
-    )
-    SELECT shop_domain, rule_key, COUNT(*)::BIGINT, 0::BIGINT, COALESCE(SUM(revenue_cents), 0)::BIGINT, NOW()
-    FROM deleted
-    GROUP BY shop_domain, rule_key
-    ON CONFLICT (shop_domain, rule_key) DO UPDATE SET
-      archived_impressions = automation_rule_stats.archived_impressions + EXCLUDED.archived_impressions,
-      archived_revenue_cents = automation_rule_stats.archived_revenue_cents + EXCLUDED.archived_revenue_cents,
-      updated_at = NOW()
-  `;
-  await sql`
-    WITH deleted AS (
-      DELETE FROM automation_clicks
-      WHERE clicked_at < ${deliveryCutoff}
-      RETURNING shop_domain, rule_key, revenue_cents
-    )
-    INSERT INTO automation_rule_stats (
-      shop_domain, rule_key, archived_impressions, archived_clicks, archived_revenue_cents, updated_at
-    )
-    SELECT shop_domain, rule_key, 0::BIGINT, COUNT(*)::BIGINT, COALESCE(SUM(revenue_cents), 0)::BIGINT, NOW()
-    FROM deleted
-    GROUP BY shop_domain, rule_key
-    ON CONFLICT (shop_domain, rule_key) DO UPDATE SET
-      archived_clicks = automation_rule_stats.archived_clicks + EXCLUDED.archived_clicks,
-      archived_revenue_cents = automation_rule_stats.archived_revenue_cents + EXCLUDED.archived_revenue_cents,
-      updated_at = NOW()
-  `;
-  // order_items cascade via shopify_order_items.order_event_id ON DELETE CASCADE.
-  await sql`DELETE FROM shopify_orders WHERE created_at < ${orderCutoff}`;
-  await sql`DELETE FROM shopify_order_items WHERE created_at < ${orderCutoff}`;
-  await sql`DELETE FROM shopify_fulfillments WHERE last_seen_at < ${fulfillmentCutoff}`;
+  await pruneCampaignDetail(deliveryCutoff.toISOString());
+
+  const deliveryAggregates = await pruneAutomationDeliveriesWithAggregates(
+    deliveryCutoff.toISOString(),
+  );
+  for (const agg of deliveryAggregates) {
+    if (agg.impressions <= 0 && agg.revenue_cents <= 0) {
+      continue;
+    }
+    await sql`
+      INSERT INTO automation_rule_stats (
+        shop_domain, rule_key, archived_impressions, archived_clicks, archived_revenue_cents, updated_at
+      )
+      VALUES (${agg.shop_domain}, ${agg.rule_key}, ${agg.impressions}, 0, ${agg.revenue_cents}, NOW())
+      ON CONFLICT (shop_domain, rule_key) DO UPDATE SET
+        archived_impressions = automation_rule_stats.archived_impressions + EXCLUDED.archived_impressions,
+        archived_revenue_cents = automation_rule_stats.archived_revenue_cents + EXCLUDED.archived_revenue_cents,
+        updated_at = NOW()
+    `;
+  }
+
+  const clickAggregates = await pruneAutomationClicksWithAggregates(deliveryCutoff.toISOString());
+  for (const agg of clickAggregates) {
+    if (agg.clicks <= 0 && agg.revenue_cents <= 0) {
+      continue;
+    }
+    await sql`
+      INSERT INTO automation_rule_stats (
+        shop_domain, rule_key, archived_impressions, archived_clicks, archived_revenue_cents, updated_at
+      )
+      VALUES (${agg.shop_domain}, ${agg.rule_key}, 0, ${agg.clicks}, ${agg.revenue_cents}, NOW())
+      ON CONFLICT (shop_domain, rule_key) DO UPDATE SET
+        archived_clicks = automation_rule_stats.archived_clicks + EXCLUDED.archived_clicks,
+        archived_revenue_cents = automation_rule_stats.archived_revenue_cents + EXCLUDED.archived_revenue_cents,
+        updated_at = NOW()
+    `;
+  }
+
+  if (!isD1DeliveriesEnabled()) {
+    // Neon path already pruned inside the helpers above when D1 is off.
+  } else {
+    const { neonTableExists } = await import('@/lib/server/integrations/neon-legacy-tables');
+    if (await neonTableExists('campaign_deliveries')) {
+      await sql`DELETE FROM campaign_deliveries WHERE delivered_at < ${deliveryCutoff}`;
+    }
+    if (await neonTableExists('campaign_clicks')) {
+      await sql`DELETE FROM campaign_clicks WHERE clicked_at < ${deliveryCutoff}`;
+    }
+    if (await neonTableExists('automation_deliveries')) {
+      await sql`DELETE FROM automation_deliveries WHERE delivered_at < ${deliveryCutoff}`;
+    }
+    if (await neonTableExists('automation_clicks')) {
+      await sql`DELETE FROM automation_clicks WHERE clicked_at < ${deliveryCutoff}`;
+    }
+  }
+  const { neonTableExists } = await import('@/lib/server/integrations/neon-legacy-tables');
+  if (await neonTableExists('shopify_orders')) {
+    await sql`DELETE FROM shopify_orders WHERE created_at < ${orderCutoff}`;
+  }
+  if (await neonTableExists('shopify_order_items')) {
+    await sql`DELETE FROM shopify_order_items WHERE created_at < ${orderCutoff}`;
+  }
+  if (await neonTableExists('shopify_fulfillments')) {
+    await sql`DELETE FROM shopify_fulfillments WHERE last_seen_at < ${fulfillmentCutoff}`;
+  }
+
+  // When commerce is on D1, prune it there with the same cutoffs. The Neon deletes
+  // above stay as a cheap no-op safety net that also reclaims any pre-migration rows
+  // still sitting on Neon after a cutover.
+  try {
+    const { isD1CommerceEnabled, d1PruneCommerce } = await import(
+      '@/lib/server/integrations/d1-commerce'
+    );
+    if (isD1CommerceEnabled()) {
+      await d1PruneCommerce({
+        orderCutoffIso: orderCutoff.toISOString(),
+        fulfillmentCutoffIso: fulfillmentCutoff.toISOString(),
+      });
+    }
+  } catch (error) {
+    console.error(
+      '[retention] d1 commerce prune failed',
+      error instanceof Error ? error.message : error,
+    );
+  }
 
   return {
     deliveryRetentionDays: deliveryDays,
@@ -3774,6 +3898,23 @@ export const runRetentionMaintenance = async () => {
   await ensureSchema();
   const sql = getNeonSql();
 
+  // Self-healing safety net for orphaned jobs. listDueAutomationJobs already
+  // reclaims stale 'processing' rows (>2 min) — but only when it runs, which the
+  // idle-sleeping cron skips entirely when the queue is otherwise empty. A job
+  // that crashed mid-send during a quiet period would therefore stay stuck in
+  // 'processing' forever (never counted as pending, never reclaimed). This
+  // periodic sweep (>15 min, well beyond the 300s max cron duration) guarantees
+  // any orphan is returned to 'pending' so the next tick delivers it. It runs on
+  // the maintenance cadence only, so it can never keep the tick awake or affect
+  // the Neon-sleep guarantee.
+  const reclaimedStuckJobs = await sql`
+    UPDATE automation_jobs
+    SET status = 'pending', updated_at = NOW()
+    WHERE status = 'processing'
+      AND updated_at < NOW() - INTERVAL '15 minutes'
+    RETURNING id
+  `;
+
   await pruneAutomationData();
 
   // Roll up first so a completed day is captured before its raw rows can ever be
@@ -3806,6 +3947,7 @@ export const runRetentionMaintenance = async () => {
   return {
     ingestionJobsDeleted: ingestionDeleted.length,
     heartbeatsDeleted: heartbeatsDeleted.length,
+    reclaimedStuckJobs: reclaimedStuckJobs.length,
     pixelArchive,
     d1Prune,
     campaignMediaPrune,
@@ -4679,6 +4821,8 @@ export const processAutomationJob = async (jobId: string) => {
     const payloadStepKey = payloadMetadata.stepKey == null ? '' : String(payloadMetadata.stepKey);
 
     if (claim.rule_key === 'welcome_subscriber' && payloadStepKey) {
+      const { findAutomationDeliveryJobIdJoined, findAutomationDeliveryIdForPreviousStep } =
+        await import('@/lib/server/integrations/deliveries-data');
       const welcomeConfig = parseWelcomeRuleConfig(ruleRows[0]?.config ?? null);
       const step = welcomeConfig.steps[payloadStepKey as WelcomeStepKey];
       const welcomeStepOrder: WelcomeStepKey[] = ['reminder-1', 'reminder-2', 'reminder-3'];
@@ -4733,19 +4877,13 @@ export const processAutomationJob = async (jobId: string) => {
           return { processed: false, error: 'Duplicate welcome reminder job suppressed.' };
         }
 
-        const existingDeliveryRows = await sql`
-          SELECT d.automation_job_id
-          FROM automation_deliveries d
-          JOIN automation_jobs j ON j.id = d.automation_job_id
-          WHERE d.shop_domain = ${claim.shop_domain}
-            AND d.rule_key = 'welcome_subscriber'
-            AND d.external_id = ${payloadExternalId}
-            AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-          ORDER BY d.delivered_at DESC
-          LIMIT 1
-        `;
-
-        const existingDeliveryJobId = existingDeliveryRows[0]?.automation_job_id == null ? '' : String(existingDeliveryRows[0].automation_job_id);
+        const existingDeliveryJobId =
+          (await findAutomationDeliveryJobIdJoined({
+            shopDomain: claim.shop_domain,
+            ruleKey: 'welcome_subscriber',
+            stepKey: payloadStepKey,
+            externalId: payloadExternalId,
+          })) ?? '';
         if (existingDeliveryJobId && existingDeliveryJobId !== claim.id) {
           await sql`
             UPDATE automation_jobs
@@ -4785,33 +4923,23 @@ export const processAutomationJob = async (jobId: string) => {
         const previousStepKey = welcomeStepOrder[currentStepIndex - 1];
         const payloadExternalIdForOrdering = payload.externalId == null ? '' : String(payload.externalId);
 
-        const previousDeliveredRows = payloadExternalIdForOrdering
-          ? await sql`
-            SELECT d.id
-            FROM automation_deliveries d
-            JOIN automation_jobs j ON j.id = d.automation_job_id
-            WHERE d.shop_domain = ${claim.shop_domain}
-              AND d.rule_key = 'welcome_subscriber'
-              AND d.external_id = ${payloadExternalIdForOrdering}
-              AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-            ORDER BY d.delivered_at DESC
-            LIMIT 1
-          `
+        const previousDeliveredId = payloadExternalIdForOrdering
+          ? await findAutomationDeliveryIdForPreviousStep({
+              shopDomain: claim.shop_domain,
+              ruleKey: 'welcome_subscriber',
+              stepKey: previousStepKey,
+              externalId: payloadExternalIdForOrdering,
+            })
           : claim.subscriber_id
-            ? await sql`
-              SELECT d.id
-              FROM automation_deliveries d
-              JOIN automation_jobs j ON j.id = d.automation_job_id
-              WHERE d.shop_domain = ${claim.shop_domain}
-                AND d.rule_key = 'welcome_subscriber'
-                AND d.subscriber_id = ${claim.subscriber_id}
-                AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-              ORDER BY d.delivered_at DESC
-              LIMIT 1
-            `
-            : [];
+            ? await findAutomationDeliveryIdForPreviousStep({
+                shopDomain: claim.shop_domain,
+                ruleKey: 'welcome_subscriber',
+                stepKey: previousStepKey,
+                subscriberId: claim.subscriber_id,
+              })
+            : null;
 
-        if (!previousDeliveredRows[0]?.id) {
+        if (!previousDeliveredId) {
           const previousPendingRows = payloadExternalIdForOrdering
             ? await sql`
               SELECT id
@@ -4856,19 +4984,15 @@ export const processAutomationJob = async (jobId: string) => {
         }
       }
 
-      const tokenDeliveryRows = await sql`
-        SELECT d.automation_job_id
-        FROM automation_deliveries d
-        JOIN automation_jobs j ON j.id = d.automation_job_id
-        WHERE d.shop_domain = ${claim.shop_domain}
-          AND d.rule_key = 'welcome_subscriber'
-          AND d.token_id = ${deliveryTokenId ?? 0}
-          AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-        ORDER BY d.delivered_at DESC
-        LIMIT 1
-      `;
+      const tokenDeliveryJobId =
+        (await findAutomationDeliveryJobIdJoined({
+          shopDomain: claim.shop_domain,
+          ruleKey: 'welcome_subscriber',
+          stepKey: payloadStepKey,
+          tokenId: deliveryTokenId ?? 0,
+        })) ?? '';
 
-      if (tokenDeliveryRows[0]?.automation_job_id) {
+      if (tokenDeliveryJobId) {
         await sql`
           UPDATE automation_jobs
           SET status = 'skipped', error_message = 'Welcome reminder already delivered to token for this step.', updated_at = NOW()
@@ -4878,19 +5002,15 @@ export const processAutomationJob = async (jobId: string) => {
       }
 
       if (claim.subscriber_id) {
-        const subscriberDeliveryRows = await sql`
-          SELECT d.automation_job_id
-          FROM automation_deliveries d
-          JOIN automation_jobs j ON j.id = d.automation_job_id
-          WHERE d.shop_domain = ${claim.shop_domain}
-            AND d.rule_key = 'welcome_subscriber'
-            AND d.subscriber_id = ${claim.subscriber_id}
-            AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-          ORDER BY d.delivered_at DESC
-          LIMIT 1
-        `;
+        const subscriberDeliveryJobId =
+          (await findAutomationDeliveryJobIdJoined({
+            shopDomain: claim.shop_domain,
+            ruleKey: 'welcome_subscriber',
+            stepKey: payloadStepKey,
+            subscriberId: claim.subscriber_id,
+          })) ?? '';
 
-        if (subscriberDeliveryRows[0]?.automation_job_id) {
+        if (subscriberDeliveryJobId) {
           await sql`
             UPDATE automation_jobs
             SET status = 'skipped', error_message = 'Welcome reminder already delivered to subscriber for this step.', updated_at = NOW()
@@ -4902,6 +5022,9 @@ export const processAutomationJob = async (jobId: string) => {
     }
 
     if (claim.rule_key === 'cart_abandonment_30m' && payloadStepKey) {
+      const { findAutomationDeliveryJobIdJoined } = await import(
+        '@/lib/server/integrations/deliveries-data'
+      );
       const cartConfig = parseCartRuleConfig(ruleRows[0]?.config ?? null);
       const step = cartConfig.steps[payloadStepKey as CartStepKey];
       const cartStepOrder: CartStepKey[] = ['cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3'];
@@ -4986,97 +5109,16 @@ export const processAutomationJob = async (jobId: string) => {
       if (stepIndex > 0) {
         const previousStepKey = cartStepOrder[stepIndex - 1];
         const hasIdentityForStepOrdering = Boolean(payloadExternalId || payloadCartToken || claim.subscriber_id);
-        const previousStepDeliveryRows = payloadExternalId && payloadCartToken && claim.subscriber_id
-          ? await sql`
-            SELECT d.automation_job_id
-            FROM automation_deliveries d
-            JOIN automation_jobs j ON j.id = d.automation_job_id
-            WHERE d.shop_domain = ${claim.shop_domain}
-              AND d.rule_key = 'cart_abandonment_30m'
-              AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-              AND (
-                d.external_id = ${payloadExternalId}
-                OR j.payload ->> 'cartToken' = ${payloadCartToken}
-                OR d.subscriber_id = ${claim.subscriber_id}
-              )
-            ORDER BY d.delivered_at DESC
-            LIMIT 1
-          `
-          : payloadExternalId && payloadCartToken
-            ? await sql`
-              SELECT d.automation_job_id
-              FROM automation_deliveries d
-              JOIN automation_jobs j ON j.id = d.automation_job_id
-              WHERE d.shop_domain = ${claim.shop_domain}
-                AND d.rule_key = 'cart_abandonment_30m'
-                AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                AND (d.external_id = ${payloadExternalId} OR j.payload ->> 'cartToken' = ${payloadCartToken})
-              ORDER BY d.delivered_at DESC
-              LIMIT 1
-            `
-            : payloadExternalId && claim.subscriber_id
-              ? await sql`
-                SELECT d.automation_job_id
-                FROM automation_deliveries d
-                JOIN automation_jobs j ON j.id = d.automation_job_id
-                WHERE d.shop_domain = ${claim.shop_domain}
-                  AND d.rule_key = 'cart_abandonment_30m'
-                  AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                  AND (d.external_id = ${payloadExternalId} OR d.subscriber_id = ${claim.subscriber_id})
-                ORDER BY d.delivered_at DESC
-                LIMIT 1
-              `
-              : payloadCartToken && claim.subscriber_id
-                ? await sql`
-                  SELECT d.automation_job_id
-                  FROM automation_deliveries d
-                  JOIN automation_jobs j ON j.id = d.automation_job_id
-                  WHERE d.shop_domain = ${claim.shop_domain}
-                    AND d.rule_key = 'cart_abandonment_30m'
-                    AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                    AND (j.payload ->> 'cartToken' = ${payloadCartToken} OR d.subscriber_id = ${claim.subscriber_id})
-                  ORDER BY d.delivered_at DESC
-                  LIMIT 1
-                `
-                : payloadExternalId
-                  ? await sql`
-                    SELECT d.automation_job_id
-                    FROM automation_deliveries d
-                    JOIN automation_jobs j ON j.id = d.automation_job_id
-                    WHERE d.shop_domain = ${claim.shop_domain}
-                      AND d.rule_key = 'cart_abandonment_30m'
-                      AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                      AND d.external_id = ${payloadExternalId}
-                    ORDER BY d.delivered_at DESC
-                    LIMIT 1
-                  `
-                  : payloadCartToken
-                    ? await sql`
-                      SELECT d.automation_job_id
-                      FROM automation_deliveries d
-                      JOIN automation_jobs j ON j.id = d.automation_job_id
-                      WHERE d.shop_domain = ${claim.shop_domain}
-                        AND d.rule_key = 'cart_abandonment_30m'
-                        AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                        AND j.payload ->> 'cartToken' = ${payloadCartToken}
-                      ORDER BY d.delivered_at DESC
-                      LIMIT 1
-                    `
-                    : claim.subscriber_id
-                      ? await sql`
-                        SELECT d.automation_job_id
-                        FROM automation_deliveries d
-                        JOIN automation_jobs j ON j.id = d.automation_job_id
-                        WHERE d.shop_domain = ${claim.shop_domain}
-                          AND d.rule_key = 'cart_abandonment_30m'
-                          AND j.payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                          AND d.subscriber_id = ${claim.subscriber_id}
-                        ORDER BY d.delivered_at DESC
-                        LIMIT 1
-                      `
-                      : [];
+        const previousCartStepJobId = await findAutomationDeliveryJobIdJoined({
+          shopDomain: claim.shop_domain,
+          ruleKey: 'cart_abandonment_30m',
+          stepKey: previousStepKey,
+          externalId: payloadExternalId || null,
+          cartToken: payloadCartToken || null,
+          subscriberId: claim.subscriber_id,
+        });
 
-        if (!previousStepDeliveryRows[0]?.automation_job_id && hasIdentityForStepOrdering) {
+        if (!previousCartStepJobId && hasIdentityForStepOrdering) {
           const previousStepJobRows = payloadExternalId && payloadCartToken && claim.subscriber_id
             ? await sql`
               SELECT status, attempts, error_message
@@ -5207,97 +5249,16 @@ export const processAutomationJob = async (jobId: string) => {
         }
       }
 
-      const existingStepDeliveryRows = payloadExternalId && payloadCartToken && claim.subscriber_id
-        ? await sql`
-          SELECT d.automation_job_id
-          FROM automation_deliveries d
-          JOIN automation_jobs j ON j.id = d.automation_job_id
-          WHERE d.shop_domain = ${claim.shop_domain}
-            AND d.rule_key = 'cart_abandonment_30m'
-            AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-            AND (
-              d.external_id = ${payloadExternalId}
-              OR j.payload ->> 'cartToken' = ${payloadCartToken}
-              OR d.subscriber_id = ${claim.subscriber_id}
-            )
-          ORDER BY d.delivered_at DESC
-          LIMIT 1
-        `
-        : payloadExternalId && payloadCartToken
-          ? await sql`
-            SELECT d.automation_job_id
-            FROM automation_deliveries d
-            JOIN automation_jobs j ON j.id = d.automation_job_id
-            WHERE d.shop_domain = ${claim.shop_domain}
-              AND d.rule_key = 'cart_abandonment_30m'
-              AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-              AND (d.external_id = ${payloadExternalId} OR j.payload ->> 'cartToken' = ${payloadCartToken})
-            ORDER BY d.delivered_at DESC
-            LIMIT 1
-          `
-          : payloadExternalId && claim.subscriber_id
-            ? await sql`
-              SELECT d.automation_job_id
-              FROM automation_deliveries d
-              JOIN automation_jobs j ON j.id = d.automation_job_id
-              WHERE d.shop_domain = ${claim.shop_domain}
-                AND d.rule_key = 'cart_abandonment_30m'
-                AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-                AND (d.external_id = ${payloadExternalId} OR d.subscriber_id = ${claim.subscriber_id})
-              ORDER BY d.delivered_at DESC
-              LIMIT 1
-            `
-            : payloadCartToken && claim.subscriber_id
-              ? await sql`
-                SELECT d.automation_job_id
-                FROM automation_deliveries d
-                JOIN automation_jobs j ON j.id = d.automation_job_id
-                WHERE d.shop_domain = ${claim.shop_domain}
-                  AND d.rule_key = 'cart_abandonment_30m'
-                  AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-                  AND (j.payload ->> 'cartToken' = ${payloadCartToken} OR d.subscriber_id = ${claim.subscriber_id})
-                ORDER BY d.delivered_at DESC
-                LIMIT 1
-              `
-              : payloadExternalId
-                ? await sql`
-                  SELECT d.automation_job_id
-                  FROM automation_deliveries d
-                  JOIN automation_jobs j ON j.id = d.automation_job_id
-                  WHERE d.shop_domain = ${claim.shop_domain}
-                    AND d.rule_key = 'cart_abandonment_30m'
-                    AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-                    AND d.external_id = ${payloadExternalId}
-                  ORDER BY d.delivered_at DESC
-                  LIMIT 1
-                `
-                : payloadCartToken
-                  ? await sql`
-                    SELECT d.automation_job_id
-                    FROM automation_deliveries d
-                    JOIN automation_jobs j ON j.id = d.automation_job_id
-                    WHERE d.shop_domain = ${claim.shop_domain}
-                      AND d.rule_key = 'cart_abandonment_30m'
-                      AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-                      AND j.payload ->> 'cartToken' = ${payloadCartToken}
-                    ORDER BY d.delivered_at DESC
-                    LIMIT 1
-                  `
-                  : claim.subscriber_id
-                    ? await sql`
-                      SELECT d.automation_job_id
-                      FROM automation_deliveries d
-                      JOIN automation_jobs j ON j.id = d.automation_job_id
-                      WHERE d.shop_domain = ${claim.shop_domain}
-                        AND d.rule_key = 'cart_abandonment_30m'
-                        AND j.payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-                        AND d.subscriber_id = ${claim.subscriber_id}
-                      ORDER BY d.delivered_at DESC
-                      LIMIT 1
-                    `
-                    : [];
+      const existingCartStepJobId = await findAutomationDeliveryJobIdJoined({
+        shopDomain: claim.shop_domain,
+        ruleKey: 'cart_abandonment_30m',
+        stepKey: payloadStepKey,
+        externalId: payloadExternalId || null,
+        cartToken: payloadCartToken || null,
+        subscriberId: claim.subscriber_id,
+      });
 
-      if (existingStepDeliveryRows[0]?.automation_job_id) {
+      if (existingCartStepJobId) {
         await sql`
           UPDATE automation_jobs
           SET status = 'skipped', error_message = 'Cart reminder already delivered for this step.', updated_at = NOW()
@@ -5444,6 +5405,11 @@ export const processAutomationJob = async (jobId: string) => {
       return { processed: false, error: skipReason };
     }
 
+    const { assertCanSendNotifications, incrementBillingImpressions } = await import(
+      '@/lib/server/billing/merchant-billing'
+    );
+    await assertCanSendNotifications(claim.shop_domain, 1);
+
     const destination = await resolveAutomationDestination(claim.shop_domain, payload);
     payload = {
       ...payload,
@@ -5565,36 +5531,42 @@ export const processAutomationJob = async (jobId: string) => {
       WHERE id = ${jobId}
     `;
 
-    await sql`
-      INSERT INTO automation_deliveries (
-        automation_job_id,
-        rule_key,
-        shop_domain,
-        subscriber_id,
-        token_id,
-        external_id,
-        target_url,
-        fcm_message_id,
-        user_agent,
-        ip_address
-      )
-      VALUES (
-        ${claim.id},
-        ${payload.ruleKey ?? claim.rule_key},
-        ${claim.shop_domain},
-        ${claim.subscriber_id ?? null},
-        ${deliveryTokenId},
-        ${payload.externalId ?? null},
-        ${payload.targetUrl ?? null},
-        ${fcmMessageId},
-        ${activeTokenRow?.user_agent ? String(activeTokenRow.user_agent) : null},
-        ${null}
-      )
-    `;
+    const { insertAutomationDelivery, extractAutomationDeliveryMeta } = await import(
+      '@/lib/server/integrations/deliveries-data'
+    );
+    const deliveryMeta = extractAutomationDeliveryMeta(payload as Record<string, unknown>);
+
+    await insertAutomationDelivery({
+      automationJobId: claim.id,
+      ruleKey: String(payload.ruleKey ?? claim.rule_key),
+      shopDomain: claim.shop_domain,
+      subscriberId: claim.subscriber_id ?? null,
+      tokenId: deliveryTokenId,
+      externalId: payload.externalId == null ? null : String(payload.externalId),
+      targetUrl: payload.targetUrl == null ? null : String(payload.targetUrl),
+      fcmMessageId: fcmMessageId,
+      userAgent: activeTokenRow?.user_agent ? String(activeTokenRow.user_agent) : null,
+      ipAddress: null,
+      stepKey: deliveryMeta.stepKey,
+      cartToken: deliveryMeta.cartToken,
+    });
+
+    await incrementBillingImpressions(claim.shop_domain, 1);
 
     return { processed: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to send automation message.';
+    const isImpressionLimit = message.includes('Monthly impression limit reached');
+
+    if (isImpressionLimit) {
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'skipped', error_message = ${message}, updated_at = NOW(), queue_enqueued_at = NULL
+        WHERE id = ${jobId}
+      `;
+      return { processed: false, error: message };
+    }
+
     const retryMinutes = claim.rule_key === 'welcome_subscriber' ? 1 : 5;
     const shouldFail = Number(claim.attempts ?? 0) >= 5;
     const deferredDueAt = shouldFail ? null : new Date(Date.now() + retryMinutes * 60_000);
@@ -5631,6 +5603,20 @@ export const recordSubscriberActivity = async (input: {
     return { eventId: null, skipped: true };
   }
 
+  // Raw-event collection gate: only collect/store/process an abandonment trigger
+  // event when the automation that consumes it is active for this shop. When the
+  // automation is off (merchant disabled it, or it is locked to a paid plan and
+  // inactive), we do nothing at all — this honours the merchant's choice AND
+  // removes the single biggest source of Neon load (carts/update fires on every
+  // cart change for every visitor). checkout_complete and other non-trigger types
+  // always pass through so conversion attribution keeps working.
+  {
+    const { shouldCollectEventType } = await import('@/lib/server/automation/collection-gate');
+    if (!(await shouldCollectEventType(input.shopDomain, input.eventType))) {
+      return { eventId: null, skipped: true, reason: 'automation_inactive' as const };
+    }
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
   const triggeredAt = new Date().toISOString();
@@ -5639,7 +5625,20 @@ export const recordSubscriberActivity = async (input: {
 
   const eventId = randomUUID();
 
-  if (!input.skipActivityPersist) {
+  // Consent-first persistence: the raw activity event is written ONLY once we've
+  // confirmed it maps to a consented subscriber (an active push token). We never
+  // store raw events for anonymous / non-subscribed visitors. Each trigger block
+  // below calls persistRawEvent() when — and only when — a target is found; it is
+  // idempotent so it writes at most once per call. The raw event exists purely to
+  // drive the automation, so if there is no consented target there is nothing to
+  // store.
+  let rawPersisted = false;
+  const persistRawEvent = async () => {
+    if (rawPersisted || input.skipActivityPersist) {
+      return;
+    }
+    rawPersisted = true;
+
     const { insertD1ActivityEvent, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
     if (isD1EventsEnabled()) {
       try {
@@ -5653,38 +5652,26 @@ export const recordSubscriberActivity = async (input: {
           cartToken: input.cartToken,
           metadata: input.metadata,
         });
+        return;
       } catch (error) {
         console.error('[d1-events] activity write failed, falling back to Neon', error);
-        await sql`
-          INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
-          VALUES (
-            ${eventId},
-            ${input.shopDomain},
-            ${input.externalId},
-            ${input.eventType},
-            ${input.pageUrl ?? null},
-            ${input.productId ?? null},
-            ${input.cartToken ?? null},
-            ${JSON.stringify(input.metadata ?? {})}::jsonb
-          )
-        `;
       }
-    } else {
-      await sql`
-        INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
-        VALUES (
-          ${eventId},
-          ${input.shopDomain},
-          ${input.externalId},
-          ${input.eventType},
-          ${input.pageUrl ?? null},
-          ${input.productId ?? null},
-          ${input.cartToken ?? null},
-          ${JSON.stringify(input.metadata ?? {})}::jsonb
-        )
-      `;
     }
-  }
+
+    await sql`
+      INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
+      VALUES (
+        ${eventId},
+        ${input.shopDomain},
+        ${input.externalId},
+        ${input.eventType},
+        ${input.pageUrl ?? null},
+        ${input.productId ?? null},
+        ${input.cartToken ?? null},
+        ${JSON.stringify(input.metadata ?? {})}::jsonb
+      )
+    `;
+  };
 
   const queueRule = async (ruleKey: AutomationRuleKey, fallbackDelayMinutes: number, dedupeKeyBase: string, payload: AutomationJobPayload) => {
     const rule = await getRuleConfig(input.shopDomain, ruleKey);
@@ -5699,6 +5686,8 @@ export const recordSubscriberActivity = async (input: {
     if (targets.length === 0) {
       return;
     }
+
+    await persistRawEvent();
 
     await enqueueAutomationForTargets({
       shopDomain: input.shopDomain,
@@ -5721,6 +5710,10 @@ export const recordSubscriberActivity = async (input: {
     if (rule.enabled) {
       const browseConfig = parseBrowseRuleConfig(rule.config);
       const targets = await listAutomationTargets({ shopDomain: input.shopDomain, externalId: input.externalId });
+
+      if (targets.length > 0) {
+        await persistRawEvent();
+      }
 
       for (const stepKey of Object.keys(browseConfig.steps) as BrowseStepKey[]) {
         const step = browseConfig.steps[stepKey];
@@ -5781,6 +5774,10 @@ export const recordSubscriberActivity = async (input: {
 
       if (targets.length === 0 && clientId) {
         targets = await listAutomationTargetsByClientId(input.shopDomain, clientId);
+      }
+
+      if (targets.length > 0) {
+        await persistRawEvent();
       }
 
       for (const stepKey of Object.keys(cartConfig.steps) as CartStepKey[]) {
@@ -6107,7 +6104,12 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
       }
     }
   } else if (condition.type === 'Purchased') {
-    const rows = await sql`
+    const { isD1CommerceEnabled, d1GetPurchasedSubscriberStats } = await import(
+      '@/lib/server/integrations/d1-commerce'
+    );
+    const rows = isD1CommerceEnabled()
+      ? await d1GetPurchasedSubscriberStats(shopDomain)
+      : await sql`
       SELECT subscriber_id, COUNT(*)::INT AS total, MAX(created_at) AS last_at
       FROM shopify_orders
       WHERE shop_domain = ${shopDomain}
@@ -6124,7 +6126,15 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
       }
     }
   } else if (condition.type === 'Purchased a product' || condition.type === 'Purchased from collection') {
-    const rows = await sql`
+    const { isD1CommerceEnabled, d1GetProductPurchaseStats } = await import(
+      '@/lib/server/integrations/d1-commerce'
+    );
+    const rows = isD1CommerceEnabled()
+      ? await d1GetProductPurchaseStats(shopDomain, {
+          byCollection: condition.type === 'Purchased from collection',
+          textFilter,
+        })
+      : await sql`
       SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
       FROM shopify_order_items i
       JOIN shopify_orders o ON o.id = i.order_event_id
@@ -6381,67 +6391,90 @@ export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInpu
     : null;
   const createdAt = input.createdAt ? new Date(input.createdAt) : new Date();
 
-  const orderRows = await sql`
-    INSERT INTO shopify_orders (
-      shop_domain,
-      order_id,
-      external_id,
-      customer_id,
-      email,
-      subscriber_id,
-      total_price_cents,
-      created_at
-    )
-    VALUES (
-      ${input.shopDomain},
-      ${input.orderId},
-      ${input.externalId ?? null},
-      ${input.customerId ?? null},
-      ${input.email ?? null},
-      ${subscriberId},
-      ${input.totalPriceCents},
-      ${createdAt}
-    )
-    ON CONFLICT (shop_domain, order_id)
-    DO UPDATE SET
-      external_id = COALESCE(EXCLUDED.external_id, shopify_orders.external_id),
-      customer_id = COALESCE(EXCLUDED.customer_id, shopify_orders.customer_id),
-      email = COALESCE(EXCLUDED.email, shopify_orders.email),
-      subscriber_id = COALESCE(EXCLUDED.subscriber_id, shopify_orders.subscriber_id),
-      total_price_cents = EXCLUDED.total_price_cents,
-      created_at = COALESCE(EXCLUDED.created_at, shopify_orders.created_at)
-    RETURNING id
-  `;
+  const { isD1CommerceEnabled, d1UpsertOrderEvent } = await import(
+    '@/lib/server/integrations/d1-commerce'
+  );
 
-  const orderEventId = Number(orderRows[0]?.id ?? 0);
-
-  await sql`
-    DELETE FROM shopify_order_items
-    WHERE shop_domain = ${input.shopDomain}
-      AND order_id = ${input.orderId}
-  `;
-
-  for (const item of input.lineItems ?? []) {
-    await sql`
-      INSERT INTO shopify_order_items (
+  if (isD1CommerceEnabled()) {
+    // Authoritative write to D1. order_items are replaced inside d1UpsertOrderEvent.
+    await d1UpsertOrderEvent({
+      shopDomain: input.shopDomain,
+      orderId: input.orderId,
+      externalId: input.externalId ?? null,
+      customerId: input.customerId ?? null,
+      email: input.email ?? null,
+      subscriberId,
+      totalPriceCents: input.totalPriceCents,
+      createdAt,
+      lineItems: (input.lineItems ?? []).map((item) => ({
+        productId: item.productId ?? null,
+        productTitle: item.productTitle ?? null,
+        collectionHint: item.collectionHint ?? null,
+      })),
+    });
+  } else {
+    const orderRows = await sql`
+      INSERT INTO shopify_orders (
         shop_domain,
         order_id,
-        order_event_id,
-        product_id,
-        product_title,
-        collection_hint,
+        external_id,
+        customer_id,
+        email,
+        subscriber_id,
+        total_price_cents,
         created_at
       )
       VALUES (
         ${input.shopDomain},
         ${input.orderId},
-        ${orderEventId},
-        ${item.productId ?? null},
-        ${item.productTitle ?? null},
-        ${item.collectionHint ?? null},
+        ${input.externalId ?? null},
+        ${input.customerId ?? null},
+        ${input.email ?? null},
+        ${subscriberId},
+        ${input.totalPriceCents},
         ${createdAt}
       )
+      ON CONFLICT (shop_domain, order_id)
+      DO UPDATE SET
+        external_id = COALESCE(EXCLUDED.external_id, shopify_orders.external_id),
+        customer_id = COALESCE(EXCLUDED.customer_id, shopify_orders.customer_id),
+        email = COALESCE(EXCLUDED.email, shopify_orders.email),
+        subscriber_id = COALESCE(EXCLUDED.subscriber_id, shopify_orders.subscriber_id),
+        total_price_cents = EXCLUDED.total_price_cents,
+        created_at = COALESCE(EXCLUDED.created_at, shopify_orders.created_at)
+      RETURNING id
     `;
+
+    const orderEventId = Number(orderRows[0]?.id ?? 0);
+
+    await sql`
+      DELETE FROM shopify_order_items
+      WHERE shop_domain = ${input.shopDomain}
+        AND order_id = ${input.orderId}
+    `;
+
+    for (const item of input.lineItems ?? []) {
+      await sql`
+        INSERT INTO shopify_order_items (
+          shop_domain,
+          order_id,
+          order_event_id,
+          product_id,
+          product_title,
+          collection_hint,
+          created_at
+        )
+        VALUES (
+          ${input.shopDomain},
+          ${input.orderId},
+          ${orderEventId},
+          ${item.productId ?? null},
+          ${item.productTitle ?? null},
+          ${item.collectionHint ?? null},
+          ${createdAt}
+        )
+      `;
+    }
   }
 
   const targets = await listAutomationTargets({
@@ -6745,42 +6778,62 @@ export const processFulfillmentUpdate = async (input: ProcessFulfillmentUpdateIn
   await ensureMerchant(input.shopDomain);
 
   const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
-  await sql`
-    INSERT INTO shopify_fulfillments (
-      shop_domain,
-      fulfillment_id,
-      order_id,
-      status,
-      shipment_status,
-      tracking_company,
-      tracking_numbers,
-      tracking_urls,
-      updated_at,
-      last_seen_at
-    )
-    VALUES (
-      ${input.shopDomain},
-      ${input.fulfillmentId},
-      ${input.orderId},
-      ${input.status ?? null},
-      ${input.shipmentStatus ?? null},
-      ${input.trackingCompany ?? null},
-      ${JSON.stringify(input.trackingNumbers ?? [])}::jsonb,
-      ${JSON.stringify(input.trackingUrls ?? [])}::jsonb,
-      ${updatedAt},
-      NOW()
-    )
-    ON CONFLICT (shop_domain, fulfillment_id)
-    DO UPDATE SET
-      order_id = EXCLUDED.order_id,
-      status = COALESCE(EXCLUDED.status, shopify_fulfillments.status),
-      shipment_status = COALESCE(EXCLUDED.shipment_status, shopify_fulfillments.shipment_status),
-      tracking_company = COALESCE(EXCLUDED.tracking_company, shopify_fulfillments.tracking_company),
-      tracking_numbers = EXCLUDED.tracking_numbers,
-      tracking_urls = EXCLUDED.tracking_urls,
-      updated_at = COALESCE(EXCLUDED.updated_at, shopify_fulfillments.updated_at),
-      last_seen_at = NOW()
-  `;
+
+  const { isD1CommerceEnabled, d1UpsertFulfillment, d1GetOrderIdentityByOrderId } = await import(
+    '@/lib/server/integrations/d1-commerce'
+  );
+  const commerceOnD1 = isD1CommerceEnabled();
+
+  if (commerceOnD1) {
+    await d1UpsertFulfillment({
+      shopDomain: input.shopDomain,
+      fulfillmentId: input.fulfillmentId,
+      orderId: input.orderId,
+      status: input.status ?? null,
+      shipmentStatus: input.shipmentStatus ?? null,
+      trackingCompany: input.trackingCompany ?? null,
+      trackingNumbers: input.trackingNumbers ?? [],
+      trackingUrls: input.trackingUrls ?? [],
+      updatedAt,
+    });
+  } else {
+    await sql`
+      INSERT INTO shopify_fulfillments (
+        shop_domain,
+        fulfillment_id,
+        order_id,
+        status,
+        shipment_status,
+        tracking_company,
+        tracking_numbers,
+        tracking_urls,
+        updated_at,
+        last_seen_at
+      )
+      VALUES (
+        ${input.shopDomain},
+        ${input.fulfillmentId},
+        ${input.orderId},
+        ${input.status ?? null},
+        ${input.shipmentStatus ?? null},
+        ${input.trackingCompany ?? null},
+        ${JSON.stringify(input.trackingNumbers ?? [])}::jsonb,
+        ${JSON.stringify(input.trackingUrls ?? [])}::jsonb,
+        ${updatedAt},
+        NOW()
+      )
+      ON CONFLICT (shop_domain, fulfillment_id)
+      DO UPDATE SET
+        order_id = EXCLUDED.order_id,
+        status = COALESCE(EXCLUDED.status, shopify_fulfillments.status),
+        shipment_status = COALESCE(EXCLUDED.shipment_status, shopify_fulfillments.shipment_status),
+        tracking_company = COALESCE(EXCLUDED.tracking_company, shopify_fulfillments.tracking_company),
+        tracking_numbers = EXCLUDED.tracking_numbers,
+        tracking_urls = EXCLUDED.tracking_urls,
+        updated_at = COALESCE(EXCLUDED.updated_at, shopify_fulfillments.updated_at),
+        last_seen_at = NOW()
+    `;
+  }
 
   const shippingRule = await getRuleConfig(input.shopDomain, 'shipping_notifications');
   if (!shippingRule.enabled) {
@@ -6796,16 +6849,19 @@ export const processFulfillmentUpdate = async (input: ProcessFulfillmentUpdateIn
     return;
   }
 
-  const orderRows = await sql`
-    SELECT subscriber_id, external_id, customer_id
-    FROM shopify_orders
-    WHERE shop_domain = ${input.shopDomain}
-      AND order_id = ${input.orderId}
-    ORDER BY created_at DESC
-    LIMIT 1
-  `;
+  const orderRow = commerceOnD1
+    ? await d1GetOrderIdentityByOrderId(input.shopDomain, input.orderId)
+    : (
+        await sql`
+          SELECT subscriber_id, external_id, customer_id
+          FROM shopify_orders
+          WHERE shop_domain = ${input.shopDomain}
+            AND order_id = ${input.orderId}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `
+      )[0];
 
-  const orderRow = orderRows[0];
   const targets = await listAutomationTargets({
     shopDomain: input.shopDomain,
     externalId: orderRow?.external_id ? String(orderRow.external_id) : null,
@@ -7131,17 +7187,10 @@ export const resolveCampaignAudience = async (
     if (!excludeDeliveredCampaignId) {
       return new Set<number>();
     }
-    const rows = await sql`
-      SELECT DISTINCT subscriber_id
-      FROM campaign_deliveries
-      WHERE campaign_id = ${excludeDeliveredCampaignId}
-        AND fcm_message_id IS NOT NULL
-    `;
-    return new Set(
-      (rows as Array<Record<string, unknown>>)
-        .map((row) => Number(row.subscriber_id))
-        .filter((id) => Number.isFinite(id)),
+    const { getDeliveredSubscriberIdsForCampaign } = await import(
+      '@/lib/server/integrations/deliveries-data'
     );
+    return new Set(await getDeliveredSubscriberIdsForCampaign(excludeDeliveredCampaignId, true));
   };
 
   const d1Recipients = async (subscriberIds?: number[]): Promise<CampaignRecipientRow[]> => {
@@ -8344,6 +8393,463 @@ export const verifyAudienceD1Parity = async (shopDomain?: string) => {
   };
 };
 
+/**
+ * One-time commerce -> D1 backfill (orders + their line items + fulfillments).
+ * Idempotent: orders upsert on (shop_domain, order_id) and items are replaced, so
+ * re-running is safe. Resume large datasets by passing back the returned cursors.
+ * Items are matched to their parent via the Neon order id (order_event_id), which
+ * is globally unique, so there is no cross-shop ambiguity.
+ */
+export const backfillCommerceToD1 = async (options?: {
+  batchSize?: number;
+  maxBatches?: number;
+  afterOrderId?: number;
+  afterFulfillmentId?: number;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const { isD1CommerceEnabled, d1UpsertOrderEvent, d1UpsertFulfillment } = await import(
+    '@/lib/server/integrations/d1-commerce'
+  );
+  if (!isD1CommerceEnabled()) {
+    throw new Error('D1_COMMERCE_ENABLED is off — enable it before backfilling.');
+  }
+
+  const batchSize = Math.min(Math.max(options?.batchSize ?? 25, 1), 100);
+  const maxBatches = Math.min(Math.max(options?.maxBatches ?? 40, 1), 1000);
+
+  let orderCursor = Number(options?.afterOrderId ?? 0);
+  let fulfillmentCursor = Number(options?.afterFulfillmentId ?? 0);
+  let ordersCopied = 0;
+  let orderItemsCopied = 0;
+  let fulfillmentsCopied = 0;
+  let ordersDone = false;
+  let fulfillmentsDone = false;
+
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    if (ordersDone && fulfillmentsDone) {
+      break;
+    }
+
+    if (!ordersDone) {
+      const rows = await sql`
+        SELECT id, shop_domain, order_id, external_id, customer_id, email,
+               subscriber_id, total_price_cents, created_at
+        FROM shopify_orders
+        WHERE id > ${orderCursor}
+        ORDER BY id ASC
+        LIMIT ${batchSize}
+      `;
+      if (rows.length === 0) {
+        ordersDone = true;
+      } else {
+        const neonOrderIds = rows.map((row) => Number(row.id));
+        const itemRows = await sql`
+          SELECT order_event_id, product_id, product_title, collection_hint
+          FROM shopify_order_items
+          WHERE order_event_id = ANY(${neonOrderIds})
+        `;
+        const itemsByOrder = new Map<number, Array<Record<string, unknown>>>();
+        for (const item of itemRows as Array<Record<string, unknown>>) {
+          const key = Number(item.order_event_id);
+          const list = itemsByOrder.get(key) ?? [];
+          list.push(item);
+          itemsByOrder.set(key, list);
+        }
+
+        for (const row of rows as Array<Record<string, unknown>>) {
+          const items = itemsByOrder.get(Number(row.id)) ?? [];
+          await d1UpsertOrderEvent({
+            shopDomain: String(row.shop_domain),
+            orderId: String(row.order_id),
+            externalId: row.external_id == null ? null : String(row.external_id),
+            customerId: row.customer_id == null ? null : String(row.customer_id),
+            email: row.email == null ? null : String(row.email),
+            subscriberId: row.subscriber_id == null ? null : Number(row.subscriber_id),
+            totalPriceCents: Number(row.total_price_cents ?? 0),
+            createdAt: row.created_at == null ? null : String(row.created_at),
+            lineItems: items.map((item) => ({
+              productId: item.product_id == null ? null : String(item.product_id),
+              productTitle: item.product_title == null ? null : String(item.product_title),
+              collectionHint: item.collection_hint == null ? null : String(item.collection_hint),
+            })),
+          });
+          orderItemsCopied += items.length;
+        }
+
+        ordersCopied += rows.length;
+        orderCursor = Number(rows[rows.length - 1]?.id ?? orderCursor);
+        if (rows.length < batchSize) {
+          ordersDone = true;
+        }
+      }
+    }
+
+    if (!fulfillmentsDone) {
+      const rows = await sql`
+        SELECT id, shop_domain, fulfillment_id, order_id, status, shipment_status,
+               tracking_company, tracking_numbers, tracking_urls, updated_at
+        FROM shopify_fulfillments
+        WHERE id > ${fulfillmentCursor}
+        ORDER BY id ASC
+        LIMIT ${batchSize}
+      `;
+      if (rows.length === 0) {
+        fulfillmentsDone = true;
+      } else {
+        for (const row of rows as Array<Record<string, unknown>>) {
+          await d1UpsertFulfillment({
+            shopDomain: String(row.shop_domain),
+            fulfillmentId: String(row.fulfillment_id),
+            orderId: String(row.order_id),
+            status: row.status == null ? null : String(row.status),
+            shipmentStatus: row.shipment_status == null ? null : String(row.shipment_status),
+            trackingCompany: row.tracking_company == null ? null : String(row.tracking_company),
+            trackingNumbers: row.tracking_numbers ?? [],
+            trackingUrls: row.tracking_urls ?? [],
+            updatedAt: row.updated_at == null ? null : String(row.updated_at),
+          });
+        }
+        fulfillmentsCopied += rows.length;
+        fulfillmentCursor = Number(rows[rows.length - 1]?.id ?? fulfillmentCursor);
+        if (rows.length < batchSize) {
+          fulfillmentsDone = true;
+        }
+      }
+    }
+  }
+
+  return {
+    ordersCopied,
+    orderItemsCopied,
+    fulfillmentsCopied,
+    nextOrderCursor: orderCursor,
+    nextFulfillmentCursor: fulfillmentCursor,
+    ordersDone,
+    fulfillmentsDone,
+    done: ordersDone && fulfillmentsDone,
+  };
+};
+
+/**
+ * Commerce parity: Neon vs D1 row counts (overall or per-shop) so we can confirm the
+ * backfill is complete before relying on D1 reads.
+ */
+export const verifyCommerceD1Parity = async (shopDomain?: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const { d1CountOrders, d1CountOrderItems, d1CountFulfillments } = await import(
+    '@/lib/server/integrations/d1-commerce'
+  );
+
+  const [neonOrderRows, neonItemRows, neonFulfillmentRows] = await Promise.all([
+    shopDomain
+      ? sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_orders WHERE shop_domain = ${shopDomain}`
+      : sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_orders`,
+    shopDomain
+      ? sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_order_items WHERE shop_domain = ${shopDomain}`
+      : sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_order_items`,
+    shopDomain
+      ? sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_fulfillments WHERE shop_domain = ${shopDomain}`
+      : sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_fulfillments`,
+  ]);
+
+  const neonOrders = Number(neonOrderRows[0]?.count ?? 0);
+  const neonOrderItems = Number(neonItemRows[0]?.count ?? 0);
+  const neonFulfillments = Number(neonFulfillmentRows[0]?.count ?? 0);
+
+  const [d1Orders, d1OrderItems, d1Fulfillments] = await Promise.all([
+    d1CountOrders(shopDomain),
+    d1CountOrderItems(shopDomain),
+    d1CountFulfillments(shopDomain),
+  ]);
+
+  return {
+    shopDomain: shopDomain ?? null,
+    neonOrders,
+    d1Orders,
+    ordersMatch: neonOrders === d1Orders,
+    neonOrderItems,
+    d1OrderItems,
+    orderItemsMatch: neonOrderItems === d1OrderItems,
+    neonFulfillments,
+    d1Fulfillments,
+    fulfillmentsMatch: neonFulfillments === d1Fulfillments,
+    inSync:
+      neonOrders === d1Orders &&
+      neonOrderItems === d1OrderItems &&
+      neonFulfillments === d1Fulfillments,
+  };
+};
+
+/**
+ * One-time customer cache -> D1 backfill. Idempotent via upsert on
+ * (shop_domain, customer_id). Email-only rows (customer_id NULL) append.
+ */
+export const backfillCustomersToD1 = async (options?: {
+  batchSize?: number;
+  maxBatches?: number;
+  afterId?: number;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const { isD1CustomersEnabled, d1UpsertCustomer } = await import(
+    '@/lib/server/integrations/d1-customers'
+  );
+  if (!isD1CustomersEnabled()) {
+    throw new Error('D1_CUSTOMERS_ENABLED is off — enable it before backfilling.');
+  }
+
+  const batchSize = Math.min(Math.max(options?.batchSize ?? 50, 1), 200);
+  const maxBatches = Math.min(Math.max(options?.maxBatches ?? 40, 1), 1000);
+  let cursor = Number(options?.afterId ?? 0);
+  let copied = 0;
+  let done = false;
+
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    const rows = await sql`
+      SELECT id, shop_domain, customer_id, external_id, email, first_name, last_name, tags
+      FROM shopify_customers
+      WHERE id > ${cursor}
+      ORDER BY id ASC
+      LIMIT ${batchSize}
+    `;
+    if (rows.length === 0) {
+      done = true;
+      break;
+    }
+
+    for (const row of rows as Array<Record<string, unknown>>) {
+      await d1UpsertCustomer({
+        shopDomain: String(row.shop_domain),
+        customerId: row.customer_id == null ? null : String(row.customer_id),
+        externalId: row.external_id == null ? null : String(row.external_id),
+        email: row.email == null ? null : String(row.email),
+        firstName: row.first_name == null ? null : String(row.first_name),
+        lastName: row.last_name == null ? null : String(row.last_name),
+        tags: row.tags == null ? null : String(row.tags),
+      });
+    }
+
+    copied += rows.length;
+    cursor = Number(rows[rows.length - 1]?.id ?? cursor);
+    if (rows.length < batchSize) {
+      done = true;
+      break;
+    }
+  }
+
+  return { customersCopied: copied, nextCursor: cursor, done };
+};
+
+/**
+ * One-time product variant catalog -> D1 backfill. Idempotent via upsert on
+ * (shop_domain, variant_id).
+ */
+export const backfillCatalogToD1 = async (options?: {
+  batchSize?: number;
+  maxBatches?: number;
+  afterVariantId?: string;
+  afterShopDomain?: string;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const { isD1CatalogEnabled, d1UpsertVariant } = await import(
+    '@/lib/server/integrations/d1-catalog'
+  );
+  if (!isD1CatalogEnabled()) {
+    throw new Error('D1_CATALOG_ENABLED is off — enable it before backfilling.');
+  }
+
+  const batchSize = Math.min(Math.max(options?.batchSize ?? 50, 1), 200);
+  const maxBatches = Math.min(Math.max(options?.maxBatches ?? 40, 1), 1000);
+  const afterShop = options?.afterShopDomain ?? '';
+  const afterVariant = options?.afterVariantId ?? '';
+  let copied = 0;
+  let done = false;
+  let lastShop = afterShop;
+  let lastVariant = afterVariant;
+
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    const rows = await sql`
+      SELECT shop_domain, product_id, variant_id, inventory_item_id, product_title,
+             variant_title, handle, image_url, price_cents, compare_at_price_cents,
+             available, updated_at, last_seen_at
+      FROM shopify_product_variants
+      WHERE (shop_domain, variant_id) > (${lastShop}, ${lastVariant})
+      ORDER BY shop_domain ASC, variant_id ASC
+      LIMIT ${batchSize}
+    `;
+    if (rows.length === 0) {
+      done = true;
+      break;
+    }
+
+    for (const row of rows as Array<Record<string, unknown>>) {
+      const updatedAt = row.updated_at ? new Date(String(row.updated_at)).toISOString() : new Date().toISOString();
+      const lastSeenAt = row.last_seen_at ? new Date(String(row.last_seen_at)).toISOString() : updatedAt;
+      await d1UpsertVariant({
+        shopDomain: String(row.shop_domain),
+        productId: String(row.product_id),
+        variantId: String(row.variant_id),
+        inventoryItemId: row.inventory_item_id == null ? null : String(row.inventory_item_id),
+        productTitle: row.product_title == null ? null : String(row.product_title),
+        variantTitle: row.variant_title == null ? null : String(row.variant_title),
+        handle: row.handle == null ? null : String(row.handle),
+        imageUrl: row.image_url == null ? null : String(row.image_url),
+        priceCents: row.price_cents == null ? null : Number(row.price_cents),
+        compareAtPriceCents: row.compare_at_price_cents == null ? null : Number(row.compare_at_price_cents),
+        available: row.available == null ? null : Number(row.available),
+        updatedAtIso: updatedAt,
+        lastSeenAtIso: lastSeenAt,
+      });
+    }
+
+    copied += rows.length;
+    const tail = rows[rows.length - 1] as Record<string, unknown>;
+    lastShop = String(tail.shop_domain);
+    lastVariant = String(tail.variant_id);
+    if (rows.length < batchSize) {
+      done = true;
+      break;
+    }
+  }
+
+  return {
+    variantsCopied: copied,
+    nextShopDomain: lastShop,
+    nextVariantId: lastVariant,
+    done,
+  };
+};
+
+export const verifyCustomersD1Parity = async (shopDomain?: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const { d1CountCustomers } = await import('@/lib/server/integrations/d1-customers');
+
+  const neonRows = shopDomain
+    ? await sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_customers WHERE shop_domain = ${shopDomain}`
+    : await sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_customers`;
+  const neonCustomers = Number(neonRows[0]?.count ?? 0);
+  const d1Customers = await d1CountCustomers(shopDomain);
+
+  return {
+    shopDomain: shopDomain ?? null,
+    neonCustomers,
+    d1Customers,
+    customersMatch: neonCustomers === d1Customers,
+    inSync: neonCustomers === d1Customers,
+  };
+};
+
+export const verifyCatalogD1Parity = async (shopDomain?: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const { d1CountVariants } = await import('@/lib/server/integrations/d1-catalog');
+
+  const neonRows = shopDomain
+    ? await sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_product_variants WHERE shop_domain = ${shopDomain}`
+    : await sql`SELECT COUNT(*)::BIGINT AS count FROM shopify_product_variants`;
+  const neonVariants = Number(neonRows[0]?.count ?? 0);
+  const d1Variants = await d1CountVariants(shopDomain);
+
+  return {
+    shopDomain: shopDomain ?? null,
+    neonVariants,
+    d1Variants,
+    variantsMatch: neonVariants === d1Variants,
+    inSync: neonVariants === d1Variants,
+  };
+};
+
+/**
+ * Remove D1 catalog rows that no longer exist on Neon (e.g. stale rows from a
+ * partial cutover or deleted products). Neon is the source of truth during
+ * backfill; after cutover only D1 receives writes.
+ */
+export const reconcileCatalogD1WithNeon = async () => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const { isD1CatalogEnabled, d1ListAllVariantKeys, d1DeleteVariant } = await import(
+    '@/lib/server/integrations/d1-catalog'
+  );
+  if (!isD1CatalogEnabled()) {
+    throw new Error('D1_CATALOG_ENABLED is off.');
+  }
+
+  const neonRows = await sql`SELECT shop_domain, variant_id FROM shopify_product_variants`;
+  const neonKeys = new Set(
+    (neonRows as Array<Record<string, unknown>>).map(
+      (row) => `${String(row.shop_domain)}::${String(row.variant_id)}`,
+    ),
+  );
+
+  const d1Keys = await d1ListAllVariantKeys();
+  let deleted = 0;
+  for (const row of d1Keys) {
+    const key = `${row.shopDomain}::${row.variantId}`;
+    if (!neonKeys.has(key)) {
+      await d1DeleteVariant(row.shopDomain, row.variantId);
+      deleted += 1;
+    }
+  }
+
+  return { deleted, neonVariants: neonKeys.size, d1VariantsBefore: d1Keys.length };
+};
+
+/**
+ * After D1 cutover + parity confirmation, delete the Neon copies of commerce/
+ * customer/catalog cache tables. These tables are no longer written when their
+ * respective D1 flags are on; keeping the stale rows only wastes Neon storage.
+ */
+export const purgeNeonCommerceCacheAfterD1Cutover = async () => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const { isD1CommerceEnabled } = await import('@/lib/server/integrations/d1-commerce');
+  const { isD1CustomersEnabled } = await import('@/lib/server/integrations/d1-customers');
+  const { isD1CatalogEnabled } = await import('@/lib/server/integrations/d1-catalog');
+
+  if (!isD1CommerceEnabled() || !isD1CustomersEnabled() || !isD1CatalogEnabled()) {
+    throw new Error('All D1_COMMERCE_ENABLED, D1_CUSTOMERS_ENABLED, and D1_CATALOG_ENABLED must be on before purging Neon cache copies.');
+  }
+
+  const catalogReconcile = await reconcileCatalogD1WithNeon();
+
+  const [commerce, customers, catalog] = await Promise.all([
+    verifyCommerceD1Parity(),
+    verifyCustomersD1Parity(),
+    verifyCatalogD1Parity(),
+  ]);
+
+  if (!commerce.inSync || !customers.inSync || !catalog.inSync) {
+    throw new Error(
+      `Parity check failed before Neon purge: commerce=${commerce.inSync}, customers=${customers.inSync}, catalog=${catalog.inSync}`,
+    );
+  }
+
+  const orderItems = await sql`DELETE FROM shopify_order_items RETURNING id`;
+  const orders = await sql`DELETE FROM shopify_orders RETURNING id`;
+  const fulfillments = await sql`DELETE FROM shopify_fulfillments RETURNING id`;
+  const customersDeleted = await sql`DELETE FROM shopify_customers RETURNING id`;
+  const variants = await sql`DELETE FROM shopify_product_variants RETURNING variant_id`;
+
+  return {
+    catalogReconcile,
+    orderItemsDeleted: orderItems.length,
+    ordersDeleted: orders.length,
+    fulfillmentsDeleted: fulfillments.length,
+    customersDeleted: customersDeleted.length,
+    variantsDeleted: variants.length,
+  };
+};
+
 export const getSubscriberKpis = async (shopDomain: string) => {
   await ensureSchema();
   const sql = getNeonSql();
@@ -9015,10 +9521,15 @@ export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, 
   const start = isAllTime ? new Date(0) : from!;
   const end = to ?? new Date();
 
+  const {
+    getAutomationAggregateForAnalytics,
+    getTopAutomationRulesByRevenue,
+    getAutomationClicksByRule,
+  } = await import('@/lib/server/integrations/deliveries-data');
+
   const [
     campaignKpiRows,
-    autoDeliveryRows,
-    autoClickRows,
+    autoAggregate,
     subscriberRows,
     dailyRevenueRows,
     topCampaignRows,
@@ -9035,22 +9546,7 @@ export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, 
       WHERE shop_domain = ${shopDomain}
         AND created_at >= ${start} AND created_at <= ${end}
     `,
-    sql`
-      SELECT
-        COUNT(*)::BIGINT AS impressions,
-        COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-      FROM automation_deliveries
-      WHERE shop_domain = ${shopDomain}
-        AND delivered_at >= ${start} AND delivered_at <= ${end}
-    `,
-    sql`
-      SELECT
-        COUNT(*)::BIGINT AS clicks,
-        COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-      FROM automation_clicks
-      WHERE shop_domain = ${shopDomain}
-        AND clicked_at >= ${start} AND clicked_at <= ${end}
-    `,
+    getAutomationAggregateForAnalytics(shopDomain, start, end),
     (async () => {
       const { isD1AudienceReadActive, d1CountSubscribersCreatedBetween } = await import(
         '@/lib/server/integrations/d1-audience'
@@ -9088,39 +9584,10 @@ export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, 
       ORDER BY revenue_cents DESC NULLS LAST
       LIMIT 5
     `,
-    // For all-time we must merge the archived baseline in per rule (below) before
-    // ranking, so fetch every rule's live totals (only ~9 rule keys exist). For a
-    // bounded range the top-5 SQL limit is kept exactly as before.
     isAllTime
-      ? sql`
-          SELECT
-            rule_key,
-            COUNT(*)::BIGINT AS impressions,
-            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-          FROM automation_deliveries
-          WHERE shop_domain = ${shopDomain}
-            AND delivered_at >= ${start} AND delivered_at <= ${end}
-          GROUP BY rule_key
-        `
-      : sql`
-          SELECT
-            rule_key,
-            COUNT(*)::BIGINT AS impressions,
-            COALESCE(SUM(revenue_cents), 0)::BIGINT AS revenue_cents
-          FROM automation_deliveries
-          WHERE shop_domain = ${shopDomain}
-            AND delivered_at >= ${start} AND delivered_at <= ${end}
-          GROUP BY rule_key
-          ORDER BY revenue_cents DESC NULLS LAST
-          LIMIT 5
-        `,
-    sql`
-      SELECT rule_key, COUNT(*)::BIGINT AS clicks
-      FROM automation_clicks
-      WHERE shop_domain = ${shopDomain}
-        AND clicked_at >= ${start} AND clicked_at <= ${end}
-      GROUP BY rule_key
-    `,
+      ? getTopAutomationRulesByRevenue(shopDomain, start, end)
+      : getTopAutomationRulesByRevenue(shopDomain, start, end, 5),
+    getAutomationClicksByRule(shopDomain, start, end),
     // Archived baseline of already-pruned automation rows (per rule). Only needed
     // for all-time; a bounded range is served purely from retained detail.
     isAllTime
@@ -9164,11 +9631,11 @@ export const getAnalyticsStats = async (shopDomain: string, from?: Date | null, 
   const campaignClicks = Number(campaignKpiRows[0]?.clicks ?? 0);
   const campaignRevenueCents = Number(campaignKpiRows[0]?.revenue_cents ?? 0);
 
-  const autoImpressions = Number(autoDeliveryRows[0]?.impressions ?? 0) + archivedAutoImpressions;
-  const autoClicks = Number(autoClickRows[0]?.clicks ?? 0) + archivedAutoClicks;
+  const autoImpressions = autoAggregate.impressions + archivedAutoImpressions;
+  const autoClicks = autoAggregate.clicks + archivedAutoClicks;
   const autoRevenueCents =
-    Number(autoDeliveryRows[0]?.revenue_cents ?? 0) +
-    Number(autoClickRows[0]?.revenue_cents ?? 0) +
+    autoAggregate.deliveryRevenueCents +
+    autoAggregate.clickRevenueCents +
     archivedAutoRevenueCents;
 
   const totalImpressions = campaignImpressions + autoImpressions;
@@ -9295,93 +9762,35 @@ type CampaignDeliveryInsertRow = {
 };
 
 const claimCampaignDeliverySlots = async (
-  sql: ReturnType<typeof getNeonSql>,
+  _sql: ReturnType<typeof getNeonSql>,
   rows: CampaignDeliveryInsertRow[],
 ) => {
-  if (rows.length === 0) {
-    return [] as Array<{ subscriberId: number; tokenId: number }>;
-  }
-
-  const seenSubscribers = new Set<number>();
-  const filteredRows = rows.filter((row) => {
-    if (seenSubscribers.has(row.subscriberId)) {
-      return false;
-    }
-    seenSubscribers.add(row.subscriberId);
-    return true;
-  });
-
-  if (filteredRows.length === 0) {
-    return [];
-  }
-
-  const filteredCampaignIds = filteredRows.map((row) => row.campaignId);
-  const filteredShopDomains = filteredRows.map((row) => row.shopDomain);
-  const filteredSubscriberIds = filteredRows.map((row) => row.subscriberId);
-  const filteredTokenIds = filteredRows.map((row) => row.tokenId);
-  const filteredExternalIds = filteredRows.map((row) => row.externalId ?? null);
-  const filteredUserAgents = filteredRows.map((row) => row.userAgent ?? null);
-
-  const claimedRows = await sql`
-    INSERT INTO campaign_deliveries (campaign_id, shop_domain, subscriber_id, token_id, external_id, user_agent, fcm_message_id)
-    SELECT u.campaign_id, u.shop_domain, u.subscriber_id, u.token_id, u.external_id, u.user_agent, NULL
-    FROM UNNEST(
-      ${filteredCampaignIds}::text[],
-      ${filteredShopDomains}::text[],
-      ${filteredSubscriberIds}::bigint[],
-      ${filteredTokenIds}::bigint[],
-      ${filteredExternalIds}::text[],
-      ${filteredUserAgents}::text[]
-    ) AS u(campaign_id, shop_domain, subscriber_id, token_id, external_id, user_agent)
-    ON CONFLICT (campaign_id, subscriber_id) DO NOTHING
-    RETURNING subscriber_id, token_id
-  `;
-
-  return claimedRows.map((row) => ({
-    subscriberId: Number((row as { subscriber_id: unknown }).subscriber_id),
-    tokenId: Number((row as { token_id: unknown }).token_id),
-  }));
+  const { claimCampaignDeliverySlots: claim } = await import(
+    '@/lib/server/integrations/deliveries-data'
+  );
+  return claim(rows);
 };
 
 const updateCampaignDeliveryMessageIds = async (
-  sql: ReturnType<typeof getNeonSql>,
+  _sql: ReturnType<typeof getNeonSql>,
   campaignId: string,
   updates: Array<{ subscriberId: number; messageId: string | null }>,
 ) => {
-  if (updates.length === 0) {
-    return;
-  }
-
-  const subscriberIds = updates.map((row) => row.subscriberId);
-  const messageIds = updates.map((row) => row.messageId);
-
-  await sql`
-    UPDATE campaign_deliveries AS cd
-    SET fcm_message_id = u.fcm_message_id
-    FROM UNNEST(
-      ${subscriberIds}::bigint[],
-      ${messageIds}::text[]
-    ) AS u(subscriber_id, fcm_message_id)
-    WHERE cd.campaign_id = ${campaignId}
-      AND cd.subscriber_id = u.subscriber_id
-  `;
+  const { updateCampaignDeliveryMessageIds: update } = await import(
+    '@/lib/server/integrations/deliveries-data'
+  );
+  return update(campaignId, updates);
 };
 
 const releaseCampaignDeliveryClaims = async (
-  sql: ReturnType<typeof getNeonSql>,
+  _sql: ReturnType<typeof getNeonSql>,
   campaignId: string,
   subscriberIds: number[],
 ) => {
-  if (subscriberIds.length === 0) {
-    return;
-  }
-
-  await sql`
-    DELETE FROM campaign_deliveries
-    WHERE campaign_id = ${campaignId}
-      AND subscriber_id = ANY(${subscriberIds}::bigint[])
-      AND fcm_message_id IS NULL
-  `;
+  const { releaseCampaignDeliveryClaims: release } = await import(
+    '@/lib/server/integrations/deliveries-data'
+  );
+  return release(campaignId, subscriberIds);
 };
 
 export const sendCampaign = async (
@@ -9501,30 +9910,18 @@ export const sendCampaign = async (
 
   const previousStatus = campaign.status === 'sending' ? 'draft' : campaign.status;
 
-  const deliveredSubscriberRows = await sql`
-    SELECT DISTINCT subscriber_id
-    FROM campaign_deliveries
-    WHERE campaign_id = ${campaignId}
-      AND shop_domain = ${shopDomain}
-      AND fcm_message_id IS NOT NULL
-  `;
+  const { getDeliveredSubscriberIdsForCampaign, deleteUnsentCampaignDeliveries, countCampaignDeliveries, countSentCampaignDeliveries } =
+    await import('@/lib/server/integrations/deliveries-data');
 
   const deliveredSubscriberIds = new Set(
-    deliveredSubscriberRows
-      .map((row) => Number((row as { subscriber_id?: unknown }).subscriber_id))
-      .filter((value) => Number.isFinite(value)),
+    await getDeliveredSubscriberIdsForCampaign(campaignId, true),
   );
 
   recipients = recipients.filter(
     (recipient) => !deliveredSubscriberIds.has(Number(recipient.subscriber_id)),
   );
 
-  await sql`
-    DELETE FROM campaign_deliveries
-    WHERE campaign_id = ${campaignId}
-      AND shop_domain = ${shopDomain}
-      AND fcm_message_id IS NULL
-  `;
+  await deleteUnsentCampaignDeliveries(campaignId, shopDomain);
 
   await sql`
     UPDATE campaigns
@@ -9535,13 +9932,9 @@ export const sendCampaign = async (
   await assertCanSendNotifications(shopDomain, Math.max(recipients.length, 1));
 
   if (recipients.length === 0) {
-    const deliveredRows = await sql`
-      SELECT COUNT(*)::INT AS count
-      FROM campaign_deliveries
-      WHERE campaign_id = ${campaignId}
-    `;
+    const deliveredCount = await countCampaignDeliveries(campaignId, shopDomain);
 
-    const alreadyDelivered = Number(deliveredRows[0]?.count ?? 0);
+    const alreadyDelivered = await countSentCampaignDeliveries(campaignId);
 
     if (alreadyDelivered > 0) {
       await sql`
@@ -9590,6 +9983,7 @@ export const sendCampaign = async (
         break;
       }
 
+      const chunkSuccessBaseline = successCount;
       const chunk = recipients.slice(i, i + chunkSize);
       const chunkWithPayload = chunk.map((item) => {
         const platform = String((item as { platform?: string }).platform ?? '').toLowerCase();
@@ -9827,6 +10221,12 @@ export const sendCampaign = async (
       processedRecipients += chunk.length;
       processedBatches += 1;
 
+      const chunkImpressions = successCount - chunkSuccessBaseline;
+      if (chunkImpressions > 0) {
+        const { incrementBillingImpressions } = await import('@/lib/server/billing/merchant-billing');
+        await incrementBillingImpressions(shopDomain, chunkImpressions);
+      }
+
       await sql`
         UPDATE campaigns
         SET delivery_count = (
@@ -9862,14 +10262,7 @@ export const sendCampaign = async (
       };
     }
 
-    const deliveredRows = await sql`
-      SELECT COUNT(*)::INT AS count
-      FROM campaign_deliveries
-      WHERE campaign_id = ${campaignId}
-        AND fcm_message_id IS NOT NULL
-    `;
-
-    const deliveredCount = Number(deliveredRows[0]?.count ?? 0);
+    const deliveredCount = await countSentCampaignDeliveries(campaignId);
 
     if (scheduleMeta?.smart_send_enabled) {
       const fullAudience = dedupeRecipientsBySubscriber(
@@ -10511,19 +10904,12 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
     ORDER BY step_key ASC, j.status ASC
   `;
 
-  const deliveryRows = await sql`
-    SELECT
-      COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key,
-      COUNT(*)::INT AS delivered,
-      MAX(d.delivered_at) AS last_delivered_at
-    FROM automation_deliveries d
-    JOIN automation_jobs j ON j.id = d.automation_job_id
-    WHERE d.shop_domain = ${shopDomain}
-      AND d.rule_key = 'welcome_subscriber'
-      AND COALESCE(j.payload -> 'metadata' ->> 'stepKey', '') IN ('reminder-1', 'reminder-2', 'reminder-3')
-    GROUP BY step_key
-    ORDER BY step_key ASC
-  `;
+  const deliveryRows = await (async () => {
+    const { getWelcomeDeliveryStatsByStep } = await import(
+      '@/lib/server/integrations/deliveries-data'
+    );
+    return getWelcomeDeliveryStatsByStep(shopDomain);
+  })();
 
   const staleProcessingRows = await sql`
     SELECT COUNT(*)::INT AS stale_processing
@@ -10843,20 +11229,11 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
 export const clearWelcomeAutomationHistory = async (shopDomain: string) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const { deleteWelcomeAutomationDeliveries } = await import(
+    '@/lib/server/integrations/deliveries-data'
+  );
 
-  const deliveryRows = await sql`
-    DELETE FROM automation_deliveries
-    WHERE shop_domain = ${shopDomain}
-      AND rule_key = 'welcome_subscriber'
-    RETURNING id
-  `;
-
-  const clickRows = await sql`
-    DELETE FROM automation_clicks
-    WHERE shop_domain = ${shopDomain}
-      AND rule_key = 'welcome_subscriber'
-    RETURNING id
-  `;
+  const cleared = await deleteWelcomeAutomationDeliveries(shopDomain);
 
   const jobRows = await sql`
     DELETE FROM automation_jobs
@@ -10867,8 +11244,8 @@ export const clearWelcomeAutomationHistory = async (shopDomain: string) => {
 
   return {
     clearedJobs: jobRows.length,
-    clearedDeliveries: deliveryRows.length,
-    clearedClicks: clickRows.length,
+    clearedDeliveries: cleared.deliveries,
+    clearedClicks: cleared.clicks,
     clearedAt: new Date().toISOString(),
   };
 };
@@ -10877,6 +11254,10 @@ export const trackCampaignClick = async (input: TrackCampaignClickInput) => {
   await ensureSchema();
   const sql = getNeonSql();
   const normalizedExternalId = input.externalId?.trim() || null;
+  const {
+    insertCampaignClick,
+    markCampaignDeliveryClicked,
+  } = await import('@/lib/server/integrations/deliveries-data');
 
   const subscriberId = input.externalId
     ? await (async () => {
@@ -10901,43 +11282,23 @@ export const trackCampaignClick = async (input: TrackCampaignClickInput) => {
       })()
     : null;
 
-  await sql`
-    INSERT INTO campaign_clicks (
-      campaign_id,
-      shop_domain,
-      subscriber_id,
-      external_id,
-      target_url,
-      user_agent,
-      ip_address,
-      referrer
-    )
-    VALUES (
-      ${input.campaignId},
-      ${input.shopDomain},
-      ${subscriberId},
-      ${normalizedExternalId},
-      ${input.targetUrl},
-      ${input.userAgent ?? null},
-      ${input.ipAddress ?? null},
-      ${input.referrer ?? null}
-    )
-  `;
+  await insertCampaignClick({
+    campaignId: input.campaignId,
+    shopDomain: input.shopDomain,
+    subscriberId,
+    externalId: normalizedExternalId,
+    targetUrl: input.targetUrl,
+    userAgent: input.userAgent ?? null,
+    ipAddress: input.ipAddress ?? null,
+    referrer: input.referrer ?? null,
+  });
 
-  await sql`
-    UPDATE campaign_deliveries
-    SET clicked_at = NOW()
-    WHERE id = (
-      SELECT id
-      FROM campaign_deliveries
-      WHERE campaign_id = ${input.campaignId}
-        AND shop_domain = ${input.shopDomain}
-        AND clicked_at IS NULL
-        ${normalizedExternalId ? sql`AND external_id = ${normalizedExternalId}` : subscriberId ? sql`AND subscriber_id = ${subscriberId}` : sql``}
-      ORDER BY delivered_at DESC
-      LIMIT 1
-    )
-  `;
+  await markCampaignDeliveryClicked({
+    campaignId: input.campaignId,
+    shopDomain: input.shopDomain,
+    externalId: normalizedExternalId,
+    subscriberId,
+  });
 
   await sql`
     UPDATE campaigns
@@ -10950,6 +11311,10 @@ export const trackAutomationClick = async (input: TrackAutomationClickInput) => 
   await ensureSchema();
   const sql = getNeonSql();
   const normalizedExternalId = input.externalId?.trim() || null;
+  const {
+    insertAutomationClick,
+    markAutomationDeliveryClicked,
+  } = await import('@/lib/server/integrations/deliveries-data');
 
   const subscriberId = input.externalId
     ? await (async () => {
@@ -10974,43 +11339,22 @@ export const trackAutomationClick = async (input: TrackAutomationClickInput) => 
       })()
     : null;
 
-  await sql`
-    INSERT INTO automation_clicks (
-      rule_key,
-      shop_domain,
-      subscriber_id,
-      external_id,
-      target_url,
-      user_agent,
-      ip_address,
-      referrer
-    )
-    VALUES (
-      ${input.ruleKey},
-      ${input.shopDomain},
-      ${subscriberId},
-      ${input.externalId ?? null},
-      ${input.targetUrl},
-      ${input.userAgent ?? null},
-      ${input.ipAddress ?? null},
-      ${input.referrer ?? null}
-    )
-  `;
+  await insertAutomationClick({
+    ruleKey: input.ruleKey,
+    shopDomain: input.shopDomain,
+    subscriberId,
+    externalId: input.externalId ?? null,
+    targetUrl: input.targetUrl,
+    userAgent: input.userAgent ?? null,
+    ipAddress: input.ipAddress ?? null,
+    referrer: input.referrer ?? null,
+  });
 
-  await sql`
-    UPDATE automation_deliveries
-    SET clicked_at = NOW()
-    WHERE id = (
-      SELECT id
-      FROM automation_deliveries
-      WHERE shop_domain = ${input.shopDomain}
-        AND rule_key = ${input.ruleKey}
-        ${normalizedExternalId ? sql`AND external_id = ${normalizedExternalId}` : sql``}
-        AND clicked_at IS NULL
-      ORDER BY delivered_at DESC
-      LIMIT 1
-    )
-  `;
+  await markAutomationDeliveryClicked({
+    shopDomain: input.shopDomain,
+    ruleKey: input.ruleKey,
+    externalId: normalizedExternalId,
+  });
 };
 
 export const recordAttributedConversion = async (input: RecordConversionInput) => {
@@ -11083,7 +11427,22 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
         return Promise.resolve([] as Array<{ external_id: string | null }>);
       })();
 
-  const historicalOrderExternalRows = await (() => {
+  const historicalOrderExternalRows = await (async () => {
+    if (!normalizedCustomerId && !normalizedEmail) {
+      return [] as Array<{ external_id: string | null }>;
+    }
+
+    const { isD1CommerceEnabled, d1GetHistoricalOrderExternalIds } = await import(
+      '@/lib/server/integrations/d1-commerce'
+    );
+    if (isD1CommerceEnabled()) {
+      return d1GetHistoricalOrderExternalIds({
+        shopDomain: input.shopDomain,
+        customerId: normalizedCustomerId,
+        email: normalizedEmail,
+      });
+    }
+
     if (normalizedCustomerId && normalizedEmail) {
       return sql`
         SELECT external_id
@@ -11120,7 +11479,7 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
         LIMIT 25
       `;
     }
-    return Promise.resolve([] as Array<{ external_id: string | null }>);
+    return [] as Array<{ external_id: string | null }>;
   })();
 
   const cartExternalRows = resolvedCartToken
@@ -11273,37 +11632,14 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     ),
   );
 
-  const existingAttribution = await sql`
-    SELECT campaign_id
-    FROM campaign_deliveries
-    WHERE shop_domain = ${input.shopDomain}
-      AND order_id = ${input.orderId}
-    UNION ALL
-    SELECT campaign_id
-    FROM campaign_clicks
-    WHERE shop_domain = ${input.shopDomain}
-      AND order_id = ${input.orderId}
-    LIMIT 1
-  `;
+  const { hasOrderAttribution, findCampaignTouches, findAutomationTouches, updateTouchConversion } =
+    await import('@/lib/server/integrations/deliveries-data');
 
-  const existingAutomationAttribution = await sql`
-    SELECT id
-    FROM automation_deliveries
-    WHERE shop_domain = ${input.shopDomain}
-      AND order_id = ${input.orderId}
-    UNION ALL
-    SELECT id
-    FROM automation_clicks
-    WHERE shop_domain = ${input.shopDomain}
-      AND order_id = ${input.orderId}
-    LIMIT 1
-  `;
-
-  if (existingAttribution[0]?.campaign_id) {
-    return { attributed: true, campaignId: String(existingAttribution[0].campaign_id), model: settings.attributionModel };
+  const priorAttribution = await hasOrderAttribution(input.shopDomain, input.orderId);
+  if (priorAttribution?.type === 'campaign') {
+    return { attributed: true, campaignId: priorAttribution.campaignId, model: settings.attributionModel };
   }
-
-  if (existingAutomationAttribution[0]?.id) {
+  if (priorAttribution?.type === 'automation') {
     return { attributed: true, campaignId: null, model: settings.attributionModel };
   }
 
@@ -11836,95 +12172,13 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
   }
 
   for (const touch of selectedCampaignTouches) {
-    if (touch.table === 'campaign_clicks') {
-      const updatedRows = await sql`
-        UPDATE campaign_clicks
-        SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
-        WHERE id = ${touch.id}
-          AND order_id IS NULL
-        RETURNING id
-      `;
-
-      if (!updatedRows[0]?.id) {
-        await sql`
-          INSERT INTO campaign_clicks (
-            campaign_id,
-            shop_domain,
-            subscriber_id,
-            target_url,
-            clicked_at,
-            order_id,
-            converted_at,
-            revenue_cents,
-            user_agent,
-            ip_address,
-            external_id,
-            referrer
-          )
-          SELECT
-            campaign_id,
-            shop_domain,
-            subscriber_id,
-            target_url,
-            clicked_at,
-            ${input.orderId},
-            ${occurredAt},
-            ${input.revenueCents},
-            user_agent,
-            ip_address,
-            external_id,
-            referrer
-          FROM campaign_clicks
-          WHERE id = ${touch.id}
-          LIMIT 1
-        `;
-      }
-    } else {
-      const updatedRows = await sql`
-        UPDATE campaign_deliveries
-        SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
-        WHERE id = ${touch.id}
-          AND order_id IS NULL
-        RETURNING id
-      `;
-
-      if (!updatedRows[0]?.id) {
-        await sql`
-          INSERT INTO campaign_deliveries (
-            campaign_id,
-            shop_domain,
-            subscriber_id,
-            target_url,
-            sent_at,
-            delivered_at,
-            clicked_at,
-            order_id,
-            converted_at,
-            revenue_cents,
-            fcm_message_id,
-            user_agent,
-            ip_address
-          )
-          SELECT
-            campaign_id,
-            shop_domain,
-            subscriber_id,
-            target_url,
-            sent_at,
-            delivered_at,
-            clicked_at,
-            ${input.orderId},
-            ${occurredAt},
-            ${input.revenueCents},
-            fcm_message_id,
-            user_agent,
-            ip_address
-          FROM campaign_deliveries
-          WHERE id = ${touch.id}
-          LIMIT 1
-        `;
-      }
-    }
+    await updateTouchConversion({
+      table: touch.table,
+      id: touch.id,
+      orderId: input.orderId,
+      convertedAtIso: occurredAt.toISOString(),
+      revenueCents: input.revenueCents,
+    });
 
     await sql`
       UPDATE campaigns
@@ -11935,99 +12189,13 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
   }
 
   for (const touch of selectedAutomationTouches) {
-    if (touch.table === 'automation_clicks') {
-      const updatedRows = await sql`
-        UPDATE automation_clicks
-        SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
-        WHERE id = ${touch.id}
-          AND order_id IS NULL
-        RETURNING id
-      `;
-
-      if (!updatedRows[0]?.id) {
-        await sql`
-          INSERT INTO automation_clicks (
-            rule_key,
-            shop_domain,
-            subscriber_id,
-            external_id,
-            target_url,
-            clicked_at,
-            user_agent,
-            ip_address,
-            referrer,
-            order_id,
-            converted_at,
-            revenue_cents
-          )
-          SELECT
-            rule_key,
-            shop_domain,
-            subscriber_id,
-            external_id,
-            target_url,
-            clicked_at,
-            user_agent,
-            ip_address,
-            referrer,
-            ${input.orderId},
-            ${occurredAt},
-            ${input.revenueCents}
-          FROM automation_clicks
-          WHERE id = ${touch.id}
-          LIMIT 1
-        `;
-      }
-    } else {
-      const updatedRows = await sql`
-        UPDATE automation_deliveries
-        SET converted_at = ${occurredAt}, order_id = ${input.orderId}, revenue_cents = ${input.revenueCents}
-        WHERE id = ${touch.id}
-          AND order_id IS NULL
-        RETURNING id
-      `;
-
-      if (!updatedRows[0]?.id) {
-        await sql`
-          INSERT INTO automation_deliveries (
-            automation_job_id,
-            rule_key,
-            shop_domain,
-            subscriber_id,
-            token_id,
-            external_id,
-            target_url,
-            fcm_message_id,
-            delivered_at,
-            clicked_at,
-            user_agent,
-            ip_address,
-            order_id,
-            converted_at,
-            revenue_cents
-          )
-          SELECT
-            NULL,
-            rule_key,
-            shop_domain,
-            subscriber_id,
-            token_id,
-            external_id,
-            target_url,
-            fcm_message_id,
-            delivered_at,
-            clicked_at,
-            user_agent,
-            ip_address,
-            ${input.orderId},
-            ${occurredAt},
-            ${input.revenueCents}
-          FROM automation_deliveries
-          WHERE id = ${touch.id}
-          LIMIT 1
-        `;
-      }
-    }
+    await updateTouchConversion({
+      table: touch.table,
+      id: touch.id,
+      orderId: input.orderId,
+      convertedAtIso: occurredAt.toISOString(),
+      revenueCents: input.revenueCents,
+    });
   }
 
   return {
@@ -12037,7 +12205,389 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
   };
 };
 
+export const backfillDeliveriesToD1 = async (options?: {
+  batchSize?: number;
+  maxBatches?: number;
+  afterCampaignDeliveryId?: number;
+  afterCampaignClickId?: number;
+  afterAutomationDeliveryId?: number;
+  afterAutomationClickId?: number;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const { isD1DeliveriesEnabled, d1InsertCampaignDelivery, d1InsertCampaignClick, d1InsertAutomationDelivery, d1InsertAutomationClick } =
+    await import('@/lib/server/integrations/d1-deliveries');
+  if (!isD1DeliveriesEnabled()) {
+    throw new Error('D1_DELIVERIES_ENABLED is off — enable it before backfilling.');
+  }
+
+  const batchSize = Math.min(Math.max(options?.batchSize ?? 50, 1), 200);
+  const maxBatches = Math.min(Math.max(options?.maxBatches ?? 40, 1), 1000);
+
+  let campaignDeliveryCursor = Number(options?.afterCampaignDeliveryId ?? 0);
+  let campaignClickCursor = Number(options?.afterCampaignClickId ?? 0);
+  let automationDeliveryCursor = Number(options?.afterAutomationDeliveryId ?? 0);
+  let automationClickCursor = Number(options?.afterAutomationClickId ?? 0);
+
+  let campaignDeliveriesCopied = 0;
+  let campaignClicksCopied = 0;
+  let automationDeliveriesCopied = 0;
+  let automationClicksCopied = 0;
+
+  let campaignDeliveriesDone = false;
+  let campaignClicksDone = false;
+  let automationDeliveriesDone = false;
+  let automationClicksDone = false;
+
+  const parseStepKey = (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      return { stepKey: null as string | null, cartToken: null as string | null };
+    }
+    const record = payload as Record<string, unknown>;
+    const metadata = (record.metadata ?? {}) as Record<string, unknown>;
+    return {
+      stepKey: metadata.stepKey == null ? null : String(metadata.stepKey),
+      cartToken: record.cartToken == null ? null : String(record.cartToken),
+    };
+  };
+
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    if (campaignDeliveriesDone && campaignClicksDone && automationDeliveriesDone && automationClicksDone) {
+      break;
+    }
+
+    if (!campaignDeliveriesDone) {
+      const rows = await sql`
+        SELECT id, campaign_id, shop_domain, subscriber_id, token_id, fcm_message_id,
+               delivered_at, clicked_at, converted_at, order_id, revenue_cents,
+               external_id, user_agent, ip_address
+        FROM campaign_deliveries
+        WHERE id > ${campaignDeliveryCursor}
+        ORDER BY id ASC
+        LIMIT ${batchSize}
+      `;
+      if (rows.length === 0) {
+        campaignDeliveriesDone = true;
+      } else {
+        for (const row of rows as Array<Record<string, unknown>>) {
+          await d1InsertCampaignDelivery({
+            id: Number(row.id),
+            campaignId: String(row.campaign_id),
+            shopDomain: String(row.shop_domain),
+            subscriberId: Number(row.subscriber_id),
+            tokenId: Number(row.token_id),
+            externalId: row.external_id == null ? null : String(row.external_id),
+            userAgent: row.user_agent == null ? null : String(row.user_agent),
+            fcmMessageId: row.fcm_message_id == null ? null : String(row.fcm_message_id),
+            deliveredAt: row.delivered_at == null ? null : String(row.delivered_at),
+          });
+        }
+        campaignDeliveriesCopied += rows.length;
+        campaignDeliveryCursor = Number(rows[rows.length - 1]?.id ?? campaignDeliveryCursor);
+        if (rows.length < batchSize) {
+          campaignDeliveriesDone = true;
+        }
+      }
+    }
+
+    if (!campaignClicksDone) {
+      const rows = await sql`
+        SELECT id, campaign_id, shop_domain, subscriber_id, target_url, clicked_at,
+               user_agent, ip_address, referrer, order_id, converted_at, revenue_cents, external_id
+        FROM campaign_clicks
+        WHERE id > ${campaignClickCursor}
+        ORDER BY id ASC
+        LIMIT ${batchSize}
+      `;
+      if (rows.length === 0) {
+        campaignClicksDone = true;
+      } else {
+        for (const row of rows as Array<Record<string, unknown>>) {
+          await d1InsertCampaignClick({
+            id: Number(row.id),
+            campaignId: String(row.campaign_id),
+            shopDomain: String(row.shop_domain),
+            subscriberId: row.subscriber_id == null ? null : Number(row.subscriber_id),
+            externalId: row.external_id == null ? null : String(row.external_id),
+            targetUrl: String(row.target_url),
+            userAgent: row.user_agent == null ? null : String(row.user_agent),
+            ipAddress: row.ip_address == null ? null : String(row.ip_address),
+            referrer: row.referrer == null ? null : String(row.referrer),
+            clickedAt: row.clicked_at == null ? null : String(row.clicked_at),
+          });
+        }
+        campaignClicksCopied += rows.length;
+        campaignClickCursor = Number(rows[rows.length - 1]?.id ?? campaignClickCursor);
+        if (rows.length < batchSize) {
+          campaignClicksDone = true;
+        }
+      }
+    }
+
+    if (!automationDeliveriesDone) {
+      const rows = await sql`
+        SELECT d.id, d.automation_job_id, d.rule_key, d.shop_domain, d.subscriber_id, d.token_id,
+               d.external_id, d.target_url, d.fcm_message_id, d.delivered_at, d.clicked_at,
+               d.user_agent, d.ip_address, d.converted_at, d.order_id, d.revenue_cents,
+               j.payload
+        FROM automation_deliveries d
+        LEFT JOIN automation_jobs j ON j.id = d.automation_job_id
+        WHERE d.id > ${automationDeliveryCursor}
+        ORDER BY d.id ASC
+        LIMIT ${batchSize}
+      `;
+      if (rows.length === 0) {
+        automationDeliveriesDone = true;
+      } else {
+        for (const row of rows as Array<Record<string, unknown>>) {
+          const meta = parseStepKey(row.payload);
+          await d1InsertAutomationDelivery({
+            id: Number(row.id),
+            automationJobId: row.automation_job_id == null ? null : String(row.automation_job_id),
+            ruleKey: String(row.rule_key),
+            shopDomain: String(row.shop_domain),
+            subscriberId: row.subscriber_id == null ? null : Number(row.subscriber_id),
+            tokenId: row.token_id == null ? null : Number(row.token_id),
+            externalId: row.external_id == null ? null : String(row.external_id),
+            targetUrl: row.target_url == null ? null : String(row.target_url),
+            fcmMessageId: row.fcm_message_id == null ? null : String(row.fcm_message_id),
+            userAgent: row.user_agent == null ? null : String(row.user_agent),
+            ipAddress: row.ip_address == null ? null : String(row.ip_address),
+            deliveredAt: row.delivered_at == null ? null : String(row.delivered_at),
+            stepKey: meta.stepKey,
+            cartToken: meta.cartToken,
+          });
+        }
+        automationDeliveriesCopied += rows.length;
+        automationDeliveryCursor = Number(rows[rows.length - 1]?.id ?? automationDeliveryCursor);
+        if (rows.length < batchSize) {
+          automationDeliveriesDone = true;
+        }
+      }
+    }
+
+    if (!automationClicksDone) {
+      const rows = await sql`
+        SELECT id, rule_key, shop_domain, subscriber_id, external_id, target_url, clicked_at,
+               user_agent, ip_address, referrer, order_id, converted_at, revenue_cents
+        FROM automation_clicks
+        WHERE id > ${automationClickCursor}
+        ORDER BY id ASC
+        LIMIT ${batchSize}
+      `;
+      if (rows.length === 0) {
+        automationClicksDone = true;
+      } else {
+        for (const row of rows as Array<Record<string, unknown>>) {
+          await d1InsertAutomationClick({
+            id: Number(row.id),
+            ruleKey: String(row.rule_key),
+            shopDomain: String(row.shop_domain),
+            subscriberId: row.subscriber_id == null ? null : Number(row.subscriber_id),
+            externalId: row.external_id == null ? null : String(row.external_id),
+            targetUrl: String(row.target_url),
+            userAgent: row.user_agent == null ? null : String(row.user_agent),
+            ipAddress: row.ip_address == null ? null : String(row.ip_address),
+            referrer: row.referrer == null ? null : String(row.referrer),
+            clickedAt: row.clicked_at == null ? null : String(row.clicked_at),
+          });
+        }
+        automationClicksCopied += rows.length;
+        automationClickCursor = Number(rows[rows.length - 1]?.id ?? automationClickCursor);
+        if (rows.length < batchSize) {
+          automationClicksDone = true;
+        }
+      }
+    }
+  }
+
+  return {
+    campaignDeliveriesCopied,
+    campaignClicksCopied,
+    automationDeliveriesCopied,
+    automationClicksCopied,
+    nextCampaignDeliveryCursor: campaignDeliveryCursor,
+    nextCampaignClickCursor: campaignClickCursor,
+    nextAutomationDeliveryCursor: automationDeliveryCursor,
+    nextAutomationClickCursor: automationClickCursor,
+    campaignDeliveriesDone,
+    campaignClicksDone,
+    automationDeliveriesDone,
+    automationClicksDone,
+    done:
+      campaignDeliveriesDone &&
+      campaignClicksDone &&
+      automationDeliveriesDone &&
+      automationClicksDone,
+  };
+};
+
+export const verifyDeliveriesD1Parity = async (shopDomain?: string) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const {
+    d1CountCampaignDeliveries,
+    d1CountCampaignClicks,
+    d1CountAutomationDeliveries,
+    d1CountAutomationClicks,
+  } = await import('@/lib/server/integrations/d1-deliveries');
+
+  const { neonTableExists } = await import('@/lib/server/integrations/neon-legacy-tables');
+
+  const countFromNeon = async (table: string): Promise<number> => {
+    if (!(await neonTableExists(table))) {
+      return 0;
+    }
+    switch (table) {
+      case 'campaign_deliveries':
+        return shopDomain
+          ? Number(
+              (
+                await sql`SELECT COUNT(*)::BIGINT AS count FROM campaign_deliveries WHERE shop_domain = ${shopDomain}`
+              )[0]?.count ?? 0,
+            )
+          : Number((await sql`SELECT COUNT(*)::BIGINT AS count FROM campaign_deliveries`)[0]?.count ?? 0);
+      case 'campaign_clicks':
+        return shopDomain
+          ? Number(
+              (
+                await sql`SELECT COUNT(*)::BIGINT AS count FROM campaign_clicks WHERE shop_domain = ${shopDomain}`
+              )[0]?.count ?? 0,
+            )
+          : Number((await sql`SELECT COUNT(*)::BIGINT AS count FROM campaign_clicks`)[0]?.count ?? 0);
+      case 'automation_deliveries':
+        return shopDomain
+          ? Number(
+              (
+                await sql`SELECT COUNT(*)::BIGINT AS count FROM automation_deliveries WHERE shop_domain = ${shopDomain}`
+              )[0]?.count ?? 0,
+            )
+          : Number(
+              (await sql`SELECT COUNT(*)::BIGINT AS count FROM automation_deliveries`)[0]?.count ?? 0,
+            );
+      case 'automation_clicks':
+        return shopDomain
+          ? Number(
+              (
+                await sql`SELECT COUNT(*)::BIGINT AS count FROM automation_clicks WHERE shop_domain = ${shopDomain}`
+              )[0]?.count ?? 0,
+            )
+          : Number((await sql`SELECT COUNT(*)::BIGINT AS count FROM automation_clicks`)[0]?.count ?? 0);
+      default:
+        return 0;
+    }
+  };
+
+  const [neonCampaignDeliveries, neonCampaignClicks, neonAutomationDeliveries, neonAutomationClicks] =
+    await Promise.all([
+      countFromNeon('campaign_deliveries'),
+      countFromNeon('campaign_clicks'),
+      countFromNeon('automation_deliveries'),
+      countFromNeon('automation_clicks'),
+    ]);
+
+  const [d1CampaignDeliveries, d1CampaignClicks, d1AutomationDeliveries, d1AutomationClicks] =
+    await Promise.all([
+      d1CountCampaignDeliveries(shopDomain),
+      d1CountCampaignClicks(shopDomain),
+      d1CountAutomationDeliveries(shopDomain),
+      d1CountAutomationClicks(shopDomain),
+    ]);
+
+  return {
+    shopDomain: shopDomain ?? null,
+    neonCampaignDeliveries,
+    d1CampaignDeliveries,
+    campaignDeliveriesMatch: neonCampaignDeliveries === d1CampaignDeliveries,
+    neonCampaignClicks,
+    d1CampaignClicks,
+    campaignClicksMatch: neonCampaignClicks === d1CampaignClicks,
+    neonAutomationDeliveries,
+    d1AutomationDeliveries,
+    automationDeliveriesMatch: neonAutomationDeliveries === d1AutomationDeliveries,
+    neonAutomationClicks,
+    d1AutomationClicks,
+    automationClicksMatch: neonAutomationClicks === d1AutomationClicks,
+    inSync:
+      neonCampaignDeliveries === d1CampaignDeliveries &&
+      neonCampaignClicks === d1CampaignClicks &&
+      neonAutomationDeliveries === d1AutomationDeliveries &&
+      neonAutomationClicks === d1AutomationClicks,
+  };
+};
+
+export const purgeNeonDeliveriesAfterD1Cutover = async () => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const { isD1DeliveriesEnabled } = await import('@/lib/server/integrations/d1-deliveries');
+  if (!isD1DeliveriesEnabled()) {
+    throw new Error('D1_DELIVERIES_ENABLED must be on before purging Neon delivery copies.');
+  }
+
+  const parity = await verifyDeliveriesD1Parity();
+  if (!parity.inSync) {
+    throw new Error(
+      `Parity check failed before Neon purge: campaign_deliveries=${parity.campaignDeliveriesMatch}, campaign_clicks=${parity.campaignClicksMatch}, automation_deliveries=${parity.automationDeliveriesMatch}, automation_clicks=${parity.automationClicksMatch}`,
+    );
+  }
+
+  const { neonTableExists } = await import('@/lib/server/integrations/neon-legacy-tables');
+  const campaignDeliveries = (await neonTableExists('campaign_deliveries'))
+    ? await sql`DELETE FROM campaign_deliveries RETURNING id`
+    : [];
+  const campaignClicks = (await neonTableExists('campaign_clicks'))
+    ? await sql`DELETE FROM campaign_clicks RETURNING id`
+    : [];
+  const automationDeliveries = (await neonTableExists('automation_deliveries'))
+    ? await sql`DELETE FROM automation_deliveries RETURNING id`
+    : [];
+  const automationClicks = (await neonTableExists('automation_clicks'))
+    ? await sql`DELETE FROM automation_clicks RETURNING id`
+    : [];
+
+  return {
+    campaignDeliveriesDeleted: campaignDeliveries.length,
+    campaignClicksDeleted: campaignClicks.length,
+    automationDeliveriesDeleted: automationDeliveries.length,
+    automationClicksDeleted: automationClicks.length,
+  };
+};
+
 export const registerWebhookEvent = async (input: RegisterWebhookEventInput) => {
+  // Webhook idempotency is a short-lived dedup check, not durable business data.
+  // When Cloudflare KV is available we keep it entirely off Neon: Shopify sends
+  // thousands of webhooks/day (carts/update alone), and each Neon INSERT +
+  // ensureMerchant was keeping the database awake around the clock. A KV key with
+  // a 48h TTL covers Shopify's retry window at effectively zero DB cost.
+  const shopDomain = input.shopDomain.trim().toLowerCase();
+
+  const {
+    isCloudflareKvEnabled,
+    readKvJson,
+    writeKvJson,
+  } = await import('@/lib/server/cache/cloudflare-kv');
+
+  if (isCloudflareKvEnabled()) {
+    const key = `pe:wh:${shopDomain}:${input.topic}:${input.eventId}`;
+    try {
+      const existing = await readKvJson<{ at?: number }>(key);
+      if (existing) {
+        return false; // duplicate within the retry window
+      }
+      // 48h TTL comfortably covers Shopify's webhook retry schedule.
+      void writeKvJson(key, { at: Date.now() }, 48 * 60 * 60).catch(() => undefined);
+      return true;
+    } catch {
+      // KV hiccup — fall through to the durable Neon dedup below when available.
+    }
+  }
+
+  const { neonTableExists } = await import('@/lib/server/integrations/neon-legacy-tables');
+  if (!(await neonTableExists('webhook_events'))) {
+    return true;
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
 

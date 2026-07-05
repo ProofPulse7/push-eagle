@@ -248,6 +248,41 @@ export const d1GetVariantsByInventoryItem = async (
   }));
 };
 
+export const d1CountVariants = async (shopDomain?: string): Promise<number> => {
+  await ensureD1CatalogSchema();
+
+  const rows = shopDomain
+    ? await runD1Query(
+        `SELECT COUNT(*) AS count FROM shopify_product_variants WHERE shop_domain = ?`,
+        [shopDomain],
+      )
+    : await runD1Query(`SELECT COUNT(*) AS count FROM shopify_product_variants`);
+
+  const first = (rows as Array<Record<string, unknown>>)[0];
+  return first ? Number(first.count ?? 0) : 0;
+};
+
+export const d1ListAllVariantKeys = async (): Promise<Array<{ shopDomain: string; variantId: string }>> => {
+  await ensureD1CatalogSchema();
+
+  const rows = await runD1Query(
+    `SELECT shop_domain, variant_id FROM shopify_product_variants`,
+  );
+
+  return (rows as Array<Record<string, unknown>>).map((row) => ({
+    shopDomain: String(row.shop_domain ?? ''),
+    variantId: String(row.variant_id ?? ''),
+  })).filter((row) => row.shopDomain && row.variantId);
+};
+
+export const d1DeleteVariant = async (shopDomain: string, variantId: string) => {
+  await ensureD1CatalogSchema();
+  await runD1Query(
+    `DELETE FROM shopify_product_variants WHERE shop_domain = ? AND variant_id = ?`,
+    [shopDomain, variantId],
+  );
+};
+
 export const d1UpdateVariantAvailabilityByInventoryItem = async (input: {
   shopDomain: string;
   inventoryItemId: string;

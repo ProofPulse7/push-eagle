@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
 import { deferAfterResponse } from '@/lib/server/defer-after-response';
 import { recordSubscriberActivity, registerWebhookEvent } from '@/lib/server/data/store';
+import { shouldCollectEventType } from '@/lib/server/automation/collection-gate';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getCustomerExternalId } from '@/lib/server/storefront-identity';
 
@@ -66,6 +67,13 @@ export async function POST(request: Request) {
     const shopDomain = parseShopDomain(request.headers.get('x-shopify-shop-domain'));
     const eventId = request.headers.get('x-shopify-event-id');
     const topic = request.headers.get('x-shopify-topic') || 'checkouts/update';
+
+    // Collection gate FIRST: only process abandoned-checkout signals when the
+    // Checkout Abandonment automation is active for this shop. Otherwise ack with
+    // no dedup / Neon / D1 work.
+    if (!(await shouldCollectEventType(shopDomain, 'checkout_start'))) {
+      return NextResponse.json({ ok: true, shopDomain, skipped: 'checkout_automation_inactive' });
+    }
 
     if (eventId) {
       const accepted = await registerWebhookEvent({

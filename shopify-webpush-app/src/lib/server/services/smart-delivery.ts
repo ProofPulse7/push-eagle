@@ -42,40 +42,36 @@ export const upsertSmartDeliveryMetrics = async (
   const { isD1AudienceReadActive, d1GetSubscriberIdByExternalId } = await import(
     '@/lib/server/integrations/d1-audience'
   );
+  const {
+    getCampaignClickTimes,
+    getCampaignDeliveryEngagement,
+    getCampaignSubscriberIdsForTiming,
+    getDeliveredTokenIdsForCampaign,
+  } = await import('@/lib/server/integrations/deliveries-data');
   const readActive = isD1AudienceReadActive();
 
   let clickRows: Array<Record<string, any>>;
   let statsRows: Array<Record<string, any>>;
 
   if (readActive) {
-    // The external_id -> subscriber_id translation lives in D1; clicks/deliveries
-    // stay on Neon and are filtered by the resolved id.
     const subscriberId = await d1GetSubscriberIdByExternalId(shopDomain, externalId);
+    const since90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     clickRows =
       subscriberId == null
         ? []
-        : await sql`
-            SELECT clicked_at
-            FROM campaign_clicks
-            WHERE shop_domain = ${shopDomain}
-              AND subscriber_id = ${subscriberId}
-              AND clicked_at >= NOW() - INTERVAL '90 days'
-            ORDER BY clicked_at DESC
-            LIMIT 100
-          `;
-    statsRows =
+        : await getCampaignClickTimes(shopDomain, subscriberId, since90);
+    const since180 = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+    const engagement =
       subscriberId == null
-        ? [{ total_deliveries: 0, clicks: 0, conversions: 0 }]
-        : await sql`
-            SELECT
-              COUNT(DISTINCT cd.id)::INT AS total_deliveries,
-              COUNT(DISTINCT CASE WHEN cd.clicked_at IS NOT NULL THEN cd.id END)::INT AS clicks,
-              COUNT(DISTINCT CASE WHEN cd.converted_at IS NOT NULL THEN cd.id END)::INT AS conversions
-            FROM campaign_deliveries cd
-            WHERE cd.shop_domain = ${shopDomain}
-              AND cd.subscriber_id = ${subscriberId}
-              AND cd.delivered_at >= NOW() - INTERVAL '180 days'
-          `;
+        ? { total_deliveries: 0, clicks: 0, conversions: 0 }
+        : await getCampaignDeliveryEngagement(shopDomain, subscriberId, since180);
+    statsRows = [
+      {
+        total_deliveries: engagement.total_deliveries,
+        clicks: engagement.clicks,
+        conversions: engagement.conversions,
+      },
+    ];
   } else {
     // Fetch recent clicks for this subscriber
     clickRows = await sql`
@@ -223,14 +219,8 @@ export const optimizeCampaignDeliveryTiming = async (
   let rows: Array<{ optimal_send_hour: number | null; count: number }>;
 
   if (isD1AudienceReadActive()) {
-    // cd (Neon) -> subscriber external_id (D1) -> sdm.optimal_send_hour (Neon).
-    const [deliveryRows, metricRows] = await Promise.all([
-      sql`
-        SELECT DISTINCT subscriber_id
-        FROM campaign_deliveries
-        WHERE campaign_id = ${campaignId}
-          AND subscriber_id IS NOT NULL
-      `,
+    const [subscriberIds, metricRows] = await Promise.all([
+      getCampaignSubscriberIdsForTiming(campaignId),
       sql`
         SELECT external_id, optimal_send_hour
         FROM smart_delivery_metrics
@@ -238,10 +228,6 @@ export const optimizeCampaignDeliveryTiming = async (
           AND optimal_send_hour IS NOT NULL
       `,
     ]);
-
-    const subscriberIds = deliveryRows
-      .map((row) => Number(row.subscriber_id))
-      .filter((id) => Number.isFinite(id));
     const externalIdById = await d1GetExternalIdsBySubscriberIds(subscriberIds);
     const hourByExternalId = new Map<string, number>();
     for (const row of metricRows) {

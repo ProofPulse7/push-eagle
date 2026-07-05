@@ -18,7 +18,7 @@ export const fetchDashboardSummary = async (shop: string): Promise<DashboardSumm
     fetchJsonWithShop<Record<string, unknown>>('/api/settings/overview', shop),
     fetchJsonWithShop<Record<string, unknown>>('/api/campaigns/stats', shop),
     fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
-    fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=0', shop),
+    fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=1', shop),
     fetchJsonWithShop<{ totals?: Record<string, unknown> }>('/api/automations/overview', shop),
   ]);
 

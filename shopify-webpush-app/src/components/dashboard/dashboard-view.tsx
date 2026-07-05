@@ -37,7 +37,8 @@ export function DashboardView() {
   const campaignRevenueCents = Number(campaignStats.revenueCents ?? 0);
   const automationRevenueCents = Number(automationTotals.revenueCents ?? 0);
   const revenueCents = campaignRevenueCents + automationRevenueCents;
-  const impressionsUsed = Number(billing.impressionsUsed ?? campaignStats.impressions ?? 0);
+  const billingImpressions = Number(billing.impressionsUsed ?? 0);
+  const impressionsUsed = billingImpressions;
   const impressionLimit = Number(billing.impressionLimit ?? BASIC_PLAN.impressions);
   const impressionsRemaining = Math.max(0, impressionLimit - impressionsUsed);
   const totalSubscribers = Number(

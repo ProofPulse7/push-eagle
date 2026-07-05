@@ -224,13 +224,15 @@ export const d1GetDistinctCustomerTags = async (
     .slice(0, limit);
 };
 
-export const d1CountCustomers = async (shopDomain: string): Promise<number> => {
+export const d1CountCustomers = async (shopDomain?: string): Promise<number> => {
   await ensureD1CustomersSchema();
 
-  const rows = await runD1Query(
-    `SELECT COUNT(*) AS count FROM shopify_customers WHERE shop_domain = ?`,
-    [shopDomain],
-  );
+  const rows = shopDomain
+    ? await runD1Query(
+        `SELECT COUNT(*) AS count FROM shopify_customers WHERE shop_domain = ?`,
+        [shopDomain],
+      )
+    : await runD1Query(`SELECT COUNT(*) AS count FROM shopify_customers`);
 
   const first = (rows as Array<Record<string, unknown>>)[0];
   return first ? Number(first.count ?? 0) : 0;

@@ -130,6 +130,8 @@ export const sendCampaignNotification = async (input: SendNotificationInput): Pr
   // Create delivery record in campaign_deliveries table
   const deliveryId = randomUUID();
 
+  const { insertCampaignDelivery } = await import('@/lib/server/integrations/deliveries-data');
+
   // Batch insert delivery records (avoid individual inserts for speed)
   const chunkSize = 1000;
   for (let i = 0; i < totalDeliveries; i += chunkSize) {
@@ -137,17 +139,13 @@ export const sendCampaignNotification = async (input: SendNotificationInput): Pr
 
     await Promise.all(
       chunk.map((token) =>
-        sql`
-          INSERT INTO campaign_deliveries (
-            campaign_id,
-            shop_domain,
-            subscriber_id,
-            token_id,
-            delivered_at
-          )
-          VALUES (${input.campaignId}, ${input.shopDomain}, NULL, ${token.tokenId}, NOW())
-          ON CONFLICT DO NOTHING
-        `,
+        insertCampaignDelivery({
+          campaignId: input.campaignId,
+          shopDomain: input.shopDomain,
+          subscriberId: token.tokenId,
+          tokenId: token.tokenId,
+          deliveredAt: new Date(),
+        }),
       ),
     );
   }
@@ -267,11 +265,7 @@ export const getCampaignDeliveryStats = async (campaignId: string): Promise<Noti
 export const cancelCampaignDelivery = async (campaignId: string) => {
   const sql = getNeonSql();
 
-  await sql`
-    UPDATE campaign_deliveries
-    SET delivered_at = NULL
-    WHERE campaign_id = ${campaignId}
-      AND clicked_at IS NULL
-      AND converted_at IS NULL
-  `;
+  const { cancelCampaignDeliveries } = await import('@/lib/server/integrations/deliveries-data');
+
+  await cancelCampaignDeliveries(campaignId);
 };

@@ -1,6 +1,7 @@
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { BASIC_PLAN, getBillingPeriodEnd, getBillingPeriodStart, type PlanKey } from '@/lib/server/billing/plans';
 import { ensureMerchantAccount } from '@/lib/server/data/store';
+import { countImpressionsForBillingPeriod } from '@/lib/server/integrations/deliveries-data';
 
 export type MerchantBillingRecord = {
   shopDomain: string;
@@ -44,25 +45,7 @@ export const countImpressionsForPeriod = async (
   periodEnd: Date,
 ) => {
   await ensureBillingSchema(shopDomain);
-  const sql = getNeonSql();
-  const rows = await sql`
-    SELECT
-      (
-        SELECT COUNT(*)::BIGINT
-        FROM campaign_deliveries
-        WHERE shop_domain = ${shopDomain}
-          AND delivered_at >= ${periodStart}
-          AND delivered_at < ${periodEnd}
-      ) +
-      (
-        SELECT COUNT(*)::BIGINT
-        FROM automation_deliveries
-        WHERE shop_domain = ${shopDomain}
-          AND delivered_at >= ${periodStart}
-          AND delivered_at < ${periodEnd}
-      ) AS total
-  `;
-  return Number(rows[0]?.total ?? 0);
+  return countImpressionsForBillingPeriod(shopDomain, periodStart, periodEnd);
 };
 
 export const incrementBillingImpressions = async (shopDomain: string, delta: number) => {

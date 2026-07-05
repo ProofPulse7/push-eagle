@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { getCampaignsDueToSend, startCampaignDelivery, markCampaignSent } from '@/lib/server/automation/campaign-scheduler';
 import { resolveCampaignAudience } from '@/lib/server/data/store';
 import { getSubscribersByOptimalHour } from '@/lib/server/automation/smart-delivery';
-import { getNeonSql } from '@/lib/integrations/database/neon';
+import { insertCampaignDelivery } from '@/lib/server/integrations/deliveries-data';
 import { getFirebaseAdminMessaging } from '@/lib/integrations/firebase/admin';
 
 export const runtime = 'nodejs';
@@ -50,7 +50,6 @@ export async function GET(request: Request) {
 
         // Send notifications
         const messaging = getFirebaseAdminMessaging();
-        const sql = getNeonSql();
 
         // Map fcm_token -> {subscriber_id, token_id} from the resolved audience so we
         // can record deliveries without re-reading subscriber_tokens from Neon (that
@@ -102,25 +101,13 @@ export async function GET(request: Request) {
               // Record delivery (async, don't wait). Ids come from the resolved
               // audience (D1-aware) so this works in both Neon and d1_only modes.
               const ids = idsByToken.get(token);
-              sql`
-                INSERT INTO campaign_deliveries (
-                  campaign_id,
-                  shop_domain,
-                  subscriber_id,
-                  token_id,
-                  delivered_at
-                )
-                VALUES (
-                  ${campaign.id},
-                  ${campaign.shop_domain},
-                  ${ids?.subscriberId ?? null},
-                  ${ids?.tokenId ?? null},
-                  NOW()
-                )
-                ON CONFLICT DO NOTHING
-              `.catch(() => {
-                // Silently ignore conflicts
-              });
+              void insertCampaignDelivery({
+                campaignId: campaign.id,
+                shopDomain: campaign.shop_domain,
+                subscriberId: ids?.subscriberId ?? 0,
+                tokenId: ids?.tokenId ?? 0,
+                deliveredAt: new Date(),
+              }).catch(() => undefined);
 
               totalSent++;
             } catch {

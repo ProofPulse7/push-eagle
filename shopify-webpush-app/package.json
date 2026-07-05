@@ -9,6 +9,7 @@
     "db:bootstrap": "node scripts/bootstrap-neon.mjs",
     "db:init-schema": "tsx scripts/init-schema-on-neon.ts",
     "db:cleanup-merchants": "node scripts/cleanup-merchant-tables.mjs",
+    "db:drop-legacy-tables": "node scripts/drop-neon-legacy-tables.mjs --production",
     "db:reset-all": "node scripts/reset-all-data.mjs --confirm",
     "kv:clear": "node scripts/clear-kv-cache.mjs",
     "d1:init": "node scripts/init-d1-events.mjs",
