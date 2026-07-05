@@ -1,11 +1,3 @@
-.pe-prompt[hidden] {
-  display: none !important;
-}
-
-.pe-prompt:not([hidden]) {
-  display: block;
-}
-
 /* Push Eagle — Push Notification Opt-In Widget */
 .pe-prompt {
   position: fixed;

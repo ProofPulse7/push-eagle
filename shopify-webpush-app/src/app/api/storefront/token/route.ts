@@ -65,10 +65,29 @@ const getCorsOrigin = (origin: string | null) => {
   return appOrigin || '*';
 };
 
-import {
-  detectBrowserFromUserAgent,
-  detectPlatformFromUserAgent,
-} from '@/lib/shared/browser-detection';
+const detectBrowserFromUserAgent = (userAgent: string | null) => {
+  const ua = String(userAgent || '').toLowerCase();
+  if (!ua) return 'unknown';
+  if (ua.includes('edg/')) return 'edge';
+  if (ua.includes('opr/') || ua.includes('opera')) return 'opera';
+  if (ua.includes('samsungbrowser/')) return 'samsung';
+  if (ua.includes('firefox/') || ua.includes('fxios/')) return 'firefox';
+  if (ua.includes('chrome/') || ua.includes('crios/')) return 'chrome';
+  if (ua.includes('safari/')) return 'safari';
+  return 'unknown';
+};
+
+const detectPlatformFromUserAgent = (userAgent: string | null) => {
+  const ua = String(userAgent || '').toLowerCase();
+  if (!ua) return 'unknown';
+  if (ua.includes('android')) return 'android';
+  if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ipod') || ua.includes('ios')) return 'ios';
+  if (ua.includes('windows')) return 'windows';
+  if (ua.includes('mac os') || ua.includes('macintosh')) return 'macos';
+  if (ua.includes('cros')) return 'chromeos';
+  if (ua.includes('linux')) return 'linux';
+  return 'unknown';
+};
 
 export async function OPTIONS(request: Request) {
   const origin = request.headers.get('origin');
