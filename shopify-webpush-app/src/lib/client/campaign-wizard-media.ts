@@ -1,5 +1,14 @@
 'use client';
 
+import {
+  getCachedUploadedUrl,
+  resolveMediaSourceForLaunch,
+  scheduleBackgroundMediaUpload,
+} from '@/lib/client/campaign-background-upload';
+import {
+  compressDataUrl,
+  type ImageCompressProfile,
+} from '@/lib/client/image-compress';
 import type { LaunchMediaCache } from '@/lib/client/campaign-launch-media-cache';
 
 type WizardMediaSlot = keyof LaunchMediaCache;
@@ -19,7 +28,13 @@ const blobToDataUrl = (blob: Blob) =>
     reader.readAsDataURL(blob);
   });
 
-export const readPersistableImageSource = async (value: string | null | undefined): Promise<string | null> => {
+const profileForSlot = (slot: WizardMediaSlot): ImageCompressProfile =>
+  slot === 'iconUrl' ? 'logo' : 'hero';
+
+export const readPersistableImageSource = async (
+  value: string | null | undefined,
+  profile: ImageCompressProfile = 'hero',
+): Promise<string | null> => {
   const trimmed = value?.trim();
   if (!trimmed) {
     return null;
@@ -30,14 +45,15 @@ export const readPersistableImageSource = async (value: string | null | undefine
   }
 
   if (trimmed.startsWith('data:image/')) {
-    return trimmed;
+    return compressDataUrl(trimmed, profile);
   }
 
   if (trimmed.startsWith('blob:')) {
     try {
       const response = await fetch(trimmed);
       const blob = await response.blob();
-      return blobToDataUrl(blob);
+      const dataUrl = await blobToDataUrl(blob);
+      return compressDataUrl(dataUrl, profile);
     } catch {
       return null;
     }
@@ -65,7 +81,11 @@ const uploadDataUrl = async (shopDomain: string, dataUrl: string): Promise<strin
   return String(payload.asset.url);
 };
 
-const resolveUploadedUrl = async (shopDomain: string, value: string | null | undefined): Promise<string | null> => {
+const resolveUploadedUrl = async (
+  shopDomain: string,
+  value: string | null | undefined,
+  profile: ImageCompressProfile = 'hero',
+): Promise<string | null> => {
   const trimmed = value?.trim();
   if (!trimmed) {
     return null;
@@ -75,7 +95,17 @@ const resolveUploadedUrl = async (shopDomain: string, value: string | null | und
     return trimmed;
   }
 
-  const dataUrl = await readPersistableImageSource(trimmed);
+  const cached = getCachedUploadedUrl(shopDomain, trimmed);
+  if (cached) {
+    return cached;
+  }
+
+  const launched = await resolveMediaSourceForLaunch(shopDomain, trimmed, profile);
+  if (launched) {
+    return launched;
+  }
+
+  const dataUrl = await readPersistableImageSource(trimmed, profile);
   if (!dataUrl?.startsWith('data:image/')) {
     return null;
   }
@@ -226,7 +256,7 @@ export const prepareWizardLaunchMedia = async (
   const sources: Partial<Record<WizardMediaSlot, string>> = {};
   const uploadCache = new Map<string, string | null>();
 
-  const resolveSource = async (source: string) => {
+  const resolveSource = async (source: string, slot: WizardMediaSlot) => {
     const trimmed = source.trim();
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
       return trimmed;
@@ -236,7 +266,7 @@ export const prepareWizardLaunchMedia = async (
       return uploadCache.get(trimmed) ?? null;
     }
 
-    const uploaded = await resolveUploadedUrl(shopDomain, trimmed);
+    const uploaded = await resolveUploadedUrl(shopDomain, trimmed, profileForSlot(slot));
     uploadCache.set(trimmed, uploaded);
     return uploaded;
   };
@@ -256,7 +286,7 @@ export const prepareWizardLaunchMedia = async (
       return;
     }
 
-    resolved[slot] = await resolveSource(trimmed);
+    resolved[slot] = await resolveSource(trimmed, slot);
   });
 
   await Promise.all(tasks);
@@ -282,3 +312,19 @@ export const fileToDataUrl = (file: File) =>
     reader.onerror = () => reject(new Error('Failed to read image file.'));
     reader.readAsDataURL(file);
   });
+
+export const schedulePersistableImageUpload = (
+  shopDomain: string | null | undefined,
+  source: string | null | undefined,
+  profile: ImageCompressProfile = 'hero',
+) => {
+  if (!shopDomain?.trim() || !source?.trim()) {
+    return;
+  }
+
+  if (source.startsWith('http://') || source.startsWith('https://')) {
+    return;
+  }
+
+  void scheduleBackgroundMediaUpload(shopDomain, source, profile).catch(() => undefined);
+};

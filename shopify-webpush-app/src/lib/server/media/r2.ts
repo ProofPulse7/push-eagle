@@ -119,3 +119,19 @@ export const deleteImageFromR2 = async (objectKey: string) => {
     Key: objectKey,
   }));
 };
+
+export const replaceImageInR2 = async (input: {
+  objectKey: string;
+  contentType: string;
+  bytes: Buffer;
+  cacheControl?: string;
+}) => {
+  const config = getR2Config();
+  await getClient().send(new PutObjectCommand({
+    Bucket: config.bucketName,
+    Key: input.objectKey,
+    Body: input.bytes,
+    ContentType: input.contentType,
+    CacheControl: input.cacheControl ?? 'public, max-age=31536000, immutable',
+  }));
+};

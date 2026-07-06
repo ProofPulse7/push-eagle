@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { createMediaAsset, pruneOrphanedMediaAssets } from '@/lib/server/data/store';
+import {
+  createMediaAsset,
+  optimizeOversizedMediaAssets,
+  pruneOrphanedMediaAssets,
+} from '@/lib/server/data/store';
+import { compressImageBytes } from '@/lib/server/media/image-compress';
 import { uploadImageToR2 } from '@/lib/server/media/r2';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
@@ -21,9 +26,8 @@ const parseDataUrl = (dataUrl: string) => {
 
   const contentType = match[1];
   const dataBase64 = match[2];
-  const byteSize = Math.floor((dataBase64.length * 3) / 4);
 
-  return { contentType, dataBase64, byteSize };
+  return { contentType, dataBase64 };
 };
 
 export async function POST(request: Request) {
@@ -33,25 +37,24 @@ export async function POST(request: Request) {
     const body = schema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
 
-    const { contentType, dataBase64, byteSize } = parseDataUrl(body.dataUrl);
-    if (byteSize > 2 * 1024 * 1024) {
-      return NextResponse.json({ ok: false, error: 'Image too large. Max size is 2MB.' }, { status: 413 });
-    }
+    const { contentType, dataBase64 } = parseDataUrl(body.dataUrl);
+    const rawBytes = Buffer.from(dataBase64, 'base64');
+    const compressed = await compressImageBytes(rawBytes, contentType, 'hero');
 
-    const bytes = Buffer.from(dataBase64, 'base64');
     const uploaded = await uploadImageToR2({
       shopDomain,
-      contentType,
-      bytes,
+      contentType: compressed.contentType,
+      bytes: compressed.bytes,
     });
     const asset = await createMediaAsset({
       shopDomain,
-      contentType,
+      contentType: compressed.contentType,
       objectKey: uploaded.objectKey,
       publicUrl: uploaded.publicUrl,
     });
 
     await pruneOrphanedMediaAssets(shopDomain, 60).catch(() => undefined);
+    await optimizeOversizedMediaAssets(shopDomain, 3).catch(() => undefined);
 
     return NextResponse.json({
       ok: true,

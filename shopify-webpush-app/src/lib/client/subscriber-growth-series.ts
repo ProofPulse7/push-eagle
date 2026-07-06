@@ -52,7 +52,19 @@ export const buildSubscriberGrowthChartData = (
     return { data: [], total: 0 };
   }
 
-  const rawPoints = Array.isArray(payload.points) ? payload.points : [];
+  const rawPoints = (Array.isArray(payload.points) ? payload.points : [])
+    .map((item) => ({
+      date: String(item?.date ?? ''),
+      subscribers: Number(item?.subscribers ?? 0),
+    }))
+    .filter((item) => {
+      if (!item.date) {
+        return false;
+      }
+      const fromKey = format(startOfDay(from), 'yyyy-MM-dd');
+      const toKey = format(endOfDay(to), 'yyyy-MM-dd');
+      return item.date >= fromKey && item.date <= toKey;
+    });
   const chartFrom = typeof payload.from === 'string' ? new Date(payload.from) : from;
   const chartTo = typeof payload.to === 'string' ? new Date(payload.to) : to;
 
@@ -68,12 +80,12 @@ export const buildSubscriberGrowthChartData = (
   if (rangeDays > 90) {
     const monthly = new Map<string, number>();
     for (const item of rawPoints) {
-      const day = item?.date ? new Date(`${item.date}T00:00:00.000Z`) : null;
+      const day = item.date ? new Date(`${item.date}T00:00:00.000Z`) : null;
       if (!day || Number.isNaN(day.getTime())) {
         continue;
       }
       const label = format(day, 'MMM yy');
-      monthly.set(label, (monthly.get(label) ?? 0) + Number(item?.subscribers ?? 0));
+      monthly.set(label, (monthly.get(label) ?? 0) + item.subscribers);
     }
 
     const interval = eachMonthOfInterval({ start: chartFrom, end: chartTo });
@@ -92,21 +104,20 @@ export const buildSubscriberGrowthChartData = (
   }
 
   const normalized = rawPoints.map((item) => {
-    const parsedDate = item?.date ? new Date(`${item.date}T00:00:00.000Z`) : null;
+    const parsedDate = item.date ? new Date(`${item.date}T00:00:00.000Z`) : null;
     return {
       date:
         parsedDate && !Number.isNaN(parsedDate.getTime())
           ? format(parsedDate, 'MMM d')
           : 'Unknown',
-      subscribers: Number(item?.subscribers ?? 0),
+      subscribers: item.subscribers,
     };
   });
 
+  const total = normalized.reduce((sum, item) => sum + item.subscribers, 0);
+
   return {
     data: normalized,
-    total: Number(
-      payload.totalNewSubscribers ??
-        normalized.reduce((sum, item) => sum + item.subscribers, 0),
-    ),
+    total,
   };
 };

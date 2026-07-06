@@ -38,16 +38,19 @@ export function SubscriberGrowthChart({
   showDatePicker = false,
   fullWidth = false,
   defaultDays = 7,
+  defaultRange = 'period',
 }: {
   showDatePicker?: boolean;
   fullWidth?: boolean;
   defaultDays?: number;
+  /** `all-time` = full history (subscribers page default). `period` = rolling window (dashboard). */
+  defaultRange?: 'all-time' | 'period';
 }) {
     const [date, setDate] = useState<DateRange | undefined>(undefined);
     const [chartType, setChartType] = useState<'area' | 'bar'>('area');
 
-    const { queryFrom, queryTo, chartFrom, chartTo, periodLabel } = useMemo(() => {
-        const defaultRange = () => {
+    const { queryFrom, queryTo, chartFrom, chartTo, periodLabel, periodSummaryLabel } = useMemo(() => {
+        const periodWindow = () => {
             const toDate = endOfDay(new Date());
             const fromDate = startOfDay(new Date(Date.now() - defaultDays * 24 * 60 * 60 * 1000));
             return {
@@ -56,31 +59,44 @@ export function SubscriberGrowthChart({
                 chartFrom: fromDate,
                 chartTo: toDate,
                 periodLabel: `the last ${defaultDays} days`,
+                periodSummaryLabel: `Last ${defaultDays} days`,
             };
         };
 
         if (showDatePicker) {
-            if (!date?.from) {
-                return defaultRange();
+            if (date?.from) {
+                const range = resolveAnalyticsDateRange(date);
+                return {
+                    queryFrom: range.from,
+                    queryTo: range.to,
+                    chartFrom: range.from,
+                    chartTo: range.to,
+                    periodLabel: formatCampaignDateRangeLabel(date),
+                    periodSummaryLabel: formatCampaignDateRangeLabel(date),
+                };
             }
 
-            const range = resolveAnalyticsDateRange(date);
-            return {
-                queryFrom: range.from,
-                queryTo: range.to,
-                chartFrom: range.from,
-                chartTo: range.to,
-                periodLabel: formatCampaignDateRangeLabel(date),
-            };
+            if (defaultRange === 'all-time') {
+                return {
+                    queryFrom: undefined,
+                    queryTo: undefined,
+                    chartFrom: undefined,
+                    chartTo: undefined,
+                    periodLabel: 'all time',
+                    periodSummaryLabel: 'All time',
+                };
+            }
+
+            return periodWindow();
         }
 
-        return defaultRange();
-    }, [showDatePicker, date?.from?.getTime(), date?.to?.getTime(), defaultDays]);
+        return periodWindow();
+    }, [showDatePicker, date?.from?.getTime(), date?.to?.getTime(), defaultDays, defaultRange]);
 
     const { data: payload, isLoading } = useSubscriberGrowth(queryFrom, queryTo);
 
-    const resolvedChartFrom = chartFrom;
-    const resolvedChartTo = chartTo;
+    const resolvedChartFrom = chartFrom ?? (payload?.from ? new Date(payload.from) : startOfDay(new Date()));
+    const resolvedChartTo = chartTo ?? (payload?.to ? new Date(payload.to) : endOfDay(new Date()));
 
     const chartData = useMemo(
         () => buildSubscriberGrowthChartData(payload, resolvedChartFrom, resolvedChartTo),
@@ -88,9 +104,6 @@ export function SubscriberGrowthChart({
     );
     const xAxisProps = getXAxisProps(chartData.data.length);
     const showSkeleton = isLoading && !payload;
-    const periodSummaryLabel = showDatePicker
-      ? formatCampaignDateRangeLabel(date)
-      : `Last ${defaultDays} days`;
 
     return (
         <Card className={fullWidth ? 'border-border/80 shadow-sm' : 'border-border/80'}>

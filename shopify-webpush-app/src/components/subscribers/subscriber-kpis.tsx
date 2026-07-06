@@ -22,7 +22,7 @@ export function SubscriberKpis() {
       title: 'Total Subscribers',
       value: stats.totalSubscribers.toLocaleString(),
       icon: Users,
-      description: 'All-time active notification subscribers',
+      description: 'Active notification subscribers (all time)',
     },
     {
       title: 'New Subscribers (last 7 days)',

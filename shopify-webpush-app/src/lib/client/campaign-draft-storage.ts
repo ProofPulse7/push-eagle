@@ -55,9 +55,9 @@ export const readCampaignDraft = (shop: string): CampaignDraftSnapshot | null =>
   }
 };
 
-export const writeCampaignDraft = (shop: string, draft: CampaignDraftSnapshot) => {
+export const writeCampaignDraft = (shop: string, draft: CampaignDraftSnapshot): boolean => {
   if (typeof window === 'undefined' || !shop.trim()) {
-    return;
+    return false;
   }
 
   try {
@@ -66,8 +66,9 @@ export const writeCampaignDraft = (shop: string, draft: CampaignDraftSnapshot) =
       JSON.stringify({ ...draft, updatedAt: Date.now() }),
     );
     sessionStorage.setItem(CAMPAIGN_WIZARD_ACTIVE_KEY, '1');
+    return true;
   } catch {
-    // Ignore quota errors.
+    return false;
   }
 };
 

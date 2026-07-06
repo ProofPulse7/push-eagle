@@ -19,7 +19,18 @@ import { LogoUploaderEditor } from './editor-parts/logo-uploader-editor';
 import { ImageEditorSheet } from './editor-parts/image-editor-sheet';
 import { ScrollArea } from '../ui/scroll-area';
 import { ComposerActions } from './editor-parts/composer-actions';
-import { fileToDataUrl } from '@/lib/client/campaign-wizard-media';
+import {
+  schedulePersistableImageUpload,
+} from '@/lib/client/campaign-wizard-media';
+import {
+  compressDataUrl,
+  compressImageFile,
+  createInstantPreviewUrl,
+  revokePreviewUrl,
+  type ImageCompressProfile,
+} from '@/lib/client/image-compress';
+import { scheduleBackgroundMediaUpload } from '@/lib/client/campaign-background-upload';
+import { useShopDomain } from '@/hooks/use-shop-domain';
 
 // Basic URL validation
 const isValidUrl = (url: string) => {
@@ -38,6 +49,7 @@ const isValidUrl = (url: string) => {
 };
 
 export function Composer() {
+    const shopDomain = useShopDomain();
     const { 
         title, setTitle, 
         message, setMessage, 
@@ -100,41 +112,73 @@ export function Composer() {
         reader.readAsDataURL(file);
     };
 
+    const applyCompressedImage = (
+        imageType: 'windows' | 'mac' | 'android' | 'logo',
+        nextPreview: string,
+        nextFile: File | null,
+        originalPreview: string,
+    ) => {
+        const nextValue = {
+            file: nextFile,
+            preview: nextPreview,
+            originalPreview,
+        };
+
+        if (imageType === 'logo') {
+            setLogo(nextValue);
+            return;
+        }
+
+        const hasExistingHero = Boolean(windowsHero.preview || macHero.preview || androidHero.preview);
+        if (!hasExistingHero) {
+            setWindowsHero(nextValue);
+            setMacHero(nextValue);
+            setAndroidHero(nextValue);
+            return;
+        }
+
+        if (imageType === 'windows') {
+            setWindowsHero(nextValue);
+        } else if (imageType === 'mac') {
+            setMacHero(nextValue);
+        } else if (imageType === 'android') {
+            setAndroidHero(nextValue);
+        }
+    };
+
     const handleImageUpload = (file: File | undefined, imageType: 'windows' | 'mac' | 'android' | 'logo') => {
         if (!file) return;
 
-        void fileToDataUrl(file).then((previewUrl) => {
-            if (imageType === 'logo') {
-                setLogo({ file, preview: previewUrl, originalPreview: previewUrl });
-                return;
-            }
+        const profile: ImageCompressProfile = imageType === 'logo' ? 'logo' : 'hero';
+        const instantPreview = createInstantPreviewUrl(file);
+        applyCompressedImage(imageType, instantPreview, file, instantPreview);
 
-            const newImageValue = { file, preview: previewUrl, originalPreview: previewUrl };
-            const hasExistingHero = Boolean(windowsHero.preview || macHero.preview || androidHero.preview);
-
-            if (!hasExistingHero) {
-                setWindowsHero(newImageValue);
-                setMacHero(newImageValue);
-                setAndroidHero(newImageValue);
+        if (imageType !== 'logo') {
+            if (!windowsHero.preview && !macHero.preview && !androidHero.preview) {
                 checkImageDimensions(file, 'windows');
                 checkImageDimensions(file, 'mac');
                 checkImageDimensions(file, 'android');
-                return;
+            } else {
+                checkImageDimensions(file, imageType);
             }
+        }
 
-            if (imageType === 'windows') {
-                setWindowsHero(newImageValue);
-                checkImageDimensions(file, 'windows');
-            }
+        void compressImageFile(file, profile).then(async (compressed) => {
+            revokePreviewUrl(instantPreview);
+            applyCompressedImage(
+                imageType,
+                compressed.blobUrl,
+                compressed.file,
+                compressed.dataUrl,
+            );
+            schedulePersistableImageUpload(shopDomain, compressed.dataUrl, profile);
 
-            if (imageType === 'mac') {
-                setMacHero(newImageValue);
-                checkImageDimensions(file, 'mac');
-            }
-
-            if (imageType === 'android') {
-                setAndroidHero(newImageValue);
-                checkImageDimensions(file, 'android');
+            if (shopDomain) {
+                const uploaded = await scheduleBackgroundMediaUpload(shopDomain, compressed.dataUrl, profile);
+                if (uploaded) {
+                    revokePreviewUrl(compressed.blobUrl);
+                    applyCompressedImage(imageType, uploaded, compressed.file, uploaded);
+                }
             }
         }).catch(() => undefined);
     };
@@ -145,24 +189,42 @@ export function Composer() {
             mac: setShowMacWarning,
             android: setShowAndroidWarning,
         };
+        const profile: ImageCompressProfile = type === 'logo' ? 'logo' : 'hero';
 
-        if (type === 'logo') {
-            setLogo({ ...logo, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
-            return;
-        }
+        const applyCropPreview = (preview: string) => {
+            if (type === 'logo') {
+                setLogo({ ...logo, preview, originalPreview: preview, file: null });
+                return;
+            }
 
-        if (type === 'windows') {
-            setWindowsHero({ ...windowsHero, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
-        } else if (type === 'mac') {
-            setMacHero({ ...macHero, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
-        } else if (type === 'android') {
-            setAndroidHero({ ...androidHero, preview: croppedDataUrl, originalPreview: croppedDataUrl, file: null });
-        }
+            if (type === 'windows') {
+                setWindowsHero({ ...windowsHero, preview, originalPreview: preview, file: null });
+            } else if (type === 'mac') {
+                setMacHero({ ...macHero, preview, originalPreview: preview, file: null });
+            } else if (type === 'android') {
+                setAndroidHero({ ...androidHero, preview, originalPreview: preview, file: null });
+            }
 
-        const warningSetter = warningSetters[type as keyof typeof warningSetters];
-        if (warningSetter) {
-            warningSetter(false); // Hide warning after crop
-        }
+            const warningSetter = warningSetters[type as keyof typeof warningSetters];
+            if (warningSetter) {
+                warningSetter(false);
+            }
+        };
+
+        applyCropPreview(croppedDataUrl);
+        schedulePersistableImageUpload(shopDomain, croppedDataUrl, profile);
+
+        void compressDataUrl(croppedDataUrl, profile).then(async (compressedDataUrl) => {
+            applyCropPreview(compressedDataUrl);
+            schedulePersistableImageUpload(shopDomain, compressedDataUrl, profile);
+
+            if (shopDomain) {
+                const uploaded = await scheduleBackgroundMediaUpload(shopDomain, compressedDataUrl, profile);
+                if (uploaded) {
+                    applyCropPreview(uploaded);
+                }
+            }
+        }).catch(() => undefined);
     };
 
     useEffect(() => {

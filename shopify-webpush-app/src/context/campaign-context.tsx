@@ -21,6 +21,7 @@ import {
   clearWizardLaunchMediaCache,
   readPersistableImageSource,
 } from '@/lib/client/campaign-wizard-media';
+import { getCachedUploadedUrl } from '@/lib/client/campaign-background-upload';
 import {
   isCampaignWizardStep,
 } from '@/lib/client/campaign-wizard-path';
@@ -359,17 +360,30 @@ export function CampaignStateProvider({ children }: { children: ReactNode }) {
 
     const timer = window.setTimeout(() => {
       void (async () => {
-        const persistImage = async (image: ImageValue) => ({
-          file: null as File | null,
-          preview: await readPersistableImageSource(image.preview),
-          originalPreview: await readPersistableImageSource(image.originalPreview ?? image.preview),
-        });
+        const persistImage = async (image: ImageValue, profile: 'hero' | 'logo') => {
+          const cachedPreview = getCachedUploadedUrl(shop, image.preview);
+          const cachedOriginal = getCachedUploadedUrl(shop, image.originalPreview ?? image.preview);
+          if (cachedPreview || cachedOriginal) {
+            const preview = cachedPreview ?? cachedOriginal;
+            return {
+              file: null as File | null,
+              preview,
+              originalPreview: cachedOriginal ?? preview,
+            };
+          }
+
+          return {
+            file: null as File | null,
+            preview: await readPersistableImageSource(image.preview, profile),
+            originalPreview: await readPersistableImageSource(image.originalPreview ?? image.preview, profile),
+          };
+        };
 
         const [persistedWindowsHero, persistedMacHero, persistedAndroidHero, persistedLogo] = await Promise.all([
-          persistImage(windowsHero),
-          persistImage(macHero),
-          persistImage(androidHero),
-          persistImage(logo),
+          persistImage(windowsHero, 'hero'),
+          persistImage(macHero, 'hero'),
+          persistImage(androidHero, 'hero'),
+          persistImage(logo, 'logo'),
         ]);
 
         if (cancelled) {

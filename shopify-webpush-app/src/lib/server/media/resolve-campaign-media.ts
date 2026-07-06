@@ -1,5 +1,6 @@
 import { env } from '@/lib/config/env';
 import { createMediaAsset } from '@/lib/server/data/store';
+import { compressImageBytes } from '@/lib/server/media/image-compress';
 import { uploadImageToR2 } from '@/lib/server/media/r2';
 
 const appMediaBaseUrl = () =>
@@ -22,9 +23,8 @@ const parseDataUrl = (dataUrl: string) => {
 
   const contentType = match[1];
   const dataBase64 = match[2];
-  const byteSize = Math.floor((dataBase64.length * 3) / 4);
 
-  return { contentType, dataBase64, byteSize };
+  return { contentType, dataBase64 };
 };
 
 export const resolveServerCampaignMediaUrl = async (
@@ -44,20 +44,18 @@ export const resolveServerCampaignMediaUrl = async (
     return null;
   }
 
-  const { contentType, dataBase64, byteSize } = parseDataUrl(trimmed);
-  if (byteSize > 2 * 1024 * 1024) {
-    throw new Error('Image too large. Max size is 2MB.');
-  }
+  const { contentType, dataBase64 } = parseDataUrl(trimmed);
+  const rawBytes = Buffer.from(dataBase64, 'base64');
+  const compressed = await compressImageBytes(rawBytes, contentType, 'hero');
 
-  const bytes = Buffer.from(dataBase64, 'base64');
   const uploaded = await uploadImageToR2({
     shopDomain,
-    contentType,
-    bytes,
+    contentType: compressed.contentType,
+    bytes: compressed.bytes,
   });
   const asset = await createMediaAsset({
     shopDomain,
-    contentType,
+    contentType: compressed.contentType,
     objectKey: uploaded.objectKey,
     publicUrl: uploaded.publicUrl,
   });

@@ -33,7 +33,7 @@ export default function SubscribersPage() {
 
       <SubscriberKpis />
 
-      <SubscriberGrowthChart showDatePicker defaultDays={30} fullWidth />
+      <SubscriberGrowthChart showDatePicker defaultRange="all-time" fullWidth />
 
       <Card>
         <CardHeader>

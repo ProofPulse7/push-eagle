@@ -68,7 +68,7 @@ export function DashboardView() {
     {
       title: 'Total Subscribers',
       value: totalSubscribers.toLocaleString(),
-      hint: `All-time active notification subscribers · ${growthPercent > 0 ? '+' : ''}${growthPercent.toFixed(1)}% vs last 7 days`,
+      hint: `Active subscribers (all time) · ${growthPercent > 0 ? '+' : ''}${growthPercent.toFixed(1)}% new in last 7 days`,
       icon: Users,
       accent: 'text-violet-600 dark:text-violet-400',
     },

@@ -394,7 +394,10 @@ export function useSubscriberGrowth(from?: Date, to?: Date) {
   const { data: series, isLoading, isFetching } = useSubscriberGrowthSeries();
 
   const payload = useMemo(() => {
-    if (!series?.ok || !from || !to) {
+    if (!series?.ok) {
+      return series;
+    }
+    if (!from || !to) {
       return series;
     }
     return sliceSubscriberGrowthSeries(series, from, to);

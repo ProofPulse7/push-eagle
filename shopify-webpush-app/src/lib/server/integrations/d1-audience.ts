@@ -1417,9 +1417,13 @@ export const d1GetSubscriberGrowthCounts = async (
   await ensureD1AudienceSchema();
   const rows = await runD1Query(
     `
-      SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count
-      FROM subscribers
-      WHERE shop_domain = ? AND created_at >= ? AND created_at <= ?
+      SELECT substr(s.created_at, 1, 10) AS day, COUNT(DISTINCT s.id) AS count
+      FROM subscribers s
+      JOIN subscriber_tokens t ON t.subscriber_id = s.id AND t.shop_domain = s.shop_domain
+      WHERE s.shop_domain = ?
+        AND s.created_at >= ?
+        AND s.created_at <= ?
+        AND ${DELIVERABLE_TOKEN_PREDICATE}
       GROUP BY day
     `,
     [shopDomain, sinceIso, beforeIso],

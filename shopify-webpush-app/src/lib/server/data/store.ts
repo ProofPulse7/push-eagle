@@ -18,7 +18,8 @@ import {
   upsertCampaignDeliveryOptions,
   type CampaignDeliveryOptions,
 } from '@/lib/server/campaigns/delivery-options';
-import { deleteImageFromR2 } from '@/lib/server/media/r2';
+import { deleteImageFromR2, getImageFromR2, replaceImageInR2 } from '@/lib/server/media/r2';
+import { compressStoredImageBytes } from '@/lib/server/media/image-compress';
 import { pickCampaignBarImageUrl } from '@/lib/campaign-bar-image';
 
 type CreateCampaignInput = {
@@ -1676,6 +1677,59 @@ export const pruneOrphanedMediaAssets = async (shopDomain: string, olderThanMinu
   }
 
   return { deletedCount };
+};
+
+export const optimizeOversizedMediaAssets = async (shopDomain: string, limit = 5) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  const safeLimit = Math.max(1, Math.min(Math.floor(limit), 20));
+
+  const rows = await sql`
+    SELECT id, object_key, content_type
+    FROM media_assets
+    WHERE shop_domain = ${shopDomain}
+      AND object_key IS NOT NULL
+    ORDER BY created_at DESC
+    LIMIT ${safeLimit * 4}
+  `;
+
+  let optimizedCount = 0;
+
+  for (const row of rows as Array<{ id: string; object_key: string | null; content_type: string | null }>) {
+    if (optimizedCount >= safeLimit || !row.object_key) {
+      continue;
+    }
+
+    try {
+      const remote = await getImageFromR2(String(row.object_key));
+      const result = await compressStoredImageBytes(remote.bytes, remote.contentType);
+      if (!result.optimized) {
+        continue;
+      }
+
+      await replaceImageInR2({
+        objectKey: String(row.object_key),
+        contentType: result.contentType,
+        bytes: result.bytes,
+        cacheControl: remote.cacheControl,
+      });
+
+      if (result.contentType !== row.content_type) {
+        await sql`
+          UPDATE media_assets
+          SET content_type = ${result.contentType}
+          WHERE id = ${String(row.id)}
+            AND shop_domain = ${shopDomain}
+        `;
+      }
+
+      optimizedCount += 1;
+    } catch {
+      // Best effort optimization only.
+    }
+  }
+
+  return { optimizedCount };
 };
 
 const resolveMediaAssetByUrl = async (shopDomain: string, url: string) => {
@@ -9267,12 +9321,31 @@ export const getSubscriberGrowth = async (
     const rows = await sql`
       SELECT
         gs.day::date AS day,
-        COALESCE(COUNT(s.id), 0)::BIGINT AS subscribers
+        COALESCE(COUNT(DISTINCT s.id), 0)::BIGINT AS subscribers
       FROM generate_series(${rangeStart}::timestamptz, ${rangeEnd}::timestamptz, interval '1 day') AS gs(day)
       LEFT JOIN subscribers s
         ON s.shop_domain = ${shopDomain}
         AND s.created_at >= gs.day
         AND s.created_at < gs.day + interval '1 day'
+        AND EXISTS (
+          SELECT 1
+          FROM subscriber_tokens t
+          WHERE t.subscriber_id = s.id
+            AND t.shop_domain = s.shop_domain
+            AND t.status = 'active'
+            AND (
+              (
+                COALESCE(t.token_type, 'fcm') = 'vapid'
+                AND t.vapid_endpoint IS NOT NULL AND TRIM(t.vapid_endpoint) <> ''
+                AND t.vapid_p256dh IS NOT NULL AND TRIM(t.vapid_p256dh) <> ''
+                AND t.vapid_auth IS NOT NULL AND TRIM(t.vapid_auth) <> ''
+              )
+              OR (
+                COALESCE(t.token_type, 'fcm') <> 'vapid'
+                AND t.fcm_token IS NOT NULL AND TRIM(t.fcm_token) <> ''
+              )
+            )
+        )
       GROUP BY gs.day
       ORDER BY gs.day ASC
     `;
