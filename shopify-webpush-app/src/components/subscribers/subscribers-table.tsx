@@ -72,7 +72,7 @@ export function SubscribersTable({ maxRows = 50 }: { maxRows?: number }) {
                         <TableHead className="font-bold text-base py-4 text-foreground">Web browser</TableHead>
                         <TableHead className="font-bold text-base py-4 text-foreground">OS</TableHead>
                         <TableHead className="font-bold text-base py-4 text-foreground">Device used</TableHead>
-                        <TableHead className="font-bold text-base py-4 text-foreground">Location</TableHead>
+                        <TableHead className="font-bold text-base py-4 text-foreground">City/Country</TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>

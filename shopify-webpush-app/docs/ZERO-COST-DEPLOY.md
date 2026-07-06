@@ -2,19 +2,40 @@
 
 Complete these steps on Vercel + Cloudflare after deploying the optimized code.
 
-## 1. Cloudflare D1 (storefront events)
+See **[NEON-FREE-PLAN.md](./NEON-FREE-PLAN.md)** for the full subscriber → D1 migration and staying under 100 Neon compute hours/month.
+
+## 1. Cloudflare D1 databases
+
+### Events (pixel + activity)
 
 ```bash
 cd shopify-webpush-app/cloudflare-cron
 npx wrangler d1 create push-eagle-events
 ```
 
-Copy the database UUID into Vercel: `CLOUDFLARE_D1_DATABASE_ID`
+Copy UUID → `CLOUDFLARE_D1_EVENTS_DATABASE_ID` (or `CLOUDFLARE_D1_DATABASE_ID`)
 
 ```bash
 cd ..
 npm run d1:init
 ```
+
+### Audience (subscribers + tokens) — **largest Neon saver**
+
+```bash
+cd cloudflare-cron
+npx wrangler d1 create push-eagle-audience
+```
+
+Copy UUID → `CLOUDFLARE_D1_AUDIENCE_DATABASE_ID`
+
+### Deliveries (optional, after events)
+
+```bash
+npx wrangler d1 create push-eagle-deliveries
+```
+
+Copy UUID → `CLOUDFLARE_D1_DELIVERIES_DATABASE_ID`
 
 ## 2. Cloudflare Worker (cron + queue)
 
@@ -36,10 +57,18 @@ Copy worker URL → Vercel `CLOUDFLARE_WORKER_URL`
 | `CLOUDFLARE_ACCOUNT_ID` | `d889f0c23f53a9054e3ddf29872defd7` |
 | `CLOUDFLARE_API_TOKEN` | Token with Workers KV Storage Edit + D1 Edit |
 | `CLOUDFLARE_KV_NAMESPACE_ID` | `29ce646c32eb44d884376f1201749452` |
-| `CLOUDFLARE_D1_DATABASE_ID` | From step 1 |
+| `CLOUDFLARE_D1_DATABASE_ID` | Main D1 (commerce/customers/catalog) |
+| `CLOUDFLARE_D1_AUDIENCE_DATABASE_ID` | Subscribers + tokens (see NEON-FREE-PLAN.md) |
+| `CLOUDFLARE_D1_EVENTS_DATABASE_ID` | Events DB (optional dedicated) |
+| `CLOUDFLARE_D1_DELIVERIES_DATABASE_ID` | Delivery detail (optional dedicated) |
 | `CLOUDFLARE_WORKER_URL` | From step 2 |
 | `AUTOMATION_QUEUE_ENABLED` | `true` |
 | `D1_EVENTS_ENABLED` | `true` |
+| `D1_AUDIENCE_MODE` | Start `dual_write` → backfill → `d1_only` |
+| `D1_DELIVERIES_ENABLED` | `true` after deliveries backfill |
+| `D1_COMMERCE_ENABLED` | `true` after commerce backfill |
+| `D1_CUSTOMERS_ENABLED` | `true` |
+| `D1_CATALOG_ENABLED` | `true` |
 
 Redeploy Vercel after setting env vars.
 

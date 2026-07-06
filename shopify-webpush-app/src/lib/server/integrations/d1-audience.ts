@@ -221,7 +221,8 @@ export const ensureD1AudienceSchema = async () => {
       created_at TEXT NOT NULL,
       last_seen_at TEXT NOT NULL,
       ios_home_screen_confirmed_at TEXT,
-      ios_home_screen_last_seen_at TEXT
+      ios_home_screen_last_seen_at TEXT,
+      opt_in_prompt_type TEXT
     )
   `);
   await runD1Query(`
@@ -262,6 +263,12 @@ export const ensureD1AudienceSchema = async () => {
     CREATE INDEX IF NOT EXISTS idx_d1_tokens_shop_status
     ON subscriber_tokens(shop_domain, status)
   `);
+
+  try {
+    await runD1Query(`ALTER TABLE subscribers ADD COLUMN opt_in_prompt_type TEXT`);
+  } catch {
+    // column already exists
+  }
 
   schemaReady = true;
 };
@@ -1049,9 +1056,7 @@ export type D1SubscriberListRow = {
   os_name: string;
   device_used: string;
   city: string | null;
-  region: string | null;
   country: string | null;
-  timezone: string | null;
 };
 
 export const d1ListSubscribers = async (
@@ -1071,9 +1076,7 @@ export const d1ListSubscribers = async (
         COALESCE(NULLIF(platform, ''), NULLIF(json_extract(device_context, '$.osName'), ''), 'unknown') AS os_name,
         COALESCE(NULLIF(json_extract(device_context, '$.deviceType'), ''), 'unknown') AS device_used,
         NULLIF(city, '') AS city,
-        NULLIF(json_extract(device_context, '$.region'), '') AS region,
-        NULLIF(country, '') AS country,
-        NULLIF(json_extract(device_context, '$.timezone'), '') AS timezone
+        NULLIF(country, '') AS country
       FROM subscribers
       WHERE shop_domain = ?
       ORDER BY created_at ${order}
@@ -1088,9 +1091,7 @@ export const d1ListSubscribers = async (
     os_name: row.os_name == null ? 'unknown' : String(row.os_name),
     device_used: row.device_used == null ? 'unknown' : String(row.device_used),
     city: row.city == null ? null : String(row.city),
-    region: row.region == null ? null : String(row.region),
     country: row.country == null ? null : String(row.country),
-    timezone: row.timezone == null ? null : String(row.timezone),
   }));
 };
 
@@ -1660,6 +1661,7 @@ export type D1AuthoritativeUpsertInput = {
   vapidEndpoint: string | null;
   vapidP256dh: string | null;
   vapidAuth: string | null;
+  optInPromptType?: 'browser' | 'custom' | null;
 };
 
 /**
@@ -1673,13 +1675,18 @@ export const d1UpsertAudienceAuthoritative = async (
   await ensureD1AudienceSchema();
   const now = nowIso();
 
+  const optInPromptType =
+    input.optInPromptType === 'browser' || input.optInPromptType === 'custom'
+      ? input.optInPromptType
+      : null;
+
   const subRows = await runD1Query(
     `
       INSERT INTO subscribers (
         shop_domain, external_id, browser, platform, locale, country, city,
-        device_context, created_at, last_seen_at
+        device_context, opt_in_prompt_type, created_at, last_seen_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(shop_domain, external_id) DO UPDATE SET
         browser = excluded.browser,
         platform = excluded.platform,
@@ -1687,6 +1694,7 @@ export const d1UpsertAudienceAuthoritative = async (
         country = COALESCE(NULLIF(excluded.country, ''), subscribers.country),
         city = COALESCE(excluded.city, subscribers.city),
         device_context = COALESCE(excluded.device_context, subscribers.device_context),
+        opt_in_prompt_type = COALESCE(subscribers.opt_in_prompt_type, excluded.opt_in_prompt_type),
         last_seen_at = excluded.last_seen_at
       RETURNING id
     `,
@@ -1699,6 +1707,7 @@ export const d1UpsertAudienceAuthoritative = async (
       input.country,
       input.city,
       input.deviceContext,
+      optInPromptType,
       now,
       now,
     ],

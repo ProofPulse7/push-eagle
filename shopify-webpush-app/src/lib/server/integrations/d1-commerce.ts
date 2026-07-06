@@ -455,48 +455,18 @@ export const d1GetPurchasedSubscriberStats = async (
  */
 export const d1GetProductPurchaseStats = async (
   shopDomain: string,
-  options: {
-    byCollection: boolean;
-    textFilter: string;
-    productIds?: string[];
-    collectionProductIds?: string[];
-  },
+  options: { byCollection: boolean; textFilter: string },
 ): Promise<D1PurchaseStatRow[]> => {
   await ensureD1CommerceSchema();
   const textFilter = options.textFilter.trim();
-  const productIds = [...new Set((options.productIds ?? []).map((value) => value.trim()).filter(Boolean))];
-  const collectionProductIds = [
-    ...new Set((options.collectionProductIds ?? []).map((value) => value.trim()).filter(Boolean)),
-  ];
 
   const params: unknown[] = [shopDomain];
-  const filterClauses: string[] = [];
-
-  if (options.byCollection) {
-    if (textFilter) {
-      filterClauses.push('LOWER(COALESCE(i.collection_hint, \'\')) LIKE ?');
-      params.push(`%${textFilter.toLowerCase().replace(/[-_]+/g, ' ').replace(/[%_]/g, '')}%`);
-    }
-    if (collectionProductIds.length > 0) {
-      filterClauses.push(
-        `i.product_id IN (${collectionProductIds.map(() => '?').join(', ')})`,
-      );
-      params.push(...collectionProductIds);
-    }
-  } else {
-    if (productIds.length > 0) {
-      filterClauses.push(`i.product_id IN (${productIds.map(() => '?').join(', ')})`);
-      params.push(...productIds);
-    }
-    if (textFilter) {
-      const likePattern = `%${textFilter.toLowerCase().replace(/[-_]+/g, ' ').replace(/[%_]/g, '')}%`;
-      filterClauses.push('LOWER(COALESCE(i.product_title, \'\')) LIKE ?');
-      params.push(likePattern);
-    }
+  let filterClause = '';
+  if (textFilter) {
+    const column = options.byCollection ? 'i.collection_hint' : 'i.product_title';
+    filterClause = `AND LOWER(${column}) LIKE ?`;
+    params.push(`%${textFilter.toLowerCase()}%`);
   }
-
-  const whereFilter =
-    filterClauses.length > 0 ? `AND (${filterClauses.join(' OR ')})` : '';
 
   const rows = await runD1Query(
     `
@@ -505,7 +475,7 @@ export const d1GetProductPurchaseStats = async (
       JOIN shopify_orders o ON o.id = i.order_event_id
       WHERE o.shop_domain = ?
         AND o.subscriber_id IS NOT NULL
-        ${whereFilter}
+        ${filterClause}
       GROUP BY o.subscriber_id
     `,
     params,
@@ -515,77 +485,6 @@ export const d1GetProductPurchaseStats = async (
     total: Number(row.total ?? 0),
     last_at: row.last_at == null ? null : String(row.last_at),
   }));
-};
-
-export const d1BackfillOrderSubscriberLinks = async (shopDomain: string) => {
-  await ensureD1CommerceSchema();
-
-  await runD1Query(
-    `
-      UPDATE shopify_orders
-      SET subscriber_id = (
-        SELECT s.id
-        FROM subscribers s
-        WHERE s.shop_domain = shopify_orders.shop_domain
-          AND s.external_id = shopify_orders.external_id
-        LIMIT 1
-      )
-      WHERE shop_domain = ?
-        AND subscriber_id IS NULL
-        AND external_id IS NOT NULL
-        AND TRIM(external_id) <> ''
-    `,
-    [shopDomain],
-  );
-
-  await runD1Query(
-    `
-      UPDATE shopify_orders
-      SET subscriber_id = (
-        SELECT s.id
-        FROM subscribers s
-        WHERE s.shop_domain = shopify_orders.shop_domain
-          AND s.external_id = 'shopify_customer:' || shopify_orders.customer_id
-        LIMIT 1
-      )
-      WHERE shop_domain = ?
-        AND subscriber_id IS NULL
-        AND customer_id IS NOT NULL
-        AND TRIM(customer_id) <> ''
-    `,
-    [shopDomain],
-  );
-
-  await runD1Query(
-    `
-      UPDATE shopify_orders
-      SET subscriber_id = (
-        SELECT s.id
-        FROM subscribers s
-        WHERE s.shop_domain = shopify_orders.shop_domain
-          AND s.external_id = (
-            SELECT c.external_id
-            FROM shopify_customers c
-            WHERE c.shop_domain = shopify_orders.shop_domain
-              AND c.external_id IS NOT NULL
-              AND (
-                (shopify_orders.customer_id IS NOT NULL AND c.customer_id = shopify_orders.customer_id)
-                OR (shopify_orders.email IS NOT NULL AND LOWER(c.email) = LOWER(shopify_orders.email))
-              )
-            ORDER BY c.updated_at DESC
-            LIMIT 1
-          )
-        LIMIT 1
-      )
-      WHERE shop_domain = ?
-        AND subscriber_id IS NULL
-        AND (
-          customer_id IS NOT NULL
-          OR (email IS NOT NULL AND TRIM(email) <> '')
-        )
-    `,
-    [shopDomain],
-  );
 };
 
 // ---------------------------------------------------------------------------

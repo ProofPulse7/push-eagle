@@ -21,6 +21,7 @@ import {
 import { deleteImageFromR2, getImageFromR2, replaceImageInR2 } from '@/lib/server/media/r2';
 import { compressStoredImageBytes } from '@/lib/server/media/image-compress';
 import { pickCampaignBarImageUrl } from '@/lib/campaign-bar-image';
+import type { OptInPromptStatsBundle, OptInPromptTypeStats } from '@/lib/types/opt-in-stats';
 
 type CreateCampaignInput = {
   shopDomain: string;
@@ -54,7 +55,12 @@ type UpsertTokenInput = {
   vapidEndpoint?: string | null;
   vapidP256dh?: string | null;
   vapidAuth?: string | null;
+  /** Which opt-in prompt led to this subscription (browser vs custom). */
+  optInPromptType?: 'browser' | 'custom' | null;
 };
+
+export type OptInPromptType = 'browser' | 'custom';
+export type OptInPromptEventType = 'view' | 'click';
 
 type UpdateAttributionSettingsInput = {
   shopDomain: string;
@@ -379,7 +385,7 @@ type ProcessFulfillmentUpdateInput = {
 };
 
 type SegmentConditionSelectedValue = {
-  type: 'country' | 'region' | 'city' | 'product' | 'collection';
+  type: 'country' | 'region' | 'city';
   value: string;
   label?: string;
 };
@@ -458,8 +464,8 @@ const parseScopes = (value?: string | null) =>
     .map((scope) => scope.trim())
     .filter(Boolean);
 
-const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v4';
-const SCHEMA_READY_TTL_SECONDS = 6 * 60 * 60;
+const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v5';
+const SCHEMA_READY_TTL_SECONDS = 24 * 60 * 60;
 
 const ensureSchema = async () => {
   if (!schemaReadyPromise) {
@@ -577,6 +583,7 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE shopify_customers ADD COLUMN IF NOT EXISTS tags TEXT`;
       }
 
+      if (!legacySkip.audience) {
       await sql`CREATE TABLE IF NOT EXISTS subscribers (
         id BIGSERIAL PRIMARY KEY,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
@@ -593,6 +600,7 @@ const ensureSchema = async () => {
       await sql`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS ios_home_screen_last_seen_at TIMESTAMPTZ`;
       await sql`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS device_context JSONB`;
       await sql`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS city TEXT`;
+      await sql`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS opt_in_prompt_type TEXT`;
 
       await sql`CREATE TABLE IF NOT EXISTS subscriber_tokens (
         id BIGSERIAL PRIMARY KEY,
@@ -605,6 +613,17 @@ const ensureSchema = async () => {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (shop_domain, fcm_token)
+      )`;
+      }
+
+      await sql`CREATE TABLE IF NOT EXISTS opt_in_prompt_stats (
+        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        prompt_type TEXT NOT NULL CHECK (prompt_type IN ('browser', 'custom')),
+        views BIGINT NOT NULL DEFAULT 0,
+        clicks BIGINT NOT NULL DEFAULT 0,
+        conversions BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (shop_domain, prompt_type)
       )`;
 
       await sql`CREATE TABLE IF NOT EXISTS campaigns (
@@ -687,10 +706,12 @@ const ensureSchema = async () => {
 
       // VAPID / cross-browser Web Push columns on subscriber_tokens
       // token_type: 'fcm' (Chrome/Edge/Opera/Samsung) or 'vapid' (Firefox/Safari)
+      if (!legacySkip.audience) {
       await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS token_type TEXT NOT NULL DEFAULT 'fcm'`;
       await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS vapid_endpoint TEXT`;
       await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS vapid_p256dh TEXT`;
       await sql`ALTER TABLE subscriber_tokens ADD COLUMN IF NOT EXISTS vapid_auth TEXT`;
+      }
 
       if (!legacySkip.deliveries) {
       await sql`CREATE TABLE IF NOT EXISTS campaign_deliveries (
@@ -1018,6 +1039,7 @@ const ensureSchema = async () => {
       }
 
       // Backfill constraints for legacy databases that were created before unique keys existed.
+      if (!legacySkip.audience) {
       await sql`
         WITH ranked AS (
           SELECT ctid, ROW_NUMBER() OVER (
@@ -1032,9 +1054,6 @@ const ensureSchema = async () => {
       `;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_subscribers_shop_external_id ON subscribers(shop_domain, external_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_subscribers_shop_created ON subscribers(shop_domain, created_at DESC)`;
-      if (!legacySkip.webhooks) {
-        await sql`CREATE INDEX IF NOT EXISTS idx_webhook_events_shop_received ON webhook_events(shop_domain, received_at DESC)`;
-      }
       await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_subscriber ON subscriber_tokens(shop_domain, subscriber_id)`;
 
       await sql`
@@ -1050,6 +1069,11 @@ const ensureSchema = async () => {
         WHERE t.ctid = r.ctid AND r.rn > 1
       `;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_subscriber_tokens_shop_fcm_token ON subscriber_tokens(shop_domain, fcm_token)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_status ON subscriber_tokens(shop_domain, status)`;
+      }
+      if (!legacySkip.webhooks) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_webhook_events_shop_received ON webhook_events(shop_domain, received_at DESC)`;
+      }
 
       if (!legacySkip.commerce) {
       await sql`
@@ -1067,7 +1091,6 @@ const ensureSchema = async () => {
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_shopify_fulfillments_shop_fulfillment ON shopify_fulfillments(shop_domain, fulfillment_id)`;
       }
 
-      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_tokens_shop_status ON subscriber_tokens(shop_domain, status)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_created ON campaigns(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_scheduled ON campaigns(shop_domain, status, scheduled_at)`;
       if (!legacySkip.events) {
@@ -6141,22 +6164,8 @@ const listAllSubscriberIds = async (shopDomain: string) => {
 const queryConditionSubscriberIds = async (shopDomain: string, condition: SegmentCondition, allIds: Set<number>) => {
   const sql = getNeonSql();
   const textFilter = String(condition.textValue || '').trim();
-  const selectedCatalogValues = Array.isArray(condition.selectedValues)
-    ? condition.selectedValues
-        .map((entry) => ({
-          type: String(entry.type ?? ''),
-          value: String(entry.value ?? '').trim(),
-          label: String(entry.label ?? entry.value ?? '').trim(),
-        }))
-        .filter((entry) => entry.value.length > 0)
-    : [];
 
   let matched = new Set<number>();
-
-  if (condition.type === 'Purchased' || condition.type === 'Purchased a product' || condition.type === 'Purchased from collection') {
-    const { backfillOrderSubscriberLinks } = await import('@/lib/server/segments/order-subscriber-link');
-    await backfillOrderSubscriberLinks(shopDomain);
-  }
 
   if (condition.type === 'Clicked') {
     const rows = await sql`
@@ -6201,123 +6210,24 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
     const { isD1CommerceEnabled, d1GetProductPurchaseStats } = await import(
       '@/lib/server/integrations/d1-commerce'
     );
-    const { toSqlLikePattern } = await import('@/lib/server/segments/catalog-match');
-    const { resolveCollectionProductIds } = await import('@/lib/server/segments/catalog-search');
-
-    const selectedProductIds = selectedCatalogValues
-      .filter((entry) => entry.type === 'product')
-      .map((entry) => entry.value);
-    const selectedCollectionValues = selectedCatalogValues
-      .filter((entry) => entry.type === 'collection')
-      .map((entry) => entry.value);
-
-    const resolvedProductIds =
-      condition.type === 'Purchased a product' && selectedProductIds.length === 0 && textFilter
-        ? (await (await import('@/lib/server/segments/catalog-search')).searchSegmentProducts(shopDomain, textFilter, 50))
-            .map((option) => option.value)
-        : selectedProductIds;
-
-    const collectionProductIds =
-      condition.type === 'Purchased from collection'
-        ? (
-            await Promise.all(
-              selectedCollectionValues.map((collectionValue) =>
-                resolveCollectionProductIds(shopDomain, collectionValue),
-              ),
-            )
-          ).flat()
-        : [];
-
-    const likePattern = textFilter ? toSqlLikePattern(textFilter) : null;
     const rows = isD1CommerceEnabled()
       ? await d1GetProductPurchaseStats(shopDomain, {
           byCollection: condition.type === 'Purchased from collection',
           textFilter,
-          productIds: condition.type === 'Purchased a product' ? resolvedProductIds : [],
-          collectionProductIds,
         })
-      : await (async () => {
-          if (condition.type === 'Purchased a product') {
-            if (resolvedProductIds.length === 0 && !likePattern) {
-              return [] as Array<{ subscriber_id: number; total: number; last_at: string | null }>;
-            }
-            if (resolvedProductIds.length > 0 && likePattern) {
-              return sql`
-                SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
-                FROM shopify_order_items i
-                JOIN shopify_orders o ON o.id = i.order_event_id
-                WHERE o.shop_domain = ${shopDomain}
-                  AND o.subscriber_id IS NOT NULL
-                  AND (i.product_id = ANY(${resolvedProductIds}) OR i.product_title ILIKE ${likePattern})
-                GROUP BY o.subscriber_id
-              `;
-            }
-            if (resolvedProductIds.length > 0) {
-              return sql`
-                SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
-                FROM shopify_order_items i
-                JOIN shopify_orders o ON o.id = i.order_event_id
-                WHERE o.shop_domain = ${shopDomain}
-                  AND o.subscriber_id IS NOT NULL
-                  AND i.product_id = ANY(${resolvedProductIds})
-                GROUP BY o.subscriber_id
-              `;
-            }
-            return sql`
-              SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
-              FROM shopify_order_items i
-              JOIN shopify_orders o ON o.id = i.order_event_id
-              WHERE o.shop_domain = ${shopDomain}
-                AND o.subscriber_id IS NOT NULL
-                AND (
-                  i.product_title ILIKE ${likePattern}
-                  OR EXISTS (
-                    SELECT 1
-                    FROM shopify_product_variants v
-                    WHERE v.shop_domain = o.shop_domain
-                      AND v.product_id = i.product_id
-                      AND v.handle ILIKE ${likePattern}
-                  )
-                )
-              GROUP BY o.subscriber_id
-            `;
-          }
-
-          if (!likePattern && collectionProductIds.length === 0) {
-            return [] as Array<{ subscriber_id: number; total: number; last_at: string | null }>;
-          }
-          if (likePattern && collectionProductIds.length > 0) {
-            return sql`
-              SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
-              FROM shopify_order_items i
-              JOIN shopify_orders o ON o.id = i.order_event_id
-              WHERE o.shop_domain = ${shopDomain}
-                AND o.subscriber_id IS NOT NULL
-                AND (i.collection_hint ILIKE ${likePattern} OR i.product_id = ANY(${collectionProductIds}))
-              GROUP BY o.subscriber_id
-            `;
-          }
-          if (collectionProductIds.length > 0) {
-            return sql`
-              SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
-              FROM shopify_order_items i
-              JOIN shopify_orders o ON o.id = i.order_event_id
-              WHERE o.shop_domain = ${shopDomain}
-                AND o.subscriber_id IS NOT NULL
-                AND i.product_id = ANY(${collectionProductIds})
-              GROUP BY o.subscriber_id
-            `;
-          }
-          return sql`
-            SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
-            FROM shopify_order_items i
-            JOIN shopify_orders o ON o.id = i.order_event_id
-            WHERE o.shop_domain = ${shopDomain}
-              AND o.subscriber_id IS NOT NULL
-              AND i.collection_hint ILIKE ${likePattern}
-            GROUP BY o.subscriber_id
-          `;
-        })();
+      : await sql`
+      SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
+      FROM shopify_order_items i
+      JOIN shopify_orders o ON o.id = i.order_event_id
+      WHERE o.shop_domain = ${shopDomain}
+        AND o.subscriber_id IS NOT NULL
+        AND (
+          ${textFilter ? true : false} = false
+          OR ${condition.type === 'Purchased from collection'} = true AND i.collection_hint ILIKE ${`%${textFilter}%`}
+          OR ${condition.type === 'Purchased a product'} = true AND i.product_title ILIKE ${`%${textFilter}%`}
+        )
+      GROUP BY o.subscriber_id
+    `;
 
     for (const row of rows) {
       const subscriberId = Number(row.subscriber_id);
@@ -6360,12 +6270,8 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
       }
     }
   } else if (condition.type === 'Location') {
-    const { normalizeCountryKey } = await import('@/lib/server/geo/subscriber-geo');
     const selected = Array.isArray(condition.selectedValues) ? condition.selectedValues : [];
-    const countries = selected
-      .filter((value) => value.type === 'country')
-      .map((value) => normalizeCountryKey(String(value.value)))
-      .filter(Boolean);
+    const countries = selected.filter((value) => value.type === 'country').map((value) => String(value.value).toLowerCase());
     const cities = selected.filter((value) => value.type === 'city').map((value) => String(value.value).toLowerCase());
     const regions = selected.filter((value) => value.type === 'region').map((value) => String(value.value).toLowerCase());
 
@@ -6402,7 +6308,7 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
 
     for (const row of rows) {
       const subscriberId = Number(row.id);
-      const country = normalizeCountryKey(row.country);
+      const country = String(row.country || '').toLowerCase();
       const city = String(row.city || '').toLowerCase();
       const region = String(row.region || '').toLowerCase();
 
@@ -6541,14 +6447,29 @@ export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInpu
   const sql = getNeonSql();
   await ensureMerchant(input.shopDomain);
 
-  const subscriberId = await (async () => {
-    const { resolveSubscriberIdForOrder } = await import('@/lib/server/segments/order-subscriber-link');
-    return resolveSubscriberIdForOrder(input.shopDomain, {
-      externalId: input.externalId ?? null,
-      customerId: input.customerId ?? null,
-      email: input.email ?? null,
-    });
-  })();
+  const subscriberId = input.externalId
+    ? await (async () => {
+        const { audienceRead, d1GetSubscriberIdByExternalId } = await import(
+          '@/lib/server/integrations/d1-audience'
+        );
+        return audienceRead<number | null>({
+          label: 'upsertShopifyOrderEvent.subscriberId',
+          key: (v) => String(v ?? 'null'),
+          neon: async () => {
+            const rows = await sql`
+              SELECT id
+              FROM subscribers
+              WHERE shop_domain = ${input.shopDomain}
+                AND external_id = ${input.externalId}
+              LIMIT 1
+            `;
+            return rows[0]?.id ? Number(rows[0].id) : null;
+          },
+          d1: async () =>
+            d1GetSubscriberIdByExternalId(input.shopDomain, String(input.externalId)),
+        });
+      })()
+    : null;
   const createdAt = input.createdAt ? new Date(input.createdAt) : new Date();
 
   const { isD1CommerceEnabled, d1UpsertOrderEvent } = await import(
@@ -7301,10 +7222,8 @@ export const getSegmentFilterOptions = async (shopDomain: string) => {
     ? await d1GetDistinctCustomerTags(shopDomain)
     : (neonTags as Array<{ value: unknown }>).map((row) => String(row.value));
 
-  const { uniqueCountryDisplayNames } = await import('@/lib/server/geo/subscriber-geo');
-
   return {
-    countries: uniqueCountryDisplayNames(countries),
+    countries,
     cities,
     regions,
     customerTags,
@@ -8100,6 +8019,10 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
   let subscriberId: number;
   let tokenId: number;
   let tokenWasInserted: boolean;
+  const optInPromptType =
+    input.optInPromptType === 'browser' || input.optInPromptType === 'custom'
+      ? input.optInPromptType
+      : null;
 
   if (isD1AudienceOnly()) {
     // d1_only: D1 is the sole store and assigns the ids. Neon audience tables are
@@ -8124,6 +8047,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
           vapidEndpoint: input.vapidEndpoint ?? null,
           vapidP256dh: input.vapidP256dh ?? null,
           vapidAuth: input.vapidAuth ?? null,
+          optInPromptType: optInPromptType,
         }),
       );
       subscriberId = result.subscriberId;
@@ -8150,7 +8074,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     }
   } else {
     const subscriberRows = await sql`
-      INSERT INTO subscribers (shop_domain, external_id, browser, platform, locale, country, city, device_context, last_seen_at)
+      INSERT INTO subscribers (shop_domain, external_id, browser, platform, locale, country, city, device_context, opt_in_prompt_type, last_seen_at)
       VALUES (
         ${input.shopDomain},
         ${input.externalId},
@@ -8160,6 +8084,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
         ${input.country ?? null},
         ${input.city ?? null},
         ${serializedDeviceContext}::jsonb,
+        ${optInPromptType},
         NOW()
       )
       ON CONFLICT (shop_domain, external_id)
@@ -8170,6 +8095,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
         country = COALESCE(NULLIF(EXCLUDED.country, ''), subscribers.country),
         city = COALESCE(EXCLUDED.city, subscribers.city),
         device_context = COALESCE(EXCLUDED.device_context, subscribers.device_context),
+        opt_in_prompt_type = COALESCE(subscribers.opt_in_prompt_type, EXCLUDED.opt_in_prompt_type),
         last_seen_at = NOW()
       RETURNING id
     `;
@@ -8245,12 +8171,120 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     tokenWasInserted,
   });
 
+  if (tokenWasInserted && optInPromptType) {
+    await recordOptInPromptConversion(input.shopDomain, optInPromptType);
+  }
+
   const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
   void invalidateShopDashboardCaches(input.shopDomain);
 
   return {
     subscriberId,
     tokenId,
+    tokenWasInserted,
+  };
+};
+
+const roundOptInPercent = (value: number) => Math.round(value * 10) / 10;
+
+const buildOptInTypeStats = (views: number, clicks: number, conversions: number): OptInPromptTypeStats => ({
+  views,
+  clicks,
+  conversions,
+  conversionPercent: views > 0 ? roundOptInPercent((conversions / views) * 100) : 0,
+  clickConversionPercent: clicks > 0 ? roundOptInPercent((conversions / clicks) * 100) : 0,
+});
+
+export const recordOptInPromptEvent = async (input: {
+  shopDomain: string;
+  promptType: OptInPromptType;
+  eventType: OptInPromptEventType;
+}) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
+
+  const viewDelta = input.eventType === 'view' ? 1 : 0;
+  const clickDelta = input.eventType === 'click' ? 1 : 0;
+
+  await sql`
+    INSERT INTO opt_in_prompt_stats (shop_domain, prompt_type, views, clicks, conversions, updated_at)
+    VALUES (${input.shopDomain}, ${input.promptType}, ${viewDelta}, ${clickDelta}, 0, NOW())
+    ON CONFLICT (shop_domain, prompt_type)
+    DO UPDATE SET
+      views = opt_in_prompt_stats.views + ${viewDelta},
+      clicks = opt_in_prompt_stats.clicks + ${clickDelta},
+      updated_at = NOW()
+  `;
+};
+
+export const recordOptInPromptConversion = async (shopDomain: string, promptType: OptInPromptType) => {
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(shopDomain);
+
+  await sql`
+    INSERT INTO opt_in_prompt_stats (shop_domain, prompt_type, views, clicks, conversions, updated_at)
+    VALUES (${shopDomain}, ${promptType}, 0, 0, 1, NOW())
+    ON CONFLICT (shop_domain, prompt_type)
+    DO UPDATE SET
+      conversions = opt_in_prompt_stats.conversions + 1,
+      updated_at = NOW()
+  `;
+};
+
+export const getOptInPromptStats = async (shopDomain: string): Promise<OptInPromptStatsBundle> => {
+  await ensureSchema();
+  const sql = getNeonSql();
+
+  const rows = await sql`
+    SELECT prompt_type, views, clicks, conversions
+    FROM opt_in_prompt_stats
+    WHERE shop_domain = ${shopDomain}
+  `;
+
+  const byType = new Map<string, { views: number; clicks: number; conversions: number }>();
+  for (const row of rows) {
+    byType.set(String(row.prompt_type), {
+      views: Number(row.views ?? 0),
+      clicks: Number(row.clicks ?? 0),
+      conversions: Number(row.conversions ?? 0),
+    });
+  }
+
+  const browserRow = byType.get('browser') ?? { views: 0, clicks: 0, conversions: 0 };
+  const customRow = byType.get('custom') ?? { views: 0, clicks: 0, conversions: 0 };
+  const browser = buildOptInTypeStats(browserRow.views, browserRow.clicks, browserRow.conversions);
+  const custom = buildOptInTypeStats(customRow.views, customRow.clicks, customRow.conversions);
+
+  const totalViews = browser.views + custom.views;
+  const totalClicks = browser.clicks + custom.clicks;
+  const totalConversions = browser.conversions + custom.conversions;
+
+  const conversionPercents = [browser, custom]
+    .filter((entry) => entry.views > 0)
+    .map((entry) => entry.conversionPercent);
+  const clickConversionPercents = [browser, custom]
+    .filter((entry) => entry.clicks > 0)
+    .map((entry) => entry.clickConversionPercent);
+
+  return {
+    browser,
+    custom,
+    totals: {
+      views: totalViews,
+      clicks: totalClicks,
+      conversions: totalConversions,
+      conversionPercent: totalViews > 0 ? roundOptInPercent((totalConversions / totalViews) * 100) : 0,
+      avgConversionPercent:
+        conversionPercents.length > 0
+          ? roundOptInPercent(conversionPercents.reduce((sum, value) => sum + value, 0) / conversionPercents.length)
+          : 0,
+      avgClickConversionPercent:
+        clickConversionPercents.length > 0
+          ? roundOptInPercent(clickConversionPercents.reduce((sum, value) => sum + value, 0) / clickConversionPercents.length)
+          : 0,
+    },
   };
 };
 
@@ -9171,9 +9205,7 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
     os_name: string;
     device_used: string;
     city: string | null;
-    region: string | null;
     country: string | null;
-    timezone: string | null;
   };
 
   const rows = await audienceRead<ListRow[]>({
@@ -9182,7 +9214,7 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
       list
         .map(
           (r) =>
-            `${r.external_id ?? ''}|${r.created_at ? new Date(String(r.created_at)).getTime() : 0}|${r.web_browser}|${r.os_name}|${r.device_used}|${r.city ?? ''}|${r.region ?? ''}|${r.country ?? ''}|${r.timezone ?? ''}`,
+            `${r.external_id ?? ''}|${r.created_at ? new Date(String(r.created_at)).getTime() : 0}|${r.web_browser}|${r.os_name}|${r.device_used}|${r.city ?? ''}|${r.country ?? ''}`,
         )
         .join(';'),
     neon: async () => {
@@ -9195,9 +9227,7 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
             COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
             COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
             NULLIF(city, '') AS city,
-            NULLIF(device_context ->> 'region', '') AS region,
-            NULLIF(country, '') AS country,
-            NULLIF(device_context ->> 'timezone', '') AS timezone
+            NULLIF(country, '') AS country
           FROM subscribers
           WHERE shop_domain = ${shopDomain}
           ORDER BY created_at ASC
@@ -9212,9 +9242,7 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
             COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
             COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
             NULLIF(city, '') AS city,
-            NULLIF(device_context ->> 'region', '') AS region,
-            NULLIF(country, '') AS country,
-            NULLIF(device_context ->> 'timezone', '') AS timezone
+            NULLIF(country, '') AS country
           FROM subscribers
           WHERE shop_domain = ${shopDomain}
           ORDER BY created_at DESC
@@ -9240,14 +9268,16 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
     d1: async () => d1CountSubscribers(shopDomain),
   });
 
-  const { deriveCityFromTimezone, formatSubscriberLocation } = await import('@/lib/server/geo/subscriber-geo');
-
   const subscribers: SubscriberListRow[] = rows.map((row) => {
-    const cityCountry = formatSubscriberLocation({
-      city: row?.city ? String(row.city) : deriveCityFromTimezone(row?.timezone ? String(row.timezone) : null),
-      region: row?.region ? String(row.region) : null,
-      country: row?.country ? String(row.country) : null,
-    });
+    const city = row?.city ? String(row.city) : null;
+    const country = row?.country ? String(row.country) : null;
+    const cityCountry = city && country
+      ? `${city}, ${country}`
+      : city
+        ? city
+        : country
+          ? country
+          : 'Unknown';
 
     return {
       subscriber: 'Anonymous',
@@ -9338,7 +9368,6 @@ export const getSubscriberLocationBreakdown = async (shopDomain: string, limit =
     label: 'getSubscriberLocationBreakdown',
     key: shadowKey,
     neon: async () => {
-      const { resolveCountryDisplayName } = await import('@/lib/server/geo/subscriber-geo');
       const countries = await sql`
         SELECT
           COALESCE(NULLIF(country, ''), 'Unknown') AS name,
@@ -9360,10 +9389,7 @@ export const getSubscriberLocationBreakdown = async (shopDomain: string, limit =
         LIMIT ${safeLimit}
       `;
       return {
-        countries: countries.map((row) => ({
-          name: resolveCountryDisplayName(String(row.name)) ?? String(row.name),
-          value: Number(row.value ?? 0),
-        })),
+        countries: countries.map((row) => ({ name: String(row.name), value: Number(row.value ?? 0) })),
         cities: cities.map((row) => ({ name: String(row.name), value: Number(row.value ?? 0) })),
       };
     },

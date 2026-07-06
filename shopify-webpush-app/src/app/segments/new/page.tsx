@@ -64,7 +64,7 @@ const subscribeDateOptions = [
 
 type SelectOption = { value: string; label: string };
 
-type LocationValue = { type: 'country' | 'region' | 'city' | 'product' | 'collection'; value: string; label: string };
+type LocationValue = { type: 'country' | 'region' | 'city'; value: string; label: string };
 
 type Condition = {
   id: string;
@@ -201,124 +201,6 @@ const MultiSelectPillFilter = ({
            </div>
         </PopoverContent>
       </Popover>
-  );
-};
-
-
-const CatalogSearchInput = ({
-  shopDomain,
-  kind,
-  placeholder,
-  textValue,
-  selectedLabel,
-  onTextChange,
-  onSelect,
-}: {
-  shopDomain: string;
-  kind: 'product' | 'collection';
-  placeholder: string;
-  textValue: string;
-  selectedLabel?: string;
-  onTextChange: (value: string) => void;
-  onSelect: (value: string, label: string) => void;
-}) => {
-  const [results, setResults] = useState<SelectOption[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isOpen, setIsOpen] = useState(false);
-
-  useEffect(() => {
-    const trimmed = textValue.trim();
-    const tokens = trimmed
-      .toLowerCase()
-      .replace(/[-_]+/g, ' ')
-      .split(/\s+/)
-      .filter(Boolean);
-    const isReady = tokens.length > 0 && tokens.some((token) => token.length >= 3);
-
-    if (!shopDomain || !isReady) {
-      setResults([]);
-      setIsOpen(false);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      setIsSearching(true);
-      try {
-        const response = await fetch(
-          `/api/segments/catalog-search?shop=${encodeURIComponent(shopDomain)}&type=${kind}&q=${encodeURIComponent(textValue.trim())}`,
-          { cache: 'no-store' },
-        );
-        const json = await response.json();
-        const nextResults = Array.isArray(json?.results)
-          ? json.results
-              .map((entry: { value?: unknown; label?: unknown }) => ({
-                value: String(entry.value ?? '').trim(),
-                label: String(entry.label ?? entry.value ?? '').trim(),
-              }))
-              .filter((entry: SelectOption) => entry.value && entry.label)
-          : [];
-        setResults(nextResults);
-        setIsOpen(nextResults.length > 0);
-      } catch {
-        setResults([]);
-        setIsOpen(false);
-      } finally {
-        setIsSearching(false);
-      }
-    }, 250);
-
-    return () => clearTimeout(timer);
-  }, [shopDomain, kind, textValue]);
-
-  return (
-    <div className="relative w-full max-w-md">
-      <Input
-        className="bg-card"
-        placeholder={placeholder}
-        value={textValue}
-        onChange={(event) => onTextChange(event.target.value)}
-        onFocus={() => {
-          if (results.length > 0) {
-            setIsOpen(true);
-          }
-        }}
-        onBlur={() => {
-          window.setTimeout(() => setIsOpen(false), 150);
-        }}
-      />
-      {selectedLabel ? (
-        <p className="text-xs text-muted-foreground mt-1">
-          Selected: <span className="font-medium text-foreground">{selectedLabel}</span>
-        </p>
-      ) : null}
-      {isSearching ? (
-        <div className="absolute right-3 top-2.5 text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-        </div>
-      ) : null}
-      {isOpen && results.length > 0 ? (
-        <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-md">
-          <ScrollArea className="max-h-48" type="always">
-            <div className="p-1">
-              {results.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    onSelect(option.value, option.label);
-                    setIsOpen(false);
-                  }}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </ScrollArea>
-        </div>
-      ) : null}
-    </div>
   );
 };
 
@@ -634,46 +516,23 @@ export default function NewSegmentPage() {
         case 'Clicked': return <div className="flex items-center gap-2 flex-wrap"><span>Subscriber has clicked a notification</span>{countInputs}{dateInputs}</div>
         case 'Purchased': return <div className="flex items-center gap-2 flex-wrap"><span>Subscriber has purchased</span>{countInputs}{dateInputs}</div>
         case 'Purchased a product':
-        case 'Purchased from collection': {
-            const catalogKind = condition.type === 'Purchased a product' ? 'product' : 'collection';
-            const selectedCatalog = condition.selectedValues.find((entry) => entry.type === catalogKind);
+        case 'Purchased from collection':
             return (
                 <div className="flex flex-col gap-4">
-                    <div className="flex items-start gap-2 flex-wrap">
-                        <span className="pt-2">Subscriber</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <span>Subscriber</span>
                         <Select value={condition.operator} onValueChange={(v) => change('operator', v)}>
                             <SelectTrigger className="w-auto bg-card"><SelectValue /></SelectTrigger>
                             <SelectContent><SelectItem value="has">has</SelectItem><SelectItem value="has not">has not</SelectItem></SelectContent>
                         </Select>
-                        <span className="pt-2">purchased</span>
-                        <CatalogSearchInput
-                            shopDomain={resolvedShopDomain}
-                            kind={catalogKind}
-                            placeholder={
-                              condition.type === 'Purchased a product'
-                                ? 'Type at least 3 letters of the product name'
-                                : 'Type at least 3 letters of the collection name'
-                            }
-                            textValue={condition.textValue}
-                            selectedLabel={selectedCatalog?.label}
-                            onTextChange={(value) => {
-                                change('textValue', value);
-                                if (selectedCatalog) {
-                                    change('selectedValues', []);
-                                }
-                            }}
-                            onSelect={(value, label) => {
-                                change('textValue', label);
-                                change('selectedValues', [{ type: catalogKind, value, label }]);
-                            }}
-                        />
+                        <span>purchased</span>
+                        <Input className="w-48 bg-card" placeholder={condition.type === 'Purchased a product' ? "Product title" : "Collection name"} value={condition.textValue} onChange={e => change('textValue', e.target.value)} />
                     </div>
                     <div className="flex items-center gap-2 flex-wrap pl-4 border-l-2 ml-2">
                         {countInputs}{dateInputs}
                     </div>
                 </div>
             );
-        }
         case 'Subscribed': return <div className="flex items-center gap-2 flex-wrap"><span>Subscriber has subscribed</span>{dateInputs}</div>;
         case 'Location':
             const handleLocationSelect = (type: 'country' | 'region' | 'city') => (value: string, label: string) => {
@@ -781,7 +640,7 @@ export default function NewSegmentPage() {
                 ...group,
                 conditions: group.conditions.map(c => {
                     if (c.id === conditionId) {
-                        return { ...c, type: newType, operator: newOperator, dateOperator: newDateOperator, selectedValues: [], textValue: '' };
+                        return { ...c, type: newType, operator: newOperator, dateOperator: newDateOperator, selectedValues: [] };
                     }
                     return c;
                 })

@@ -9,10 +9,12 @@ import { isD1CatalogEnabled } from '@/lib/server/integrations/d1-catalog';
 import { isD1CommerceEnabled } from '@/lib/server/integrations/d1-commerce';
 import { isD1CustomersEnabled } from '@/lib/server/integrations/d1-customers';
 import { isD1DeliveriesEnabled } from '@/lib/server/integrations/d1-deliveries';
+import { isD1AudienceOnly } from '@/lib/server/integrations/d1-audience';
 import { isD1EventsEnabled } from '@/lib/server/integrations/d1-events';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 
 export type NeonLegacySchemaSkip = {
+  audience: boolean;
   deliveries: boolean;
   commerce: boolean;
   customers: boolean;
@@ -28,6 +30,11 @@ export type NeonLegacyTableGroup = {
 };
 
 export const NEON_LEGACY_TABLE_GROUPS: NeonLegacyTableGroup[] = [
+  {
+    key: 'audience',
+    label: 'Subscribers + tokens (D1 audience)',
+    tables: ['subscriber_tokens', 'subscribers'],
+  },
   {
     key: 'deliveries',
     label: 'Delivery / click detail (D1 deliveries)',
@@ -67,6 +74,8 @@ export const NEON_LEGACY_TABLE_GROUPS: NeonLegacyTableGroup[] = [
 
 const skipFlagForGroup = (key: keyof NeonLegacySchemaSkip): boolean => {
   switch (key) {
+    case 'audience':
+      return isD1AudienceOnly();
     case 'deliveries':
       return isD1DeliveriesEnabled();
     case 'commerce':
@@ -86,6 +95,7 @@ const skipFlagForGroup = (key: keyof NeonLegacySchemaSkip): boolean => {
 
 /** Which legacy Neon tables should NOT be created during ensureSchema(). */
 export const getNeonLegacySchemaSkip = (): NeonLegacySchemaSkip => ({
+  audience: isD1AudienceOnly(),
   deliveries: isD1DeliveriesEnabled(),
   commerce: isD1CommerceEnabled(),
   customers: isD1CustomersEnabled(),
@@ -160,6 +170,14 @@ const countLegacyTableRows = async (tableName: string): Promise<number> => {
       const rows = await sql`SELECT COUNT(*)::BIGINT AS count FROM webhook_events`;
       return Number(rows[0]?.count ?? 0);
     }
+    case 'subscribers': {
+      const rows = await sql`SELECT COUNT(*)::BIGINT AS count FROM subscribers`;
+      return Number(rows[0]?.count ?? 0);
+    }
+    case 'subscriber_tokens': {
+      const rows = await sql`SELECT COUNT(*)::BIGINT AS count FROM subscriber_tokens`;
+      return Number(rows[0]?.count ?? 0);
+    }
     default:
       throw new Error(`Unknown legacy table: ${tableName}`);
   }
@@ -206,6 +224,12 @@ const dropLegacyTable = async (tableName: string): Promise<void> => {
       return;
     case 'webhook_events':
       await sql`DROP TABLE IF EXISTS webhook_events CASCADE`;
+      return;
+    case 'subscriber_tokens':
+      await sql`DROP TABLE IF EXISTS subscriber_tokens CASCADE`;
+      return;
+    case 'subscribers':
+      await sql`DROP TABLE IF EXISTS subscribers CASCADE`;
       return;
     default:
       throw new Error(`Unknown legacy table: ${tableName}`);

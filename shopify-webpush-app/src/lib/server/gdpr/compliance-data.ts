@@ -180,6 +180,7 @@ export const redactCustomerGdprData = async (
 
   const {
     isD1AudienceReadActive,
+    isD1AudienceOnly,
     isD1AudienceWriteEnabled,
     d1GetGdprSubscriberRows,
     d1DeleteSubscribersByIds,
@@ -278,10 +279,14 @@ export const redactCustomerGdprData = async (
       `;
     }
 
-    await sql`DELETE FROM subscribers WHERE shop_domain = ${shopDomain} AND id = ANY(${subscriberIds})`;
-
-    if (isD1AudienceWriteEnabled()) {
+    if (isD1AudienceOnly()) {
       await d1DeleteSubscribersByIds(shopDomain, subscriberIds);
+    } else {
+      await sql`DELETE FROM subscribers WHERE shop_domain = ${shopDomain} AND id = ANY(${subscriberIds})`;
+
+      if (isD1AudienceWriteEnabled()) {
+        await d1DeleteSubscribersByIds(shopDomain, subscriberIds);
+      }
     }
   }
 

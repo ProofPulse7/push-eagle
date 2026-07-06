@@ -382,7 +382,8 @@ export function useOptInSettings() {
     queryFn: () => fetchJsonWithShop<Record<string, unknown>>('/api/settings/opt-in', shop),
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
     placeholderData: (previous) =>
       previous ??
       (queryClient.getQueryData<Record<string, unknown>>(queryKeys.optIn(shop)) as

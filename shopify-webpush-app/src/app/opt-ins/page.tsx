@@ -14,14 +14,13 @@ import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import {
-  useMerchantOverview,
   useOptInSettings,
   useSaveOptInSettings,
-  useSubscribersOverview,
 } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
 import { mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
+import type { OptInPromptStatsBundle, OptInPromptTypeStats } from '@/lib/types/opt-in-stats';
 
 const StatBlock = ({ label, value }: { label: string, value: string | number }) => (
     <div className="flex flex-col gap-1">
@@ -49,14 +48,47 @@ const TopStat = ({ label, value, tooltipText }: { label: string, value: string |
     </div>
 );
 
+const emptyTypeStats: OptInPromptTypeStats = {
+  views: 0,
+  clicks: 0,
+  conversions: 0,
+  conversionPercent: 0,
+  clickConversionPercent: 0,
+};
+
+const emptyStatsBundle: OptInPromptStatsBundle = {
+  browser: emptyTypeStats,
+  custom: emptyTypeStats,
+  totals: {
+    views: 0,
+    clicks: 0,
+    conversions: 0,
+    conversionPercent: 0,
+    avgConversionPercent: 0,
+    avgClickConversionPercent: 0,
+  },
+};
+
+const formatPercent = (value: number) => `${value.toFixed(1)}%`;
+
+const parseOptInStats = (data: Record<string, unknown> | null | undefined): OptInPromptStatsBundle => {
+  if (!data?.stats || typeof data.stats !== 'object') {
+    return emptyStatsBundle;
+  }
+
+  const stats = data.stats as Partial<OptInPromptStatsBundle>;
+  const browser = { ...emptyTypeStats, ...(stats.browser ?? {}) };
+  const custom = { ...emptyTypeStats, ...(stats.custom ?? {}) };
+  const totals = { ...emptyStatsBundle.totals, ...(stats.totals ?? {}) };
+
+  return { browser, custom, totals };
+};
 
 export default function OptInsPage() {
   const shopDomain = useShopDomain();
   const { toast } = useToast();
   const { data: optInData } = useOptInSettings();
   const saveOptInMutation = useSaveOptInSettings();
-  const { data: overviewData } = useMerchantOverview();
-  const { data: subscribersData } = useSubscribersOverview();
   const [selectedPromptType, setSelectedPromptType] = useState<'browser' | 'custom'>('custom');
 
   const mergedSettings = useMemo(() => {
@@ -69,6 +101,7 @@ export default function OptInsPage() {
 
   const livePromptType = mergedSettings?.promptType === 'browser' ? 'browser' : 'custom';
   const iosWidgetEnabled = mergedSettings?.iosWidgetEnabled !== false;
+  const promptStats = useMemo(() => parseOptInStats(optInData), [optInData]);
 
   useEffect(() => {
     if (mergedSettings) {
@@ -90,17 +123,6 @@ export default function OptInsPage() {
       maxDisplaysPerSession: Number(mergedSettings.maxDisplaysPerSession ?? 0),
     };
   }, [mergedSettings, optInData?.ok]);
-
-  const stats = useMemo(() => {
-    const subscribed = Number(
-      subscribersData?.totalSubscribers ??
-        overviewData?.subscriberCount ??
-        0,
-    );
-    const viewed = subscribed > 0 ? Math.max(subscribed, Math.round(subscribed * 1.4)) : 0;
-    const conversion = viewed > 0 ? `${((subscribed / viewed) * 100).toFixed(1)}%` : '0.0%';
-    return { viewed, subscribed, conversion };
-  }, [overviewData, subscribersData]);
 
   const updatePromptTypeSelection = (value: string) => {
     const next = value === 'browser' ? 'browser' : 'custom';
@@ -167,14 +189,16 @@ export default function OptInsPage() {
 
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold tracking-tight">Stats</h2>
+            <h2 className="text-xl font-semibold tracking-tight">Stats (both opt-ins)</h2>
         </div>
         <Card>
             <CardContent className="p-0">
-                <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x">
-                    <TopStat label="Total viewers" value={stats.viewed} tooltipText="Estimated prompt impressions from saved subscriber performance." />
-                    <TopStat label="Total subscribers" value={stats.subscribed} tooltipText="Real subscriber count from the database." />
-                    <TopStat label="Total conversions" value={stats.conversion} tooltipText="Estimated conversion from current viewers/subscribers." />
+                <div className="grid grid-cols-2 lg:grid-cols-5 divide-y lg:divide-y-0 lg:divide-x">
+                    <TopStat label="Total views" value={promptStats.totals.views} tooltipText="Combined prompt impressions across browser and custom opt-ins." />
+                    <TopStat label="Total clicks" value={promptStats.totals.clicks} tooltipText="Combined allow/subscribe clicks across both opt-in types." />
+                    <TopStat label="Total subscribers" value={promptStats.totals.conversions} tooltipText="Successful subscriptions attributed to each opt-in prompt type." />
+                    <TopStat label="Overall conversion" value={formatPercent(promptStats.totals.conversionPercent)} tooltipText="Total subscribers divided by total views across both opt-ins." />
+                    <TopStat label="Avg conversion" value={formatPercent(promptStats.totals.avgConversionPercent)} tooltipText="Average view-to-subscribe conversion rate across active opt-in types." />
                 </div>
             </CardContent>
         </Card>
@@ -216,11 +240,12 @@ export default function OptInsPage() {
                     </Button>
                 </div>
                 <Separator className="my-4" />
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <StatBlock label="Type" value="Popup" />
-                  <StatBlock label="Viewed" value={stats.viewed} />
-                  <StatBlock label="Subscribed" value={stats.subscribed} />
-                  <StatBlock label="Conversion %" value={stats.conversion} />
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <StatBlock label="Type" value="Native" />
+                  <StatBlock label="Viewed" value={promptStats.browser.views} />
+                  <StatBlock label="Clicks" value={promptStats.browser.clicks} />
+                  <StatBlock label="Subscribed" value={promptStats.browser.conversions} />
+                  <StatBlock label="Conversion %" value={formatPercent(promptStats.browser.conversionPercent)} />
                 </div>
               </div>
 
@@ -249,11 +274,12 @@ export default function OptInsPage() {
                     </Button>
                 </div>
                  <Separator className="my-4" />
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                     <StatBlock label="Type" value="Popup" />
-                    <StatBlock label="Viewed" value={stats.viewed} />
-                    <StatBlock label="Subscribed" value={stats.subscribed} />
-                    <StatBlock label="Conversion %" value={stats.conversion} />
+                    <StatBlock label="Viewed" value={promptStats.custom.views} />
+                    <StatBlock label="Clicks" value={promptStats.custom.clicks} />
+                    <StatBlock label="Subscribed" value={promptStats.custom.conversions} />
+                    <StatBlock label="Conversion %" value={formatPercent(promptStats.custom.conversionPercent)} />
                 </div>
               </div>
             </RadioGroup>

@@ -603,6 +603,72 @@
     }
   }
 
+  async function postOptInEventPayload(boot, payload) {
+    var endpoints = [];
+    if (boot.bootstrapSource === 'proxy') {
+      if (boot.optInEventEndpoint) {
+        endpoints.push(boot.optInEventEndpoint);
+      }
+      if (boot.optInEventFallbackEndpoint && endpoints.indexOf(boot.optInEventFallbackEndpoint) === -1) {
+        endpoints.push(boot.optInEventFallbackEndpoint);
+      }
+    } else {
+      if (boot.optInEventFallbackEndpoint) {
+        endpoints.push(boot.optInEventFallbackEndpoint);
+      }
+      if (boot.optInEventEndpoint && endpoints.indexOf(boot.optInEventEndpoint) === -1) {
+        endpoints.push(boot.optInEventEndpoint);
+      }
+    }
+
+    for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {
+      var endpoint = endpoints[endpointIndex];
+
+      try {
+        var response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok && isJsonResponse(response)) {
+          break;
+        }
+      } catch (_endpointError) {
+        if (endpointIndex === endpoints.length - 1) {
+          throw _endpointError;
+        }
+      }
+    }
+  }
+
+  async function sendOptInEvent(boot, promptType, eventType) {
+    if (!boot || !boot.shopDomain || !boot.externalId) {
+      return;
+    }
+
+    if (promptType !== 'browser' && promptType !== 'custom') {
+      return;
+    }
+
+    if (eventType !== 'view' && eventType !== 'click') {
+      return;
+    }
+
+    try {
+      await postOptInEventPayload(boot, {
+        shopDomain: boot.shopDomain,
+        externalId: boot.externalId,
+        promptType: promptType,
+        eventType: eventType
+      });
+    } catch (_error) {
+      // best effort only
+    }
+  }
+
   async function flushPendingActivity(boot) {
     if (!boot || !boot.shopDomain || !boot.externalId) {
       return;
@@ -1046,7 +1112,7 @@
 
   async function fetchGeoFromOwnEndpoint(appUrl) {
     if (!appUrl) {
-      return { country: null, countryName: null, city: null, region: null };
+      return { country: null, city: null };
     }
 
     try {
@@ -1060,18 +1126,16 @@
       });
 
       if (!response.ok) {
-        return { country: null, countryName: null, city: null, region: null };
+        return { country: null, city: null };
       }
 
       var data = await response.json();
       return {
         country: normalizeGeoCountry(data && data.country ? data.country : null),
-        countryName: data && data.countryName ? String(data.countryName).trim() || null : null,
-        city: data && data.city ? String(data.city).trim() || null : null,
-        region: data && data.region ? String(data.region).trim() || null : null
+        city: data && data.city ? String(data.city).trim() || null : null
       };
     } catch (_error) {
-      return { country: null, countryName: null, city: null, region: null };
+      return { country: null, city: null };
     }
   }
 
@@ -1088,18 +1152,16 @@
       });
 
       if (!response.ok) {
-        return { country: null, countryName: null, city: null, region: null };
+        return { country: null, city: null };
       }
 
       var data = await response.json();
       return {
         country: normalizeGeoCountry(data && data.country_code ? data.country_code : null),
-        countryName: data && data.country ? String(data.country).trim() || null : null,
-        city: data && data.city ? String(data.city).trim() || null : null,
-        region: data && data.region ? String(data.region).trim() || null : null
+        city: data && data.city ? String(data.city).trim() || null : null
       };
     } catch (_error) {
-      return { country: null, countryName: null, city: null, region: null };
+      return { country: null, city: null };
     }
   }
 
@@ -1116,21 +1178,13 @@
 
     __peGeoPromise = (async function () {
       var geo = await fetchGeoFromOwnEndpoint(appUrl);
-      if (!geo.country || !geo.city || !geo.region) {
+      if (!geo.country || !geo.city) {
         var fallback = await fetchGeoFromPublicApi();
         geo = {
           country: geo.country || fallback.country,
-          countryName: geo.countryName || fallback.countryName,
-          city: geo.city || fallback.city,
-          region: geo.region || fallback.region
+          city: geo.city || fallback.city
         };
       }
-
-      if (!geo.city) {
-        var timezone = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || null;
-        geo.city = deriveCityFromTimezone(timezone);
-      }
-
       __peGeoCache = geo;
       return geo;
     })();
@@ -1793,12 +1847,14 @@
         var resolvedProxyBasePath = getProxyBasePathFromBootstrapPath(resolvedProxyBootstrapPath);
         data.tokenEndpoint = resolvedProxyBasePath + '/token';
         data.activityEndpoint = resolvedProxyBasePath + '/activity';
+        data.optInEventEndpoint = resolvedProxyBasePath + '/opt-in-event';
         data.iosHomeScreenEndpoint = resolvedProxyBasePath + '/ios-home-screen';
       } else {
         var directBase = config.appUrl ? config.appUrl.replace(/\/$/, '') : '';
         if (directBase) {
           data.tokenEndpoint = data.tokenEndpoint || (directBase + '/api/storefront/token?shop=' + encodeURIComponent(config.shopDomain));
           data.activityEndpoint = data.activityEndpoint || (directBase + '/api/storefront/activity');
+          data.optInEventEndpoint = data.optInEventEndpoint || (directBase + '/api/storefront/opt-in-event');
           data.iosHomeScreenEndpoint = data.iosHomeScreenEndpoint || (directBase + '/api/storefront/ios-home-screen');
         }
       }
@@ -1835,11 +1891,17 @@
           if (!cachedBoot.activityEndpoint) {
             cachedBoot.activityEndpoint = (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity');
           }
+          if (!cachedBoot.optInEventEndpoint) {
+            cachedBoot.optInEventEndpoint = (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/opt-in-event');
+          }
           if (!cachedBoot.iosHomeScreenEndpoint) {
             cachedBoot.iosHomeScreenEndpoint = (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen');
           }
           if (!cachedBoot.activityFallbackEndpoint && cachedDirectBase) {
             cachedBoot.activityFallbackEndpoint = cachedDirectBase + '/api/storefront/activity';
+          }
+          if (!cachedBoot.optInEventFallbackEndpoint && cachedDirectBase) {
+            cachedBoot.optInEventFallbackEndpoint = cachedDirectBase + '/api/storefront/opt-in-event';
           }
           if (!cachedBoot.iosHomeScreenFallbackEndpoint && cachedDirectBase) {
             cachedBoot.iosHomeScreenFallbackEndpoint = cachedDirectBase + '/api/storefront/ios-home-screen';
@@ -1865,6 +1927,8 @@
       tokenEndpoint: config.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH,
       activityEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/activity'),
       activityFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/activity' : '',
+      optInEventEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/opt-in-event'),
+      optInEventFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/opt-in-event' : '',
       iosHomeScreenEndpoint: (config.proxyBootstrapPath || DEFAULT_PROXY_BOOTSTRAP_PATH).replace(/\/bootstrap(?:\?.*)?$/i, '/ios-home-screen'),
       iosHomeScreenFallbackEndpoint: config.appUrl ? config.appUrl.replace(/\/$/, '') + '/api/storefront/ios-home-screen' : '',
       optIn: defaultOptInSettings,
@@ -2139,17 +2203,13 @@
       // This is done client-side so it stays correct even when the token save is
       // relayed through the Shopify app proxy (which would otherwise hide the IP).
       var visitorGeo = await resolveVisitorGeo(runtimeConfig.appUrl);
-      var resolvedCountry = visitorGeo.countryName
-        || visitorGeo.country
+      var resolvedCountry = visitorGeo.country
         || (clientProfile && clientProfile.country ? clientProfile.country : null);
       var resolvedCity = visitorGeo.city
         || (clientProfile && clientProfile.city ? clientProfile.city : null);
-      var resolvedRegion = visitorGeo.region
-        || (clientProfile && clientProfile.region ? clientProfile.region : null);
       if (clientProfile) {
         clientProfile.country = resolvedCountry;
         clientProfile.city = resolvedCity;
-        clientProfile.region = resolvedRegion;
       }
 
       var payload = {
@@ -2166,13 +2226,10 @@
         locale: clientProfile && clientProfile.language ? clientProfile.language : navigator.language,
         country: resolvedCountry,
         city: resolvedCity,
-        region: resolvedRegion,
         deviceContext: Object.assign({}, serializeClientProfile(clientProfile) || {}, {
-          clientId: boot.clientId || null,
-          country: resolvedCountry,
-          city: resolvedCity,
-          region: resolvedRegion
-        })
+          clientId: boot.clientId || null
+        }),
+        optInPromptType: settings.optInPromptType || runtimeConfig.mode || null
       };
 
       var primaryTokenEndpoint = boot.tokenEndpoint || runtimeConfig.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH;
@@ -2523,6 +2580,7 @@
         if (effectiveMode === 'browser') {
           recordPromptAttempt(config.shopDomain);
         }
+        void sendOptInEvent(boot, effectiveMode, 'view');
         openPrompt(root);
       };
 
@@ -2555,7 +2613,9 @@
         if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) { closePrompt(root); return; }
         incrementSessionDisplayCount(config.shopDomain);
         recordPromptAttempt(config.shopDomain);
-        var browserModeResult = await registerToken(config, boot, { silent: false }, clientProfile);
+        void sendOptInEvent(boot, 'browser', 'view');
+        void sendOptInEvent(boot, 'browser', 'click');
+        var browserModeResult = await registerToken(config, boot, { silent: false, optInPromptType: 'browser' }, clientProfile);
         if (!browserModeResult.ok) {
           if (browserModeResult.reason === 'sw-script-missing') {
             showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
@@ -2586,12 +2646,14 @@
           primaryButton.disabled = true;
           primaryButton.setAttribute('aria-busy', 'true');
 
+          void sendOptInEvent(boot, effectiveMode, 'click');
+
           // Custom mode should dismiss instantly after click.
           if (effectiveMode === 'custom') {
             closePrompt(root);
           }
 
-          var result = await registerToken(config, boot, { silent: false }, clientProfile);
+          var result = await registerToken(config, boot, { silent: false, optInPromptType: effectiveMode }, clientProfile);
 
           if (effectiveMode === 'custom') {
             if (!result.ok) {

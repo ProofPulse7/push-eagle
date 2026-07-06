@@ -16,7 +16,7 @@ export type CronWorkProbe = {
 };
 
 const PROBE_CACHE_KEY = 'pe:cron:probe_idle_cache_v1';
-const PROBE_CACHE_TTL_SECONDS = 90;
+const PROBE_CACHE_TTL_SECONDS = 300;
 
 const readProbeFromNeon = async (): Promise<CronWorkProbe> => {
   const sql = getNeonSql();

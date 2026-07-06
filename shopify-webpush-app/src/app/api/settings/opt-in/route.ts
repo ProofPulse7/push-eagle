@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { invalidateShopDashboardCaches } from '@/lib/server/cache/api-kv-cache';
-import { getOptInSettings, updateOptInSettings } from '@/lib/server/data/store';
+import { getOptInPromptStats, getOptInSettings, updateOptInSettings } from '@/lib/server/data/store';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -34,8 +34,11 @@ const updateSchema = z.object({
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const settings = await getOptInSettings(shopDomain);
-    return NextResponse.json({ ok: true, shopDomain, ...settings });
+    const [settings, stats] = await Promise.all([
+      getOptInSettings(shopDomain),
+      getOptInPromptStats(shopDomain),
+    ]);
+    return NextResponse.json({ ok: true, shopDomain, ...settings, stats });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch opt-in settings.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

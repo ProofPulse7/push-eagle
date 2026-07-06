@@ -89,6 +89,8 @@ export async function GET(request: Request) {
       conversionFallbackEndpoint: `${directAppOrigin}/api/storefront/conversion`,
       activityEndpoint: `${proxyBasePath}/activity`,
       activityFallbackEndpoint: `${directAppOrigin}/api/storefront/activity`,
+      optInEventEndpoint: `${proxyBasePath}/opt-in-event`,
+      optInEventFallbackEndpoint: `${directAppOrigin}/api/storefront/opt-in-event`,
       iosHomeScreenEndpoint: `${proxyBasePath}/ios-home-screen`,
       iosHomeScreenFallbackEndpoint: `${directAppOrigin}/api/storefront/ios-home-screen`,
       optIn,
