@@ -100,7 +100,19 @@ export const audienceRead = async <T>(opts: {
 
   if (mode === 'read' || mode === 'd1_only') {
     try {
-      return await opts.d1();
+      const d1Result = await opts.d1();
+      if (mode === 'read') {
+        const isEmpty =
+          d1Result == null
+          || (Array.isArray(d1Result) && d1Result.length === 0);
+        if (isEmpty) {
+          const neonResult = await opts.neon();
+          if (neonResult != null && !(Array.isArray(neonResult) && neonResult.length === 0)) {
+            return neonResult;
+          }
+        }
+      }
+      return d1Result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error ?? '');
       // In d1_only Neon is stale, but falling back still beats crashing a read.

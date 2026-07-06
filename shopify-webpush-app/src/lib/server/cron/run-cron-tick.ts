@@ -28,7 +28,7 @@ const SAFETY_NET_KEY = 'pe:cron:last:safetynet';
 
 const MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const PROMOTION_INTERVAL_MS = 5 * 60 * 1000;
-const QUEUE_SAFETY_NET_INTERVAL_MS = 30 * 60 * 1000;
+const QUEUE_SAFETY_NET_INTERVAL_MS = 2 * 60 * 1000;
 const INLINE_AUTOMATION_INTERVAL_MS = 5 * 60 * 1000;
 
 // Time-based scheduling (via KV markers) instead of matching an exact UTC minute:

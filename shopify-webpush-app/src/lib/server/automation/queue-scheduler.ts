@@ -138,7 +138,7 @@ export const reconcileMissedAutomationJobs = async (limit = 100) => {
     SELECT id, due_at, queue_enqueued_at
     FROM automation_jobs
     WHERE status = 'pending'
-      AND due_at <= NOW() - INTERVAL '2 minutes'
+      AND due_at <= NOW() - INTERVAL '30 seconds'
     ORDER BY due_at ASC
     LIMIT ${limit}
   `;

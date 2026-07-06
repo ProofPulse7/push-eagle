@@ -4721,6 +4721,10 @@ export const processAutomationJob = async (jobId: string) => {
     const errorMessage = shouldFail
       ? 'Missing active token.'
       : 'Missing active token. Waiting for token refresh.';
+    const isWelcome = claim.rule_key === 'welcome_subscriber';
+    const deferMs = isWelcome
+      ? (attempts <= 3 ? 5_000 : 15_000)
+      : 60_000;
 
     if (shouldFail) {
       await sql`
@@ -4731,7 +4735,7 @@ export const processAutomationJob = async (jobId: string) => {
         WHERE id = ${jobId}
       `;
     } else {
-      const deferredDueAt = new Date(Date.now() + 60_000);
+      const deferredDueAt = new Date(Date.now() + deferMs);
       await sql`
         UPDATE automation_jobs
         SET status = 'pending',
@@ -5567,7 +5571,7 @@ export const processAutomationJob = async (jobId: string) => {
       return { processed: false, error: message };
     }
 
-    const retryMinutes = claim.rule_key === 'welcome_subscriber' ? 1 : 5;
+    const retryMinutes = claim.rule_key === 'welcome_subscriber' ? 0.25 : 5;
     const shouldFail = Number(claim.attempts ?? 0) >= 5;
     const deferredDueAt = shouldFail ? null : new Date(Date.now() + retryMinutes * 60_000);
 
@@ -7743,16 +7747,18 @@ const maybeEnqueueWelcomeAutomation = async (params: {
     LIMIT 1
   `;
 
-  const existingWelcomeDeliveryRows = await sql`
-    SELECT id
-    FROM automation_deliveries
-    WHERE shop_domain = ${shopDomain}
-      AND rule_key = 'welcome_subscriber'
-      AND external_id = ${externalId}
-    LIMIT 1
-  `;
+  const existingWelcomeDelivery = await (async () => {
+    const { hasAutomationDeliveryForRuleExternal } = await import(
+      '@/lib/server/integrations/deliveries-data'
+    );
+    return hasAutomationDeliveryForRuleExternal({
+      shopDomain,
+      ruleKey: 'welcome_subscriber',
+      externalId,
+    });
+  })();
 
-  if (existingWelcomeJobRows.length > 0 || existingWelcomeDeliveryRows.length > 0) {
+  if (existingWelcomeJobRows.length > 0 || existingWelcomeDelivery) {
     return;
   }
 
@@ -7766,11 +7772,7 @@ const maybeEnqueueWelcomeAutomation = async (params: {
       continue;
     }
 
-    // Small scheduler-boundary compensation so minute-level cron polling does
-    // not systematically deliver delayed reminders one minute late.
-    const adjustedDelayMs = step.delayMinutes > 0
-      ? Math.max(0, step.delayMinutes * 60_000 - 45_000)
-      : 0;
+    const adjustedDelayMs = Math.max(0, step.delayMinutes * 60_000);
     const dueAt = new Date(now + adjustedDelayMs);
 
     const jobId = await enqueueAutomationJob({
@@ -7806,7 +7808,23 @@ const maybeEnqueueWelcomeAutomation = async (params: {
   }
 
   if (immediateWelcomeJobIds.length > 0) {
-    await Promise.all(immediateWelcomeJobIds.map((jobId) => processAutomationJob(jobId)));
+    const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+    for (const jobId of immediateWelcomeJobIds) {
+      const result = await processAutomationJob(jobId);
+      if (!result.processed) {
+        await sql`
+          UPDATE automation_jobs
+          SET
+            status = 'pending',
+            due_at = NOW() + INTERVAL '5 seconds',
+            queue_enqueued_at = NULL,
+            updated_at = NOW()
+          WHERE id = ${jobId}
+            AND status IN ('pending', 'processing')
+        `;
+        void bumpCronWakeNow();
+      }
+    }
   }
 };
 
@@ -11646,7 +11664,7 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     ),
   );
 
-  const { hasOrderAttribution, findCampaignTouches, findAutomationTouches, updateTouchConversion } =
+  const { hasOrderAttribution, findCampaignTouches, findAutomationTouches, updateTouchConversion, findAutomationFingerprintClicks, findAutomationFingerprintDeliveries, findCampaignFingerprintClicks, findCampaignFingerprintDeliveries, findCampaignTouchesByCampaignId } =
     await import('@/lib/server/integrations/deliveries-data');
 
   const priorAttribution = await hasOrderAttribution(input.shopDomain, input.orderId);
@@ -11699,74 +11717,13 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       return [] as AutomationTouch[];
     }
 
-    let rows: Array<{ id: number | string; rule_key: string; clicked_at: string | Date }> = [];
-
-    if (ipAddress && userAgent) {
-      rows = ruleKey
-        ? await sql`
-          SELECT id, rule_key, clicked_at
-          FROM automation_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND rule_key = ${ruleKey}
-            AND ip_address = ${ipAddress}
-            AND user_agent = ${userAgent}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>
-        : await sql`
-          SELECT id, rule_key, clicked_at
-          FROM automation_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND ip_address = ${ipAddress}
-            AND user_agent = ${userAgent}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>;
-    } else if (ipAddress) {
-      rows = ruleKey
-        ? await sql`
-          SELECT id, rule_key, clicked_at
-          FROM automation_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND rule_key = ${ruleKey}
-            AND ip_address = ${ipAddress}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>
-        : await sql`
-          SELECT id, rule_key, clicked_at
-          FROM automation_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND ip_address = ${ipAddress}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>;
-    } else if (userAgent) {
-      rows = ruleKey
-        ? await sql`
-          SELECT id, rule_key, clicked_at
-          FROM automation_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND rule_key = ${ruleKey}
-            AND user_agent = ${userAgent}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>
-        : await sql`
-          SELECT id, rule_key, clicked_at
-          FROM automation_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND user_agent = ${userAgent}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        ` as Array<{ id: number | string; rule_key: string; clicked_at: string | Date }>;
-    }
+    const rows = await findAutomationFingerprintClicks({
+      shopDomain: input.shopDomain,
+      windowStart,
+      ruleKey,
+      ipAddress,
+      userAgent,
+    });
 
     return rows.map((row) => ({
       id: Number(row.id),
@@ -11782,26 +11739,12 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       return [] as AutomationTouch[];
     }
 
-    const rows = ruleKey
-      ? await sql`
-        SELECT id, rule_key, delivered_at
-        FROM automation_deliveries
-        WHERE shop_domain = ${input.shopDomain}
-          AND delivered_at >= ${windowStart}
-          AND rule_key = ${ruleKey}
-          AND user_agent = ${userAgent}
-        ORDER BY delivered_at DESC
-        LIMIT 20
-      `
-      : await sql`
-        SELECT id, rule_key, delivered_at
-        FROM automation_deliveries
-        WHERE shop_domain = ${input.shopDomain}
-          AND delivered_at >= ${windowStart}
-          AND user_agent = ${userAgent}
-        ORDER BY delivered_at DESC
-        LIMIT 20
-      `;
+    const rows = await findAutomationFingerprintDeliveries({
+      shopDomain: input.shopDomain,
+      windowStart,
+      ruleKey,
+      userAgent,
+    });
 
     return rows.map((row) => ({
       id: Number(row.id),
@@ -11819,74 +11762,13 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       return [] as CampaignTouch[];
     }
 
-    let rows: Array<{ id: number | string; campaign_id: string; clicked_at: string | Date }> = [];
-
-    if (ipAddress && userAgent) {
-      rows = campaignId
-        ? await sql`
-          SELECT id, campaign_id, clicked_at
-          FROM campaign_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND campaign_id = ${campaignId}
-            AND ip_address = ${ipAddress}
-            AND user_agent = ${userAgent}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        `
-        : await sql`
-          SELECT id, campaign_id, clicked_at
-          FROM campaign_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND ip_address = ${ipAddress}
-            AND user_agent = ${userAgent}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        `;
-    } else if (ipAddress) {
-      rows = campaignId
-        ? await sql`
-          SELECT id, campaign_id, clicked_at
-          FROM campaign_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND campaign_id = ${campaignId}
-            AND ip_address = ${ipAddress}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        `
-        : await sql`
-          SELECT id, campaign_id, clicked_at
-          FROM campaign_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND ip_address = ${ipAddress}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        `;
-    } else if (userAgent) {
-      rows = campaignId
-        ? await sql`
-          SELECT id, campaign_id, clicked_at
-          FROM campaign_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND campaign_id = ${campaignId}
-            AND user_agent = ${userAgent}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        `
-        : await sql`
-          SELECT id, campaign_id, clicked_at
-          FROM campaign_clicks
-          WHERE shop_domain = ${input.shopDomain}
-            AND clicked_at >= ${windowStart}
-            AND user_agent = ${userAgent}
-          ORDER BY clicked_at DESC
-          LIMIT 20
-        `;
-    }
+    const rows = await findCampaignFingerprintClicks({
+      shopDomain: input.shopDomain,
+      windowStart,
+      campaignId,
+      ipAddress,
+      userAgent,
+    });
 
     return rows.map((row) => ({
       id: Number(row.id),
@@ -11902,26 +11784,12 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       return [] as CampaignTouch[];
     }
 
-    const rows = campaignId
-      ? await sql`
-        SELECT id, campaign_id, delivered_at
-        FROM campaign_deliveries
-        WHERE shop_domain = ${input.shopDomain}
-          AND delivered_at >= ${windowStart}
-          AND campaign_id = ${campaignId}
-          AND user_agent = ${userAgent}
-        ORDER BY delivered_at DESC
-        LIMIT 20
-      `
-      : await sql`
-        SELECT id, campaign_id, delivered_at
-        FROM campaign_deliveries
-        WHERE shop_domain = ${input.shopDomain}
-          AND delivered_at >= ${windowStart}
-          AND user_agent = ${userAgent}
-        ORDER BY delivered_at DESC
-        LIMIT 20
-      `;
+    const rows = await findCampaignFingerprintDeliveries({
+      shopDomain: input.shopDomain,
+      windowStart,
+      campaignId,
+      userAgent,
+    });
 
     return rows.map((row) => ({
       id: Number(row.id),
@@ -11935,17 +11803,14 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     campaignId: string,
     mode: 'click' | 'impression',
   ) => {
-    if (mode === 'click') {
-      const rows = await sql`
-        SELECT id, campaign_id, clicked_at
-        FROM campaign_clicks
-        WHERE shop_domain = ${input.shopDomain}
-          AND campaign_id = ${campaignId}
-          AND clicked_at >= ${windowStart}
-        ORDER BY clicked_at DESC
-        LIMIT 20
-      `;
+    const rows = await findCampaignTouchesByCampaignId({
+      shopDomain: input.shopDomain,
+      campaignId,
+      windowStart,
+      mode,
+    });
 
+    if (mode === 'click') {
       return rows.map((row) => ({
         id: Number(row.id),
         campaignId: String(row.campaign_id),
@@ -11953,16 +11818,6 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
         table: 'campaign_clicks' as const,
       }));
     }
-
-    const rows = await sql`
-      SELECT id, campaign_id, delivered_at
-      FROM campaign_deliveries
-      WHERE shop_domain = ${input.shopDomain}
-        AND campaign_id = ${campaignId}
-        AND delivered_at >= ${windowStart}
-      ORDER BY delivered_at DESC
-      LIMIT 20
-    `;
 
     return rows.map((row) => ({
       id: Number(row.id),
@@ -11981,25 +11836,19 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
   let automationTouches: AutomationTouch[] = [];
 
   if (settings.attributionModel === 'click') {
-    campaignTouches = externalIdCandidates.length > 0
-      ? (await sql`
-        SELECT c.id, c.campaign_id, c.clicked_at
-        FROM campaign_clicks c
-        LEFT JOIN subscribers s ON s.id = c.subscriber_id
-        WHERE c.shop_domain = ${input.shopDomain}
-          AND c.clicked_at >= ${windowStart}
-          AND (
-            c.external_id = ANY(${externalIdCandidates})
-            OR s.external_id = ANY(${externalIdCandidates})
-          )
-        ORDER BY c.clicked_at DESC
-      `).map((row) => ({
+    if (externalIdCandidates.length > 0) {
+      const { clicks } = await findCampaignTouches({
+        shopDomain: input.shopDomain,
+        externalIds: externalIdCandidates,
+        windowStart,
+      });
+      campaignTouches = clicks.map((row) => ({
         id: Number(row.id),
         campaignId: String(row.campaign_id),
         touchedAt: new Date(String(row.clicked_at)),
         table: 'campaign_clicks' as const,
-      }))
-      : [];
+      }));
+    }
 
     if (campaignTouches.length === 0 && input.campaignId && !automationRuleKeyFromCampaign) {
       campaignTouches = await fetchCampaignTouchesByCampaignId(String(input.campaignId), 'click');
@@ -12011,21 +11860,19 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       );
     }
 
-    automationTouches = externalIdCandidates.length > 0
-      ? (await sql`
-        SELECT id, rule_key, clicked_at
-        FROM automation_clicks
-        WHERE shop_domain = ${input.shopDomain}
-          AND external_id = ANY(${externalIdCandidates})
-          AND clicked_at >= ${windowStart}
-        ORDER BY clicked_at DESC
-      `).map((row) => ({
+    if (externalIdCandidates.length > 0) {
+      const { clicks } = await findAutomationTouches({
+        shopDomain: input.shopDomain,
+        externalIds: externalIdCandidates,
+        windowStart,
+      });
+      automationTouches = clicks.map((row) => ({
         id: Number(row.id),
         ruleKey: String(row.rule_key),
         touchedAt: new Date(String(row.clicked_at)),
         table: 'automation_clicks' as const,
-      }))
-      : [];
+      }));
+    }
 
     if (automationTouches.length === 0) {
       if (automationRuleKeyFromCampaign) {
@@ -12037,18 +11884,11 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     }
   } else {
     const campaignClickTouches = externalIdCandidates.length > 0
-      ? (await sql`
-        SELECT c.id, c.campaign_id, c.clicked_at
-        FROM campaign_clicks c
-        LEFT JOIN subscribers s ON s.id = c.subscriber_id
-        WHERE c.shop_domain = ${input.shopDomain}
-          AND c.clicked_at >= ${windowStart}
-          AND (
-            c.external_id = ANY(${externalIdCandidates})
-            OR s.external_id = ANY(${externalIdCandidates})
-          )
-        ORDER BY c.clicked_at DESC
-      `).map((row) => ({
+      ? (await findCampaignTouches({
+        shopDomain: input.shopDomain,
+        externalIds: externalIdCandidates,
+        windowStart,
+      })).clicks.map((row) => ({
         id: Number(row.id),
         campaignId: String(row.campaign_id),
         touchedAt: new Date(String(row.clicked_at)),
@@ -12057,18 +11897,11 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       : [];
 
     const campaignImpressionTouches = externalIdCandidates.length > 0
-      ? (await sql`
-        SELECT d.id, d.campaign_id, d.delivered_at
-        FROM campaign_deliveries d
-        LEFT JOIN subscribers s ON s.id = d.subscriber_id
-        WHERE d.shop_domain = ${input.shopDomain}
-          AND d.delivered_at >= ${windowStart}
-          AND (
-            d.external_id = ANY(${externalIdCandidates})
-            OR s.external_id = ANY(${externalIdCandidates})
-          )
-        ORDER BY d.delivered_at DESC
-      `).map((row) => ({
+      ? (await findCampaignTouches({
+        shopDomain: input.shopDomain,
+        externalIds: externalIdCandidates,
+        windowStart,
+      })).deliveries.map((row) => ({
         id: Number(row.id),
         campaignId: String(row.campaign_id),
         touchedAt: new Date(String(row.delivered_at)),
@@ -12089,37 +11922,27 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
       );
     }
 
-    const automationClickTouches = externalIdCandidates.length > 0
-      ? (await sql`
-        SELECT id, rule_key, clicked_at
-        FROM automation_clicks
-        WHERE shop_domain = ${input.shopDomain}
-          AND external_id = ANY(${externalIdCandidates})
-          AND clicked_at >= ${windowStart}
-        ORDER BY clicked_at DESC
-      `).map((row) => ({
-        id: Number(row.id),
-        ruleKey: String(row.rule_key),
-        touchedAt: new Date(String(row.clicked_at)),
-        table: 'automation_clicks' as const,
-      }))
-      : [];
+    const automationTouchResult = externalIdCandidates.length > 0
+      ? await findAutomationTouches({
+        shopDomain: input.shopDomain,
+        externalIds: externalIdCandidates,
+        windowStart,
+      })
+      : { clicks: [], deliveries: [] };
 
-    const automationImpressionTouches = externalIdCandidates.length > 0
-      ? (await sql`
-        SELECT id, rule_key, delivered_at
-        FROM automation_deliveries
-        WHERE shop_domain = ${input.shopDomain}
-          AND external_id = ANY(${externalIdCandidates})
-          AND delivered_at >= ${windowStart}
-        ORDER BY delivered_at DESC
-      `).map((row) => ({
-        id: Number(row.id),
-        ruleKey: String(row.rule_key),
-        touchedAt: new Date(String(row.delivered_at)),
-        table: 'automation_deliveries' as const,
-      }))
-      : [];
+    const automationClickTouches = automationTouchResult.clicks.map((row) => ({
+      id: Number(row.id),
+      ruleKey: String(row.rule_key),
+      touchedAt: new Date(String(row.clicked_at)),
+      table: 'automation_clicks' as const,
+    }));
+
+    const automationImpressionTouches = automationTouchResult.deliveries.map((row) => ({
+      id: Number(row.id),
+      ruleKey: String(row.rule_key),
+      touchedAt: new Date(String(row.delivered_at)),
+      table: 'automation_deliveries' as const,
+    }));
 
     automationTouches = [...automationClickTouches, ...automationImpressionTouches]
       .sort((a, b) => b.touchedAt.getTime() - a.touchedAt.getTime());

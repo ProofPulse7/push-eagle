@@ -1,4 +1,4 @@
-import { getNeonSql } from '@/lib/integrations/database/neon';
+﻿import { getNeonSql } from '@/lib/integrations/database/neon';
 import {
   d1CancelCampaignDeliveries,
   d1ClaimCampaignDeliverySlots,
@@ -11,8 +11,14 @@ import {
   d1DeleteWelcomeAutomationData,
   d1FindAutomationDeliveryId,
   d1FindAutomationDeliveryJobId,
+  d1FindAutomationFingerprintClicks,
+  d1FindAutomationFingerprintDeliveries,
   d1FindAutomationTouches,
+  d1FindCampaignFingerprintClicks,
+  d1FindCampaignFingerprintDeliveries,
   d1FindCampaignTouches,
+  d1FindCampaignTouchesByCampaignId,
+  d1HasAutomationDeliveryForRuleExternal,
   d1GetAutomationAggregateForAnalytics,
   d1GetAutomationClicksByRule,
   d1GetAutomationStatsByRule,
@@ -63,7 +69,7 @@ export const extractAutomationDeliveryMeta = (payload: Record<string, unknown> |
 };
 
 // ---------------------------------------------------------------------------
-// Automation delivery dedup (welcome / cart) — Neon join vs D1 step_key
+// Automation delivery dedup (welcome / cart) â€” Neon join vs D1 step_key
 // ---------------------------------------------------------------------------
 
 export const findAutomationDeliveryJobIdJoined = async (input: {
@@ -1231,4 +1237,356 @@ export const findAutomationTouches = async (input: {
   ]);
 
   return { clicks, deliveries };
+};
+
+export const hasAutomationDeliveryForRuleExternal = async (input: {
+  shopDomain: string;
+  ruleKey: string;
+  externalId: string;
+}) => {
+  if (isD1DeliveriesEnabled()) {
+    return d1HasAutomationDeliveryForRuleExternal(input);
+  }
+
+  const sql = neonSql();
+  const rows = await sql`
+    SELECT id
+    FROM automation_deliveries
+    WHERE shop_domain = ${input.shopDomain}
+      AND rule_key = ${input.ruleKey}
+      AND external_id = ${input.externalId}
+    LIMIT 1
+  `;
+  return rows.length > 0;
+};
+
+export const findCampaignTouchesByCampaignId = async (input: {
+  shopDomain: string;
+  campaignId: string;
+  windowStart: Date;
+  mode: 'click' | 'impression';
+}) => {
+  if (isD1DeliveriesEnabled()) {
+    return d1FindCampaignTouchesByCampaignId({
+      shopDomain: input.shopDomain,
+      campaignId: input.campaignId,
+      windowStartIso: input.windowStart.toISOString(),
+      mode: input.mode,
+    });
+  }
+
+  const sql = neonSql();
+  if (input.mode === 'click') {
+    return sql`
+      SELECT id, campaign_id, clicked_at
+      FROM campaign_clicks
+      WHERE shop_domain = ${input.shopDomain}
+        AND campaign_id = ${input.campaignId}
+        AND clicked_at >= ${input.windowStart}
+      ORDER BY clicked_at DESC
+      LIMIT 20
+    `;
+  }
+
+  return sql`
+    SELECT id, campaign_id, delivered_at
+    FROM campaign_deliveries
+    WHERE shop_domain = ${input.shopDomain}
+      AND campaign_id = ${input.campaignId}
+      AND delivered_at >= ${input.windowStart}
+    ORDER BY delivered_at DESC
+    LIMIT 20
+  `;
+};
+
+export const findAutomationFingerprintClicks = async (input: {
+  shopDomain: string;
+  windowStart: Date;
+  ruleKey?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  limit?: number;
+}) => {
+  if (isD1DeliveriesEnabled()) {
+    return d1FindAutomationFingerprintClicks({
+      shopDomain: input.shopDomain,
+      windowStartIso: input.windowStart.toISOString(),
+      ruleKey: input.ruleKey,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      limit: input.limit,
+    });
+  }
+
+  const sql = neonSql();
+  const ruleKey = input.ruleKey ?? null;
+  const ipAddress = input.ipAddress ?? null;
+  const userAgent = input.userAgent ?? null;
+  const limit = input.limit ?? 20;
+
+  if (ipAddress && userAgent) {
+    return ruleKey
+      ? sql`
+        SELECT id, rule_key, clicked_at
+        FROM automation_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND rule_key = ${ruleKey}
+          AND ip_address = ${ipAddress}
+          AND user_agent = ${userAgent}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `
+      : sql`
+        SELECT id, rule_key, clicked_at
+        FROM automation_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND ip_address = ${ipAddress}
+          AND user_agent = ${userAgent}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `;
+  }
+
+  if (ipAddress) {
+    return ruleKey
+      ? sql`
+        SELECT id, rule_key, clicked_at
+        FROM automation_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND rule_key = ${ruleKey}
+          AND ip_address = ${ipAddress}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `
+      : sql`
+        SELECT id, rule_key, clicked_at
+        FROM automation_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND ip_address = ${ipAddress}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `;
+  }
+
+  if (userAgent) {
+    return ruleKey
+      ? sql`
+        SELECT id, rule_key, clicked_at
+        FROM automation_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND rule_key = ${ruleKey}
+          AND user_agent = ${userAgent}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `
+      : sql`
+        SELECT id, rule_key, clicked_at
+        FROM automation_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND user_agent = ${userAgent}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `;
+  }
+
+  return [];
+};
+
+export const findAutomationFingerprintDeliveries = async (input: {
+  shopDomain: string;
+  windowStart: Date;
+  ruleKey?: string | null;
+  userAgent?: string | null;
+  limit?: number;
+}) => {
+  if (isD1DeliveriesEnabled()) {
+    return d1FindAutomationFingerprintDeliveries({
+      shopDomain: input.shopDomain,
+      windowStartIso: input.windowStart.toISOString(),
+      ruleKey: input.ruleKey,
+      userAgent: input.userAgent,
+      limit: input.limit,
+    });
+  }
+
+  const sql = neonSql();
+  const userAgent = input.userAgent ?? null;
+  if (!userAgent) {
+    return [];
+  }
+
+  const ruleKey = input.ruleKey ?? null;
+  const limit = input.limit ?? 20;
+  return ruleKey
+    ? sql`
+      SELECT id, rule_key, delivered_at
+      FROM automation_deliveries
+      WHERE shop_domain = ${input.shopDomain}
+        AND delivered_at >= ${input.windowStart}
+        AND rule_key = ${ruleKey}
+        AND user_agent = ${userAgent}
+      ORDER BY delivered_at DESC
+      LIMIT ${limit}
+    `
+    : sql`
+      SELECT id, rule_key, delivered_at
+      FROM automation_deliveries
+      WHERE shop_domain = ${input.shopDomain}
+        AND delivered_at >= ${input.windowStart}
+        AND user_agent = ${userAgent}
+      ORDER BY delivered_at DESC
+      LIMIT ${limit}
+    `;
+};
+
+export const findCampaignFingerprintClicks = async (input: {
+  shopDomain: string;
+  windowStart: Date;
+  campaignId?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  limit?: number;
+}) => {
+  if (isD1DeliveriesEnabled()) {
+    return d1FindCampaignFingerprintClicks({
+      shopDomain: input.shopDomain,
+      windowStartIso: input.windowStart.toISOString(),
+      campaignId: input.campaignId,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      limit: input.limit,
+    });
+  }
+
+  const sql = neonSql();
+  const campaignId = input.campaignId ?? null;
+  const ipAddress = input.ipAddress ?? null;
+  const userAgent = input.userAgent ?? null;
+  const limit = input.limit ?? 20;
+
+  if (ipAddress && userAgent) {
+    return campaignId
+      ? sql`
+        SELECT id, campaign_id, clicked_at
+        FROM campaign_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND campaign_id = ${campaignId}
+          AND ip_address = ${ipAddress}
+          AND user_agent = ${userAgent}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `
+      : sql`
+        SELECT id, campaign_id, clicked_at
+        FROM campaign_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND ip_address = ${ipAddress}
+          AND user_agent = ${userAgent}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `;
+  }
+
+  if (ipAddress) {
+    return campaignId
+      ? sql`
+        SELECT id, campaign_id, clicked_at
+        FROM campaign_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND campaign_id = ${campaignId}
+          AND ip_address = ${ipAddress}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `
+      : sql`
+        SELECT id, campaign_id, clicked_at
+        FROM campaign_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND ip_address = ${ipAddress}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `;
+  }
+
+  if (userAgent) {
+    return campaignId
+      ? sql`
+        SELECT id, campaign_id, clicked_at
+        FROM campaign_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND campaign_id = ${campaignId}
+          AND user_agent = ${userAgent}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `
+      : sql`
+        SELECT id, campaign_id, clicked_at
+        FROM campaign_clicks
+        WHERE shop_domain = ${input.shopDomain}
+          AND clicked_at >= ${input.windowStart}
+          AND user_agent = ${userAgent}
+        ORDER BY clicked_at DESC
+        LIMIT ${limit}
+      `;
+  }
+
+  return [];
+};
+
+export const findCampaignFingerprintDeliveries = async (input: {
+  shopDomain: string;
+  windowStart: Date;
+  campaignId?: string | null;
+  userAgent?: string | null;
+  limit?: number;
+}) => {
+  if (isD1DeliveriesEnabled()) {
+    return d1FindCampaignFingerprintDeliveries({
+      shopDomain: input.shopDomain,
+      windowStartIso: input.windowStart.toISOString(),
+      campaignId: input.campaignId,
+      userAgent: input.userAgent,
+      limit: input.limit,
+    });
+  }
+
+  const sql = neonSql();
+  const userAgent = input.userAgent ?? null;
+  if (!userAgent) {
+    return [];
+  }
+
+  const campaignId = input.campaignId ?? null;
+  const limit = input.limit ?? 20;
+  return campaignId
+    ? sql`
+      SELECT id, campaign_id, delivered_at
+      FROM campaign_deliveries
+      WHERE shop_domain = ${input.shopDomain}
+        AND delivered_at >= ${input.windowStart}
+        AND campaign_id = ${campaignId}
+        AND user_agent = ${userAgent}
+      ORDER BY delivered_at DESC
+      LIMIT ${limit}
+    `
+    : sql`
+      SELECT id, campaign_id, delivered_at
+      FROM campaign_deliveries
+      WHERE shop_domain = ${input.shopDomain}
+        AND delivered_at >= ${input.windowStart}
+        AND user_agent = ${userAgent}
+      ORDER BY delivered_at DESC
+      LIMIT ${limit}
+    `;
 };

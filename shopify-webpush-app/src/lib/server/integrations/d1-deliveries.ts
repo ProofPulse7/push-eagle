@@ -1061,6 +1061,129 @@ export const d1FindAutomationFingerprintClicks = async (input: {
   return asRows(rows);
 };
 
+export const d1HasAutomationDeliveryForRuleExternal = async (input: {
+  shopDomain: string;
+  ruleKey: string;
+  externalId: string;
+}) => {
+  await ensureD1DeliveriesSchema();
+  const rows = await runD1Query(
+    `
+      SELECT id
+      FROM automation_deliveries
+      WHERE shop_domain = ? AND rule_key = ? AND external_id = ?
+      LIMIT 1
+    `,
+    [input.shopDomain, input.ruleKey, input.externalId],
+  );
+  return asRows(rows).length > 0;
+};
+
+export const d1FindCampaignTouchesByCampaignId = async (input: {
+  shopDomain: string;
+  campaignId: string;
+  windowStartIso: string;
+  mode: 'click' | 'impression';
+}) => {
+  await ensureD1DeliveriesSchema();
+  if (input.mode === 'click') {
+    const rows = await runD1Query(
+      `
+        SELECT id, campaign_id, clicked_at
+        FROM campaign_clicks
+        WHERE shop_domain = ? AND campaign_id = ? AND clicked_at >= ?
+        ORDER BY clicked_at DESC
+        LIMIT 20
+      `,
+      [input.shopDomain, input.campaignId, input.windowStartIso],
+    );
+    return asRows(rows);
+  }
+
+  const rows = await runD1Query(
+    `
+      SELECT id, campaign_id, delivered_at
+      FROM campaign_deliveries
+      WHERE shop_domain = ? AND campaign_id = ? AND delivered_at >= ?
+      ORDER BY delivered_at DESC
+      LIMIT 20
+    `,
+    [input.shopDomain, input.campaignId, input.windowStartIso],
+  );
+  return asRows(rows);
+};
+
+export const d1FindCampaignFingerprintClicks = async (input: {
+  shopDomain: string;
+  windowStartIso: string;
+  campaignId?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  limit?: number;
+}) => {
+  await ensureD1DeliveriesSchema();
+  const limit = input.limit ?? 20;
+  const clauses = ['shop_domain = ?', 'clicked_at >= ?'];
+  const params: unknown[] = [input.shopDomain, input.windowStartIso];
+
+  if (input.campaignId) {
+    clauses.push('campaign_id = ?');
+    params.push(input.campaignId);
+  }
+  if (input.ipAddress) {
+    clauses.push('ip_address = ?');
+    params.push(input.ipAddress);
+  }
+  if (input.userAgent) {
+    clauses.push('user_agent = ?');
+    params.push(input.userAgent);
+  }
+
+  const rows = await runD1Query(
+    `
+      SELECT id, campaign_id, clicked_at
+      FROM campaign_clicks
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY clicked_at DESC
+      LIMIT ?
+    `,
+    [...params, limit],
+  );
+  return asRows(rows);
+};
+
+export const d1FindCampaignFingerprintDeliveries = async (input: {
+  shopDomain: string;
+  windowStartIso: string;
+  campaignId?: string | null;
+  userAgent?: string | null;
+  limit?: number;
+}) => {
+  await ensureD1DeliveriesSchema();
+  if (!input.userAgent) {
+    return [];
+  }
+  const limit = input.limit ?? 20;
+  const clauses = ['shop_domain = ?', 'delivered_at >= ?', 'user_agent = ?'];
+  const params: unknown[] = [input.shopDomain, input.windowStartIso, input.userAgent];
+  if (input.campaignId) {
+    clauses.push('campaign_id = ?');
+    params.push(input.campaignId);
+  }
+
+  const rows = await runD1Query(
+    `
+      SELECT id, campaign_id, delivered_at
+      FROM campaign_deliveries
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY delivered_at DESC
+      LIMIT ?
+    `,
+    [...params, limit],
+  );
+  return asRows(rows);
+};
+
 export const d1FindAutomationFingerprintDeliveries = async (input: {
   shopDomain: string;
   windowStartIso: string;
