@@ -1046,7 +1046,7 @@
 
   async function fetchGeoFromOwnEndpoint(appUrl) {
     if (!appUrl) {
-      return { country: null, city: null };
+      return { country: null, countryName: null, city: null, region: null };
     }
 
     try {
@@ -1060,16 +1060,18 @@
       });
 
       if (!response.ok) {
-        return { country: null, city: null };
+        return { country: null, countryName: null, city: null, region: null };
       }
 
       var data = await response.json();
       return {
         country: normalizeGeoCountry(data && data.country ? data.country : null),
-        city: data && data.city ? String(data.city).trim() || null : null
+        countryName: data && data.countryName ? String(data.countryName).trim() || null : null,
+        city: data && data.city ? String(data.city).trim() || null : null,
+        region: data && data.region ? String(data.region).trim() || null : null
       };
     } catch (_error) {
-      return { country: null, city: null };
+      return { country: null, countryName: null, city: null, region: null };
     }
   }
 
@@ -1086,16 +1088,18 @@
       });
 
       if (!response.ok) {
-        return { country: null, city: null };
+        return { country: null, countryName: null, city: null, region: null };
       }
 
       var data = await response.json();
       return {
         country: normalizeGeoCountry(data && data.country_code ? data.country_code : null),
-        city: data && data.city ? String(data.city).trim() || null : null
+        countryName: data && data.country ? String(data.country).trim() || null : null,
+        city: data && data.city ? String(data.city).trim() || null : null,
+        region: data && data.region ? String(data.region).trim() || null : null
       };
     } catch (_error) {
-      return { country: null, city: null };
+      return { country: null, countryName: null, city: null, region: null };
     }
   }
 
@@ -1112,13 +1116,21 @@
 
     __peGeoPromise = (async function () {
       var geo = await fetchGeoFromOwnEndpoint(appUrl);
-      if (!geo.country || !geo.city) {
+      if (!geo.country || !geo.city || !geo.region) {
         var fallback = await fetchGeoFromPublicApi();
         geo = {
           country: geo.country || fallback.country,
-          city: geo.city || fallback.city
+          countryName: geo.countryName || fallback.countryName,
+          city: geo.city || fallback.city,
+          region: geo.region || fallback.region
         };
       }
+
+      if (!geo.city) {
+        var timezone = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || null;
+        geo.city = deriveCityFromTimezone(timezone);
+      }
+
       __peGeoCache = geo;
       return geo;
     })();
@@ -2127,13 +2139,17 @@
       // This is done client-side so it stays correct even when the token save is
       // relayed through the Shopify app proxy (which would otherwise hide the IP).
       var visitorGeo = await resolveVisitorGeo(runtimeConfig.appUrl);
-      var resolvedCountry = visitorGeo.country
+      var resolvedCountry = visitorGeo.countryName
+        || visitorGeo.country
         || (clientProfile && clientProfile.country ? clientProfile.country : null);
       var resolvedCity = visitorGeo.city
         || (clientProfile && clientProfile.city ? clientProfile.city : null);
+      var resolvedRegion = visitorGeo.region
+        || (clientProfile && clientProfile.region ? clientProfile.region : null);
       if (clientProfile) {
         clientProfile.country = resolvedCountry;
         clientProfile.city = resolvedCity;
+        clientProfile.region = resolvedRegion;
       }
 
       var payload = {
@@ -2150,8 +2166,12 @@
         locale: clientProfile && clientProfile.language ? clientProfile.language : navigator.language,
         country: resolvedCountry,
         city: resolvedCity,
+        region: resolvedRegion,
         deviceContext: Object.assign({}, serializeClientProfile(clientProfile) || {}, {
-          clientId: boot.clientId || null
+          clientId: boot.clientId || null,
+          country: resolvedCountry,
+          city: resolvedCity,
+          region: resolvedRegion
         })
       };
 

@@ -25,6 +25,7 @@ const schema = z.object({
   locale: z.string().optional().nullable(),
   country: z.string().optional().nullable(),
   city: z.string().optional().nullable(),
+  region: z.string().optional().nullable(),
   deviceContext: z.object({}).passthrough().optional().nullable(),
 });
 
@@ -114,9 +115,11 @@ export async function POST(request: Request) {
     }
 
     const userAgent = request.headers.get('user-agent');
-    const { country, city } = resolveSubscriberGeo(request, {
+    const { country, city, region } = resolveSubscriberGeo(request, {
       country: body.country,
       city: body.city,
+      region: body.region,
+      locale: body.locale,
       deviceContext: body.deviceContext,
     });
     const externalId = body.externalId?.trim()
@@ -137,6 +140,9 @@ export async function POST(request: Request) {
     const enrichedDeviceContext = {
       ...(body.deviceContext ?? {}),
       clientId,
+      country: country ?? (typeof body.deviceContext?.country === 'string' ? body.deviceContext.country : null),
+      city: city ?? (typeof body.deviceContext?.city === 'string' ? body.deviceContext.city : null),
+      region: region ?? (typeof body.deviceContext?.region === 'string' ? body.deviceContext.region : null),
     };
 
     const saved = await upsertSubscriberToken({

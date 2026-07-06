@@ -1,6 +1,7 @@
 type RequestGeo = {
   city: string | null;
   country: string | null;
+  region: string | null;
 };
 
 const decodeHeaderValue = (value: string) => {
@@ -40,8 +41,15 @@ export const getRequestGeo = (request: Request): RequestGeo => {
     'x-appengine-country',
   ]);
 
+  const region = pickHeader(request.headers, [
+    'x-vercel-ip-country-region',
+    'cf-region',
+    'x-appengine-region',
+  ]);
+
   return {
     city,
     country,
+    region,
   };
 };

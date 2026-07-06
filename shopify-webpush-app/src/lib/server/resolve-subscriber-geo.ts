@@ -1,8 +1,17 @@
+import {
+  enrichSubscriberGeo,
+  extractCountryFromLocale,
+  normalizeCity,
+  normalizeRegion,
+  resolveCountryDisplayName,
+} from '@/lib/server/geo/subscriber-geo';
 import { getRequestGeo } from '@/lib/server/request-geo';
 
 type GeoInput = {
   country?: string | null;
   city?: string | null;
+  region?: string | null;
+  locale?: string | null;
   deviceContext?: Record<string, unknown> | null;
 };
 
@@ -11,56 +20,58 @@ export const isShopifyAppProxyRequest = (request: Request) => {
   return url.searchParams.has('signature');
 };
 
-const normalizeCountry = (value: string | null | undefined) => {
-  const trimmed = String(value ?? '').trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  if (/^[a-z]{2}$/i.test(trimmed)) {
-    return trimmed.toUpperCase();
-  }
-
-  return trimmed;
-};
-
-const normalizeCity = (value: string | null | undefined) => {
-  const trimmed = String(value ?? '').trim();
-  return trimmed || null;
-};
-
 export const resolveSubscriberGeo = (request: Request, body: GeoInput) => {
   const requestGeo = getRequestGeo(request);
   const viaProxy = isShopifyAppProxyRequest(request);
-  const clientCountry = normalizeCountry(
+  const deviceContext = body.deviceContext ?? null;
+
+  const clientCountry = resolveCountryDisplayName(
     body.country
-      ?? (typeof body.deviceContext?.country === 'string' ? body.deviceContext.country : null),
+      ?? (typeof deviceContext?.country === 'string' ? deviceContext.country : null),
   );
   const clientCity = normalizeCity(
-    body.city ?? (typeof body.deviceContext?.city === 'string' ? body.deviceContext.city : null),
+    body.city ?? (typeof deviceContext?.city === 'string' ? deviceContext.city : null),
   );
+  const clientRegion = normalizeRegion(
+    body.region ?? (typeof deviceContext?.region === 'string' ? deviceContext.region : null),
+  );
+  const timezone =
+    typeof deviceContext?.timezone === 'string' ? deviceContext.timezone : null;
+  const locale =
+    body.locale
+    ?? (typeof deviceContext?.language === 'string' ? deviceContext.language : null)
+    ?? (typeof deviceContext?.shopifyLocale === 'string' ? deviceContext.shopifyLocale : null);
 
   // The storefront resolves the visitor's geo from their own IP (our geo endpoint
   // or a keyless public fallback), so a client-provided country is trustworthy and
   // stays correct even when the token save is relayed through the Shopify app proxy.
-  if (clientCountry) {
-    return {
-      country: clientCountry,
+  if (clientCountry || clientCity || clientRegion) {
+    return enrichSubscriberGeo({
+      country: clientCountry ?? extractCountryFromLocale(locale),
       city: clientCity,
-    };
+      region: clientRegion,
+      timezone,
+      locale,
+    });
   }
 
   // Direct browser requests to Vercel expose the visitor IP geo headers. Proxy
   // requests carry Shopify's server IP, so we must not trust those headers there.
-  if (!viaProxy && requestGeo.country) {
-    return {
-      country: normalizeCountry(requestGeo.country),
-      city: normalizeCity(requestGeo.city) ?? clientCity,
-    };
+  if (!viaProxy && (requestGeo.country || requestGeo.city || requestGeo.region)) {
+    return enrichSubscriberGeo({
+      country: requestGeo.country,
+      city: requestGeo.city ?? clientCity,
+      region: requestGeo.region ?? clientRegion,
+      timezone,
+      locale,
+    });
   }
 
-  return {
-    country: null,
-    city: null,
-  };
+  return enrichSubscriberGeo({
+    country: extractCountryFromLocale(locale),
+    city: clientCity,
+    region: clientRegion,
+    timezone,
+    locale,
+  });
 };

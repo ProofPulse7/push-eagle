@@ -1,4 +1,5 @@
 import { env } from '@/lib/config/env';
+import { productTitleMatchesQuery, isProductSearchQueryReady } from '@/lib/server/segments/catalog-match';
 
 /**
  * Cloudflare D1 backing store for the Shopify product/variant catalog cache.
@@ -307,4 +308,42 @@ export const d1UpdateVariantAvailabilityByInventoryItem = async (input: {
       input.inventoryItemId,
     ],
   );
+};
+
+export const d1SearchSegmentProducts = async (
+  shopDomain: string,
+  query: string,
+  limit = 20,
+): Promise<Array<{ product_id: string; product_title: string; handle: string | null }>> => {
+  await ensureD1CatalogSchema();
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery || !isProductSearchQueryReady(trimmedQuery)) {
+    return [];
+  }
+
+  const firstToken = trimmedQuery.split(/\s+/)[0] ?? trimmedQuery;
+  const prefixPattern = `${firstToken.toLowerCase().replace(/[-_]+/g, ' ').replace(/[%_]/g, '')}%`;
+  const rows = await runD1Query(
+    `
+      SELECT product_id, product_title, handle
+      FROM shopify_product_variants
+      WHERE shop_domain = ?
+        AND (
+          LOWER(product_title) LIKE ?
+          OR product_id = ?
+        )
+      GROUP BY product_id, product_title, handle
+      ORDER BY product_title ASC
+      LIMIT ?
+    `,
+    [shopDomain, prefixPattern, trimmedQuery, limit],
+  );
+
+  return (rows as Array<Record<string, unknown>>)
+    .map((row) => ({
+      product_id: String(row.product_id ?? ''),
+      product_title: String(row.product_title ?? ''),
+      handle: row.handle == null ? null : String(row.handle),
+    }))
+    .filter((row) => row.product_id && row.product_title && productTitleMatchesQuery(row.product_title, trimmedQuery));
 };

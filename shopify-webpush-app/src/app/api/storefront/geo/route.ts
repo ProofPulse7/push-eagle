@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { resolveCountryDisplayName } from '@/lib/server/geo/subscriber-geo';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { getRequestGeo } from '@/lib/server/request-geo';
 
@@ -45,7 +46,9 @@ export async function GET(request: Request) {
       {
         ok: true,
         country: geo.country,
+        countryName: resolveCountryDisplayName(geo.country),
         city: geo.city,
+        region: geo.region,
       },
       { headers: { 'Cache-Control': 'no-store' } },
     );

@@ -379,7 +379,7 @@ type ProcessFulfillmentUpdateInput = {
 };
 
 type SegmentConditionSelectedValue = {
-  type: 'country' | 'region' | 'city';
+  type: 'country' | 'region' | 'city' | 'product' | 'collection';
   value: string;
   label?: string;
 };
@@ -6141,8 +6141,22 @@ const listAllSubscriberIds = async (shopDomain: string) => {
 const queryConditionSubscriberIds = async (shopDomain: string, condition: SegmentCondition, allIds: Set<number>) => {
   const sql = getNeonSql();
   const textFilter = String(condition.textValue || '').trim();
+  const selectedCatalogValues = Array.isArray(condition.selectedValues)
+    ? condition.selectedValues
+        .map((entry) => ({
+          type: String(entry.type ?? ''),
+          value: String(entry.value ?? '').trim(),
+          label: String(entry.label ?? entry.value ?? '').trim(),
+        }))
+        .filter((entry) => entry.value.length > 0)
+    : [];
 
   let matched = new Set<number>();
+
+  if (condition.type === 'Purchased' || condition.type === 'Purchased a product' || condition.type === 'Purchased from collection') {
+    const { backfillOrderSubscriberLinks } = await import('@/lib/server/segments/order-subscriber-link');
+    await backfillOrderSubscriberLinks(shopDomain);
+  }
 
   if (condition.type === 'Clicked') {
     const rows = await sql`
@@ -6187,24 +6201,123 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
     const { isD1CommerceEnabled, d1GetProductPurchaseStats } = await import(
       '@/lib/server/integrations/d1-commerce'
     );
+    const { toSqlLikePattern } = await import('@/lib/server/segments/catalog-match');
+    const { resolveCollectionProductIds } = await import('@/lib/server/segments/catalog-search');
+
+    const selectedProductIds = selectedCatalogValues
+      .filter((entry) => entry.type === 'product')
+      .map((entry) => entry.value);
+    const selectedCollectionValues = selectedCatalogValues
+      .filter((entry) => entry.type === 'collection')
+      .map((entry) => entry.value);
+
+    const resolvedProductIds =
+      condition.type === 'Purchased a product' && selectedProductIds.length === 0 && textFilter
+        ? (await (await import('@/lib/server/segments/catalog-search')).searchSegmentProducts(shopDomain, textFilter, 50))
+            .map((option) => option.value)
+        : selectedProductIds;
+
+    const collectionProductIds =
+      condition.type === 'Purchased from collection'
+        ? (
+            await Promise.all(
+              selectedCollectionValues.map((collectionValue) =>
+                resolveCollectionProductIds(shopDomain, collectionValue),
+              ),
+            )
+          ).flat()
+        : [];
+
+    const likePattern = textFilter ? toSqlLikePattern(textFilter) : null;
     const rows = isD1CommerceEnabled()
       ? await d1GetProductPurchaseStats(shopDomain, {
           byCollection: condition.type === 'Purchased from collection',
           textFilter,
+          productIds: condition.type === 'Purchased a product' ? resolvedProductIds : [],
+          collectionProductIds,
         })
-      : await sql`
-      SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
-      FROM shopify_order_items i
-      JOIN shopify_orders o ON o.id = i.order_event_id
-      WHERE o.shop_domain = ${shopDomain}
-        AND o.subscriber_id IS NOT NULL
-        AND (
-          ${textFilter ? true : false} = false
-          OR ${condition.type === 'Purchased from collection'} = true AND i.collection_hint ILIKE ${`%${textFilter}%`}
-          OR ${condition.type === 'Purchased a product'} = true AND i.product_title ILIKE ${`%${textFilter}%`}
-        )
-      GROUP BY o.subscriber_id
-    `;
+      : await (async () => {
+          if (condition.type === 'Purchased a product') {
+            if (resolvedProductIds.length === 0 && !likePattern) {
+              return [] as Array<{ subscriber_id: number; total: number; last_at: string | null }>;
+            }
+            if (resolvedProductIds.length > 0 && likePattern) {
+              return sql`
+                SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
+                FROM shopify_order_items i
+                JOIN shopify_orders o ON o.id = i.order_event_id
+                WHERE o.shop_domain = ${shopDomain}
+                  AND o.subscriber_id IS NOT NULL
+                  AND (i.product_id = ANY(${resolvedProductIds}) OR i.product_title ILIKE ${likePattern})
+                GROUP BY o.subscriber_id
+              `;
+            }
+            if (resolvedProductIds.length > 0) {
+              return sql`
+                SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
+                FROM shopify_order_items i
+                JOIN shopify_orders o ON o.id = i.order_event_id
+                WHERE o.shop_domain = ${shopDomain}
+                  AND o.subscriber_id IS NOT NULL
+                  AND i.product_id = ANY(${resolvedProductIds})
+                GROUP BY o.subscriber_id
+              `;
+            }
+            return sql`
+              SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
+              FROM shopify_order_items i
+              JOIN shopify_orders o ON o.id = i.order_event_id
+              WHERE o.shop_domain = ${shopDomain}
+                AND o.subscriber_id IS NOT NULL
+                AND (
+                  i.product_title ILIKE ${likePattern}
+                  OR EXISTS (
+                    SELECT 1
+                    FROM shopify_product_variants v
+                    WHERE v.shop_domain = o.shop_domain
+                      AND v.product_id = i.product_id
+                      AND v.handle ILIKE ${likePattern}
+                  )
+                )
+              GROUP BY o.subscriber_id
+            `;
+          }
+
+          if (!likePattern && collectionProductIds.length === 0) {
+            return [] as Array<{ subscriber_id: number; total: number; last_at: string | null }>;
+          }
+          if (likePattern && collectionProductIds.length > 0) {
+            return sql`
+              SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
+              FROM shopify_order_items i
+              JOIN shopify_orders o ON o.id = i.order_event_id
+              WHERE o.shop_domain = ${shopDomain}
+                AND o.subscriber_id IS NOT NULL
+                AND (i.collection_hint ILIKE ${likePattern} OR i.product_id = ANY(${collectionProductIds}))
+              GROUP BY o.subscriber_id
+            `;
+          }
+          if (collectionProductIds.length > 0) {
+            return sql`
+              SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
+              FROM shopify_order_items i
+              JOIN shopify_orders o ON o.id = i.order_event_id
+              WHERE o.shop_domain = ${shopDomain}
+                AND o.subscriber_id IS NOT NULL
+                AND i.product_id = ANY(${collectionProductIds})
+              GROUP BY o.subscriber_id
+            `;
+          }
+          return sql`
+            SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
+            FROM shopify_order_items i
+            JOIN shopify_orders o ON o.id = i.order_event_id
+            WHERE o.shop_domain = ${shopDomain}
+              AND o.subscriber_id IS NOT NULL
+              AND i.collection_hint ILIKE ${likePattern}
+            GROUP BY o.subscriber_id
+          `;
+        })();
 
     for (const row of rows) {
       const subscriberId = Number(row.subscriber_id);
@@ -6247,8 +6360,12 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
       }
     }
   } else if (condition.type === 'Location') {
+    const { normalizeCountryKey } = await import('@/lib/server/geo/subscriber-geo');
     const selected = Array.isArray(condition.selectedValues) ? condition.selectedValues : [];
-    const countries = selected.filter((value) => value.type === 'country').map((value) => String(value.value).toLowerCase());
+    const countries = selected
+      .filter((value) => value.type === 'country')
+      .map((value) => normalizeCountryKey(String(value.value)))
+      .filter(Boolean);
     const cities = selected.filter((value) => value.type === 'city').map((value) => String(value.value).toLowerCase());
     const regions = selected.filter((value) => value.type === 'region').map((value) => String(value.value).toLowerCase());
 
@@ -6285,7 +6402,7 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
 
     for (const row of rows) {
       const subscriberId = Number(row.id);
-      const country = String(row.country || '').toLowerCase();
+      const country = normalizeCountryKey(row.country);
       const city = String(row.city || '').toLowerCase();
       const region = String(row.region || '').toLowerCase();
 
@@ -6424,29 +6541,14 @@ export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInpu
   const sql = getNeonSql();
   await ensureMerchant(input.shopDomain);
 
-  const subscriberId = input.externalId
-    ? await (async () => {
-        const { audienceRead, d1GetSubscriberIdByExternalId } = await import(
-          '@/lib/server/integrations/d1-audience'
-        );
-        return audienceRead<number | null>({
-          label: 'upsertShopifyOrderEvent.subscriberId',
-          key: (v) => String(v ?? 'null'),
-          neon: async () => {
-            const rows = await sql`
-              SELECT id
-              FROM subscribers
-              WHERE shop_domain = ${input.shopDomain}
-                AND external_id = ${input.externalId}
-              LIMIT 1
-            `;
-            return rows[0]?.id ? Number(rows[0].id) : null;
-          },
-          d1: async () =>
-            d1GetSubscriberIdByExternalId(input.shopDomain, String(input.externalId)),
-        });
-      })()
-    : null;
+  const subscriberId = await (async () => {
+    const { resolveSubscriberIdForOrder } = await import('@/lib/server/segments/order-subscriber-link');
+    return resolveSubscriberIdForOrder(input.shopDomain, {
+      externalId: input.externalId ?? null,
+      customerId: input.customerId ?? null,
+      email: input.email ?? null,
+    });
+  })();
   const createdAt = input.createdAt ? new Date(input.createdAt) : new Date();
 
   const { isD1CommerceEnabled, d1UpsertOrderEvent } = await import(
@@ -7199,8 +7301,10 @@ export const getSegmentFilterOptions = async (shopDomain: string) => {
     ? await d1GetDistinctCustomerTags(shopDomain)
     : (neonTags as Array<{ value: unknown }>).map((row) => String(row.value));
 
+  const { uniqueCountryDisplayNames } = await import('@/lib/server/geo/subscriber-geo');
+
   return {
-    countries,
+    countries: uniqueCountryDisplayNames(countries),
     cities,
     regions,
     customerTags,
@@ -9067,7 +9171,9 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
     os_name: string;
     device_used: string;
     city: string | null;
+    region: string | null;
     country: string | null;
+    timezone: string | null;
   };
 
   const rows = await audienceRead<ListRow[]>({
@@ -9076,7 +9182,7 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
       list
         .map(
           (r) =>
-            `${r.external_id ?? ''}|${r.created_at ? new Date(String(r.created_at)).getTime() : 0}|${r.web_browser}|${r.os_name}|${r.device_used}|${r.city ?? ''}|${r.country ?? ''}`,
+            `${r.external_id ?? ''}|${r.created_at ? new Date(String(r.created_at)).getTime() : 0}|${r.web_browser}|${r.os_name}|${r.device_used}|${r.city ?? ''}|${r.region ?? ''}|${r.country ?? ''}|${r.timezone ?? ''}`,
         )
         .join(';'),
     neon: async () => {
@@ -9089,7 +9195,9 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
             COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
             COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
             NULLIF(city, '') AS city,
-            NULLIF(country, '') AS country
+            NULLIF(device_context ->> 'region', '') AS region,
+            NULLIF(country, '') AS country,
+            NULLIF(device_context ->> 'timezone', '') AS timezone
           FROM subscribers
           WHERE shop_domain = ${shopDomain}
           ORDER BY created_at ASC
@@ -9104,7 +9212,9 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
             COALESCE(NULLIF(platform, ''), NULLIF(device_context ->> 'osName', ''), 'unknown') AS os_name,
             COALESCE(NULLIF(device_context ->> 'deviceType', ''), 'unknown') AS device_used,
             NULLIF(city, '') AS city,
-            NULLIF(country, '') AS country
+            NULLIF(device_context ->> 'region', '') AS region,
+            NULLIF(country, '') AS country,
+            NULLIF(device_context ->> 'timezone', '') AS timezone
           FROM subscribers
           WHERE shop_domain = ${shopDomain}
           ORDER BY created_at DESC
@@ -9130,16 +9240,14 @@ export const listSubscribers = async (shopDomain: string, limit = 100, offset = 
     d1: async () => d1CountSubscribers(shopDomain),
   });
 
+  const { deriveCityFromTimezone, formatSubscriberLocation } = await import('@/lib/server/geo/subscriber-geo');
+
   const subscribers: SubscriberListRow[] = rows.map((row) => {
-    const city = row?.city ? String(row.city) : null;
-    const country = row?.country ? String(row.country) : null;
-    const cityCountry = city && country
-      ? `${city}, ${country}`
-      : city
-        ? city
-        : country
-          ? country
-          : 'Unknown';
+    const cityCountry = formatSubscriberLocation({
+      city: row?.city ? String(row.city) : deriveCityFromTimezone(row?.timezone ? String(row.timezone) : null),
+      region: row?.region ? String(row.region) : null,
+      country: row?.country ? String(row.country) : null,
+    });
 
     return {
       subscriber: 'Anonymous',
@@ -9230,6 +9338,7 @@ export const getSubscriberLocationBreakdown = async (shopDomain: string, limit =
     label: 'getSubscriberLocationBreakdown',
     key: shadowKey,
     neon: async () => {
+      const { resolveCountryDisplayName } = await import('@/lib/server/geo/subscriber-geo');
       const countries = await sql`
         SELECT
           COALESCE(NULLIF(country, ''), 'Unknown') AS name,
@@ -9251,7 +9360,10 @@ export const getSubscriberLocationBreakdown = async (shopDomain: string, limit =
         LIMIT ${safeLimit}
       `;
       return {
-        countries: countries.map((row) => ({ name: String(row.name), value: Number(row.value ?? 0) })),
+        countries: countries.map((row) => ({
+          name: resolveCountryDisplayName(String(row.name)) ?? String(row.name),
+          value: Number(row.value ?? 0),
+        })),
         cities: cities.map((row) => ({ name: String(row.name), value: Number(row.value ?? 0) })),
       };
     },

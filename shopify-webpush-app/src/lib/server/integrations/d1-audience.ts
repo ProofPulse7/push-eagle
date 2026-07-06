@@ -1049,7 +1049,9 @@ export type D1SubscriberListRow = {
   os_name: string;
   device_used: string;
   city: string | null;
+  region: string | null;
   country: string | null;
+  timezone: string | null;
 };
 
 export const d1ListSubscribers = async (
@@ -1069,7 +1071,9 @@ export const d1ListSubscribers = async (
         COALESCE(NULLIF(platform, ''), NULLIF(json_extract(device_context, '$.osName'), ''), 'unknown') AS os_name,
         COALESCE(NULLIF(json_extract(device_context, '$.deviceType'), ''), 'unknown') AS device_used,
         NULLIF(city, '') AS city,
-        NULLIF(country, '') AS country
+        NULLIF(json_extract(device_context, '$.region'), '') AS region,
+        NULLIF(country, '') AS country,
+        NULLIF(json_extract(device_context, '$.timezone'), '') AS timezone
       FROM subscribers
       WHERE shop_domain = ?
       ORDER BY created_at ${order}
@@ -1084,7 +1088,9 @@ export const d1ListSubscribers = async (
     os_name: row.os_name == null ? 'unknown' : String(row.os_name),
     device_used: row.device_used == null ? 'unknown' : String(row.device_used),
     city: row.city == null ? null : String(row.city),
+    region: row.region == null ? null : String(row.region),
     country: row.country == null ? null : String(row.country),
+    timezone: row.timezone == null ? null : String(row.timezone),
   }));
 };
 
