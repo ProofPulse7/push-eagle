@@ -3,6 +3,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { mergeCampaignsFromCache } from '@/lib/client/optimistic-campaigns';
 import { mergeAutomationOverviewPayload } from '@/lib/client/optimistic-automations';
+import { syncMerchantStatsCaches } from '@/lib/client/merchant-combined-stats';
 import { queryKeys } from '@/lib/client/query-keys';
 
 export type AppBootstrapPayload = {
@@ -163,4 +164,6 @@ export const hydrateAppCache = (
     const series = payload.subscriberGrowthSeries ?? payload.subscriberGrowth;
     queryClient.setQueryData(queryKeys.subscribersGrowthSeries(shopDomain), series);
   }
+
+  syncMerchantStatsCaches(queryClient, shopDomain);
 };

@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
-import { useDashboardSummary, useSubscriberTotalCount, useSubscribersOverview } from '@/hooks/queries/use-app-queries';
+import { useDashboardSummary, useMerchantCombinedStats, useSubscriberTotalCount, useSubscribersOverview } from '@/hooks/queries/use-app-queries';
 import { useImpressionLimit } from '@/hooks/use-impression-limit';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { BASIC_PLAN } from '@/lib/client/billing-plans';
@@ -27,26 +27,18 @@ export function DashboardView() {
   const { data, isLoading, isError, error } = useDashboardSummary();
   const effectiveData = data ?? cachedData;
 
-  const overview = (effectiveData?.overview ?? {}) as Record<string, unknown>;
-  const campaignStatsRaw = (effectiveData?.campaignStats ?? {}) as Record<string, unknown>;
-  const campaignStats = (campaignStatsRaw.stats ?? campaignStatsRaw) as Record<string, unknown>;
   const subscriberKpis = (effectiveData?.subscriberKpis ?? {}) as Record<string, unknown>;
-  const billing = (effectiveData?.billing ?? {}) as Record<string, unknown>;
-
-  const automationTotals = (effectiveData?.automationTotals ?? {}) as Record<string, unknown>;
-  const campaignRevenueCents = Number(campaignStats.revenueCents ?? 0);
-  const automationRevenueCents = Number(automationTotals.revenueCents ?? 0);
-  const revenueCents = campaignRevenueCents + automationRevenueCents;
-  const billingImpressions = Number(billing.impressionsUsed ?? 0);
-  const impressionsUsed = billingImpressions;
-  const impressionLimit = Number(billing.impressionLimit ?? BASIC_PLAN.impressions);
+  const combinedStats = useMerchantCombinedStats();
+  const revenueCents = combinedStats.revenueCents;
+  const impressionsUsed = combinedStats.impressionsUsed;
+  const impressionLimit = combinedStats.impressionLimit || Number(BASIC_PLAN.impressions);
   const impressionsRemaining = Math.max(0, impressionLimit - impressionsUsed);
   const { data: subscribersOverview } = useSubscribersOverview();
   const totalSubscribers = useSubscriberTotalCount();
   const growthPercent = Number(
     subscribersOverview?.growthPercent ?? subscriberKpis.growthPercent ?? 0,
   );
-  const campaignsSent = Number(campaignStats.sentCount ?? campaignStats.sent ?? overview.campaignCount ?? 0);
+  const campaignsSent = combinedStats.campaignsSent;
   const showValueSkeleton = isLoading && !effectiveData;
   const showInitialLoad = Boolean(shopDomain) && isLoading && !effectiveData;
 
@@ -61,7 +53,7 @@ export function DashboardView() {
     {
       title: 'Total Campaigns Sent',
       value: campaignsSent.toLocaleString(),
-      hint: `${Number(campaignStats.scheduledCount ?? 0).toLocaleString()} scheduled`,
+      hint: `${combinedStats.scheduledCount.toLocaleString()} scheduled`,
       icon: Send,
       accent: 'text-blue-600 dark:text-blue-400',
     },

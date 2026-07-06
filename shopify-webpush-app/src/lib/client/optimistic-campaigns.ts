@@ -8,6 +8,7 @@ import {
 } from '@/lib/client/campaign-launch-media-cache';
 import { pickCampaignBarImageUrl } from '@/lib/client/campaign-bar-image';
 import { queryKeys } from '@/lib/client/query-keys';
+import { syncMerchantStatsCaches } from '@/lib/client/merchant-combined-stats';
 import type { QueryClient } from '@tanstack/react-query';
 
 export type OptimisticCampaign = {
@@ -425,6 +426,8 @@ export const prependOptimisticCampaign = (
       campaigns: [normalized, ...withoutDuplicate],
     };
   });
+
+  syncMerchantStatsCaches(queryClient, shop);
 };
 
 export const replaceOptimisticCampaignId = (
@@ -469,6 +472,8 @@ export const replaceOptimisticCampaignId = (
       }),
     };
   });
+
+  syncMerchantStatsCaches(queryClient, shop);
 };
 
 export const patchOptimisticCampaign = (
@@ -498,6 +503,8 @@ export const patchOptimisticCampaign = (
       campaigns: nextList,
     };
   });
+
+  syncMerchantStatsCaches(queryClient, shop);
 };
 
 export const removeOptimisticCampaign = (
@@ -517,6 +524,8 @@ export const removeOptimisticCampaign = (
       campaigns: currentList.filter((item) => String(item.id) !== campaignId),
     };
   });
+
+  syncMerchantStatsCaches(queryClient, shop);
 };
 
 export const readOptimisticCampaignSnapshot = (
@@ -528,31 +537,7 @@ export const readOptimisticCampaignSnapshot = (
 };
 
 export const bumpDashboardCampaignSent = (queryClient: QueryClient, shop: string) => {
-  queryClient.setQueryData(queryKeys.dashboardSummary(shop), (current: Record<string, unknown> | undefined) => {
-    const campaignStatsRaw = (current?.campaignStats ?? {}) as Record<string, unknown>;
-    const campaignStats = (campaignStatsRaw.stats ?? campaignStatsRaw) as Record<string, unknown>;
-    const overview = (current?.overview ?? {}) as Record<string, unknown>;
-
-    const nextSent = Number(campaignStats.sentCount ?? campaignStats.sent ?? overview.campaignCount ?? 0) + 1;
-
-    return {
-      ...(current ?? {}),
-      overview: {
-        ...overview,
-        campaignCount: nextSent,
-      },
-      campaignStats: {
-        ...campaignStatsRaw,
-        sentCount: nextSent,
-        sent: nextSent,
-        stats: {
-          ...campaignStats,
-          sentCount: nextSent,
-          sent: nextSent,
-        },
-      },
-    };
-  });
+  syncMerchantStatsCaches(queryClient, shop);
 };
 
 export const buildAudienceSegmentsFromCache = (
@@ -606,5 +591,7 @@ export const mergeCampaignsFromCache = (
   fresh: { ok?: boolean; campaigns?: unknown[] },
 ) => {
   const previous = queryClient.getQueryData<{ ok?: boolean; campaigns?: unknown[] }>(queryKeys.campaigns(shop));
-  return mergeCampaignListPayload(previous, fresh, shop);
+  const merged = mergeCampaignListPayload(previous, fresh, shop);
+  syncMerchantStatsCaches(queryClient, shop);
+  return merged;
 };

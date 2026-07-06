@@ -13,6 +13,7 @@ import {
   readCachedSubscriberCount,
   syncSubscriberCountFromServer,
 } from '@/lib/client/subscriber-count-sync';
+import { syncMerchantStatsCaches } from '@/lib/client/merchant-combined-stats';
 import { broadcastShopSync, subscribeShopSync } from '@/lib/client/shop-sync-bus';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 
@@ -61,6 +62,7 @@ export function LiveShopSync() {
 
       if (event.type === 'campaigns') {
         void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shop), refetchType: 'active' });
+        syncMerchantStatsCaches(queryClient, shop);
         return;
       }
 
@@ -93,7 +95,9 @@ export function LiveShopSync() {
           });
 
           if (hasActiveSend) {
-            void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shop), refetchType: 'active' });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns(shop), refetchType: 'active' }).then(() => {
+              syncMerchantStatsCaches(queryClient, shop);
+            });
           }
         }
 

@@ -13,6 +13,13 @@ import { fetchJson, fetchJsonWithShop } from '@/lib/client/api-fetch';
 import { fetchJsonWithRetry, fetchJsonWithShopRetry } from '@/lib/client/background-save';
 import { resolveAnalyticsDateRange } from '@/lib/client/analytics-date-range';
 import { readAutomationStatsFromCache } from '@/lib/client/automation-stats-cache';
+import {
+  deriveCampaignTotalsFromList,
+  readAutomationTotalsFromCache,
+  readCampaignsFromCache,
+  syncMerchantStatsCaches,
+  type MerchantDeliveryTotals,
+} from '@/lib/client/merchant-combined-stats';
 import { readDashboardSummaryFromCache } from '@/lib/client/dashboard-cache';
 import { mergeAutomationsFromCache } from '@/lib/client/optimistic-automations';
 import { mergeSegmentsFromCache } from '@/lib/client/optimistic-segments';
@@ -120,13 +127,18 @@ export function useAutomationStats(from?: Date, to?: Date) {
 
   return useQuery({
     queryKey: queryKeys.automationStats(shop, fromIso, toIso),
-    queryFn: () => {
+    queryFn: async () => {
       const params = new URLSearchParams({ shop });
       if (!isAllTime) {
         params.set('from', fromIso);
         params.set('to', toIso);
       }
-      return fetchJson<Record<string, unknown>>(`/api/automations/stats?${params.toString()}`);
+      const result = await fetchJson<Record<string, unknown>>(`/api/automations/stats?${params.toString()}`);
+      queryClient.setQueryData(queryKeys.automationStats(shop, fromIso, toIso), result);
+      if (isAllTime) {
+        syncMerchantStatsCaches(queryClient, shop);
+      }
+      return result;
     },
     enabled: Boolean(shop),
     staleTime: SETTINGS_STALE_MS,
@@ -293,6 +305,52 @@ export function useDashboardSummary() {
     placeholderData: (previous) =>
       previous ?? readDashboardSummaryFromCache(queryClient, shop),
   });
+}
+
+/** All-time delivery stats shared by dashboard, campaigns, and automations pages. */
+export function useMerchantCombinedStats() {
+  const shop = useShopDomain();
+  const queryClient = useQueryClient();
+  const { data: campaignsData } = useCampaigns();
+  const { data: automationStatsData } = useAutomationStats();
+  const { data: dashboardSummary } = useDashboardSummary();
+
+  return useMemo(() => {
+    const campaigns = Array.isArray(campaignsData?.campaigns)
+      ? (campaignsData.campaigns as Record<string, unknown>[])
+      : readCampaignsFromCache(queryClient, shop);
+
+    const campaignTotals = deriveCampaignTotalsFromList(campaigns, shop);
+    const automationFromQuery = (automationStatsData?.totals ?? null) as
+      | MerchantDeliveryTotals
+      | null;
+    const automationTotals = automationFromQuery ?? readAutomationTotalsFromCache(queryClient, shop);
+
+    const campaignRevenueCents = campaignTotals.revenueCents;
+    const automationRevenueCents = Number(automationTotals.revenueCents ?? 0);
+    const billing = (dashboardSummary?.billing ?? {}) as Record<string, unknown>;
+
+    return {
+      campaignTotals,
+      automationTotals,
+      revenueCents: campaignRevenueCents + automationRevenueCents,
+      campaignRevenueCents,
+      automationRevenueCents,
+      deliveryImpressions:
+        campaignTotals.impressions + Number(automationTotals.impressions ?? 0),
+      campaignsSent: campaignTotals.sentCount,
+      scheduledCount: campaignTotals.scheduledCount,
+      billing,
+      impressionLimit: Number(billing.impressionLimit ?? 0),
+      impressionsUsed: Number(billing.impressionsUsed ?? 0),
+    };
+  }, [
+    campaignsData,
+    automationStatsData,
+    dashboardSummary?.billing,
+    queryClient,
+    shop,
+  ]);
 }
 
 export function useThemeEmbedStatus() {

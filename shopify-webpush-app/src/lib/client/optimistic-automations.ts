@@ -6,6 +6,7 @@ import {
   type NormalizedAutomationRule,
 } from '@/lib/client/normalize-automation-rule';
 import { queryKeys } from '@/lib/client/query-keys';
+import { syncMerchantStatsCaches } from '@/lib/client/merchant-combined-stats';
 import type { QueryClient } from '@tanstack/react-query';
 
 export type AutomationOverviewPayload = {
@@ -175,7 +176,9 @@ export const mergeAutomationsFromCache = (
   const previous = queryClient.getQueryData<AutomationOverviewPayload>(
     queryKeys.automationsOverview(shop),
   );
-  return mergeAutomationOverviewPayload(previous, fresh, shop);
+  const merged = mergeAutomationOverviewPayload(previous, fresh, shop);
+  syncMerchantStatsCaches(queryClient, shop);
+  return merged;
 };
 
 const preserveRuleMetrics = (
@@ -239,8 +242,10 @@ export const patchAutomationOverviewRule = (
         ok: true,
         ...(current ?? {}),
         rules: nextRules,
-        totals: current?.totals ?? computeTotals(nextRules),
+        totals: computeTotals(nextRules),
       };
     },
   );
+
+  syncMerchantStatsCaches(queryClient, shop);
 };
