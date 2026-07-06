@@ -13,7 +13,6 @@ import {
     AlertDialogTitle, 
     AlertDialogFooter, 
     AlertDialogCancel, 
-    AlertDialogAction 
 } from "@/components/ui/alert-dialog";
 import '@/components/composer/editor-parts/image-cropper.css';
 
@@ -38,6 +37,20 @@ function centerAspectCrop(
   );
 }
 
+const toPixelCrop = (crop: Crop, image: HTMLImageElement): Crop => {
+  if (crop.unit === '%') {
+    return {
+      unit: 'px',
+      x: (crop.x / 100) * image.width,
+      y: (crop.y / 100) * image.height,
+      width: (crop.width / 100) * image.width,
+      height: (crop.height / 100) * image.height,
+    };
+  }
+
+  return crop;
+};
+
 
 export const ImageEditorSheet = ({ 
     editingState, 
@@ -54,7 +67,6 @@ export const ImageEditorSheet = ({
     
     const aspect = editingState?.aspect ?? 1;
 
-    // Reset crop state when a new image is loaded
     useEffect(() => {
         if (editingState?.url) {
             setCrop(undefined);
@@ -66,29 +78,33 @@ export const ImageEditorSheet = ({
     function onImageLoad(e: React.SyntheticEvent<HTMLImageElement>) {
         if (aspect) {
             const { width, height } = e.currentTarget;
-            setCrop(centerAspectCrop(width, height, aspect));
+            const initialCrop = centerAspectCrop(width, height, aspect);
+            setCrop(initialCrop);
+            setCompletedCrop(initialCrop);
         }
     }
 
     const handleSave = () => {
-        if (!completedCrop || !imgRef.current) {
+        const activeCrop = completedCrop ?? crop;
+        if (!activeCrop?.width || !activeCrop?.height || !imgRef.current || !editingState) {
             return;
         }
 
+        const pixelCrop = toPixelCrop(activeCrop, imgRef.current);
         const canvas = document.createElement('canvas');
         const scaleX = imgRef.current.naturalWidth / imgRef.current.width;
         const scaleY = imgRef.current.naturalHeight / imgRef.current.height;
         
-        canvas.width = Math.floor(completedCrop.width * scaleX);
-        canvas.height = Math.floor(completedCrop.height * scaleY);
+        canvas.width = Math.max(1, Math.floor(pixelCrop.width * scaleX));
+        canvas.height = Math.max(1, Math.floor(pixelCrop.height * scaleY));
         
         const ctx = canvas.getContext('2d');
         if (!ctx) {
             return;
         }
 
-        const cropX = completedCrop.x * scaleX;
-        const cropY = completedCrop.y * scaleY;
+        const cropX = pixelCrop.x * scaleX;
+        const cropY = pixelCrop.y * scaleY;
         
         ctx.drawImage(
             imgRef.current,
@@ -102,10 +118,14 @@ export const ImageEditorSheet = ({
             canvas.height
         );
         
-        const base64Image = canvas.toDataURL('image/png');
-        if (editingState) {
-            onSave(base64Image, editingState.type);
+        let base64Image = '';
+        try {
+            base64Image = canvas.toDataURL('image/png');
+        } catch {
+            return;
         }
+
+        onSave(base64Image, editingState.type);
         setEditingState(null); 
     };
 
@@ -129,7 +149,7 @@ export const ImageEditorSheet = ({
                                       setCrop(percentCrop);
                                     }
                                   }}
-                                onComplete={(c) => setCompletedCrop(c)}
+                                onComplete={(nextCrop) => setCompletedCrop(nextCrop)}
                                 aspect={aspect}
                            >
                                 <img 
@@ -137,13 +157,14 @@ export const ImageEditorSheet = ({
                                     src={editingState.url} 
                                     alt="Crop me" 
                                     onLoad={onImageLoad}
+                                    crossOrigin="anonymous"
                                     style={{ maxHeight: '70vh' }}
                                 />
                            </ReactCrop>
                         </div>
                         <AlertDialogFooter>
                             <AlertDialogCancel onClick={onClose}>Cancel</AlertDialogCancel>
-                            <AlertDialogAction onClick={handleSave}>Save Changes</AlertDialogAction>
+                            <Button type="button" onClick={handleSave}>Save Changes</Button>
                         </AlertDialogFooter>
                     </>
                 )}

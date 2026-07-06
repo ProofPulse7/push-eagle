@@ -7,8 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Upload, Crop, Trash2, ImageIcon } from "lucide-react";
+import { resolveImageCropSource } from '@/lib/client/image-compress';
 
-type ImageValue = { file: File | null; preview: string | null };
+type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
 
 export const LogoUploaderEditor = ({
     logo,
@@ -36,7 +37,12 @@ export const LogoUploaderEditor = ({
                  <div className="flex items-center">
                     <TooltipProvider>
                         <Tooltip>
-                            <TooltipTrigger asChild><Button size="icon" variant="ghost" onClick={() => logo.preview && setEditingState({ url: logo.preview, aspect: 1, type: 'logo' })} disabled={!logo.preview}><Crop className="h-4 w-4" /></Button></TooltipTrigger>
+                            <TooltipTrigger asChild><Button size="icon" variant="ghost" onClick={() => {
+                                if (!logo.preview) return;
+                                void resolveImageCropSource(logo).then((url) => {
+                                    if (url) setEditingState({ url, aspect: 1, type: 'logo' });
+                                });
+                            }} disabled={!logo.preview}><Crop className="h-4 w-4" /></Button></TooltipTrigger>
                             <TooltipContent>Edit Logo</TooltipContent>
                         </Tooltip>
                         <Tooltip>

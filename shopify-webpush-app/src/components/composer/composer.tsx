@@ -164,7 +164,9 @@ export function Composer() {
         }
 
         void compressImageFile(file, profile).then(async (compressed) => {
-            revokePreviewUrl(instantPreview);
+            if (instantPreview !== compressed.blobUrl) {
+                revokePreviewUrl(instantPreview);
+            }
             applyCompressedImage(
                 imageType,
                 compressed.blobUrl,
@@ -176,7 +178,9 @@ export function Composer() {
             if (shopDomain) {
                 const uploaded = await scheduleBackgroundMediaUpload(shopDomain, compressed.dataUrl, profile);
                 if (uploaded) {
-                    revokePreviewUrl(compressed.blobUrl);
+                    if (compressed.blobUrl !== uploaded) {
+                        revokePreviewUrl(compressed.blobUrl);
+                    }
                     applyCompressedImage(imageType, uploaded, compressed.file, uploaded);
                 }
             }
@@ -224,7 +228,9 @@ export function Composer() {
                     applyCropPreview(uploaded);
                 }
             }
-        }).catch(() => undefined);
+        }).catch(() => {
+            applyCropPreview(croppedDataUrl);
+        });
     };
 
     useEffect(() => {

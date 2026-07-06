@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Upload, Crop, Trash2, Info } from "lucide-react";
+import { resolveImageCropSource } from '@/lib/client/image-compress';
 
 type ImageValue = { file: File | null; preview: string | null; originalPreview?: string | null };
 
@@ -95,6 +96,18 @@ export const RichMediaEditor = ({
     handleImageUpload: (file: File | undefined, imageType: 'windows' | 'mac' | 'android' | 'logo') => void;
     setEditingState: (state: { url: string, aspect: number, type: string } | null) => void;
 }) => {
+    const openCropEditor = (image: ImageValue, type: 'windows' | 'mac' | 'android', aspect: number) => {
+        if (!image.preview) {
+            return;
+        }
+
+        void resolveImageCropSource(image).then((url) => {
+            if (url) {
+                setEditingState({ url, aspect, type });
+            }
+        });
+    };
+
     return (
         <div className="space-y-4 border-t pt-6 mt-4 p-4">
             <h3 className="text-base font-medium">Rich Media</h3>
@@ -105,17 +118,17 @@ export const RichMediaEditor = ({
                 <HeroImageUploader title="Windows Hero" dimensions="728x360px" previewUrl={windowsHero.preview} showWarning={showWindowsWarning}
                     onUpload={e => handleImageUpload(e.target.files?.[0], 'windows')}
                     onRemove={() => setWindowsHero({ file: null, preview: null, originalPreview: null })}
-                    onEdit={() => windowsHero.preview && setEditingState({ url: windowsHero.originalPreview ?? windowsHero.preview, aspect: 728 / 360, type: 'windows' })}
+                    onEdit={() => openCropEditor(windowsHero, 'windows', 728 / 360)}
                 />
                 <HeroImageUploader title="macOS Hero" dimensions="704x512px" previewUrl={macHero.preview} showWarning={showMacWarning}
                     onUpload={e => handleImageUpload(e.target.files?.[0], 'mac')}
                     onRemove={() => setMacHero({ file: null, preview: null, originalPreview: null })}
-                    onEdit={() => macHero.preview && setEditingState({ url: macHero.originalPreview ?? macHero.preview, aspect: 704 / 512, type: 'mac' })}
+                    onEdit={() => openCropEditor(macHero, 'mac', 704 / 512)}
                 />
                 <HeroImageUploader title="Android Hero" dimensions="720x240px" previewUrl={androidHero.preview} showWarning={showAndroidWarning}
                     onUpload={e => handleImageUpload(e.target.files?.[0], 'android')}
                     onRemove={() => setAndroidHero({ file: null, preview: null, originalPreview: null })}
-                    onEdit={() => androidHero.preview && setEditingState({ url: androidHero.originalPreview ?? androidHero.preview, aspect: 720 / 240, type: 'android' })}
+                    onEdit={() => openCropEditor(androidHero, 'android', 720 / 240)}
                 />
             </div>
         </div>

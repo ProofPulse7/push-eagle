@@ -204,3 +204,44 @@ export const revokePreviewUrl = (url: string | null | undefined) => {
 
 export const estimateDataUrlBytes = (dataUrl: string) =>
   Math.floor((dataUrl.length * 3) / 4);
+
+const fileToDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('Failed to read image file.'));
+    reader.readAsDataURL(file);
+  });
+
+/** Stable data URL for the crop editor (avoids revoked blob URLs). */
+export const resolveImageCropSource = async (image: {
+  file: File | null;
+  preview: string | null;
+  originalPreview?: string | null;
+}): Promise<string | null> => {
+  const original = image.originalPreview?.trim();
+  if (original?.startsWith('data:image/')) {
+    return original;
+  }
+
+  if (image.file) {
+    return fileToDataUrl(image.file);
+  }
+
+  const preview = image.preview?.trim();
+  if (!preview) {
+    return null;
+  }
+
+  if (preview.startsWith('data:image/')) {
+    return preview;
+  }
+
+  try {
+    const response = await fetch(preview);
+    const blob = await response.blob();
+    return fileToDataUrl(new File([blob], 'crop-source', { type: blob.type || 'image/jpeg' }));
+  } catch {
+    return null;
+  }
+};
