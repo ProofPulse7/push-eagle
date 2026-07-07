@@ -1,4 +1,8 @@
 /* Push Eagle — Push Notification Opt-In Widget */
+.pe-prompt[hidden] {
+  display: none !important;
+}
+
 .pe-prompt {
   position: fixed;
   z-index: 2147483647;

@@ -1414,6 +1414,7 @@
     var shopifyContext = getShopifyContext(root, boot);
     var deviceType = detectDeviceType(ua, osName, uaData && uaData.mobile);
     var geoHints = await getBrowserGeoHints();
+    var platform = String(navigator.platform || '');
 
     if (platform === 'MacIntel' && navigator.maxTouchPoints > 1 && /Macintosh/i.test(ua)) {
       var isWebkit = /AppleWebKit/i.test(ua);
@@ -1923,6 +1924,7 @@
       var requestUrl = bootstrapUrl
         + (bootstrapUrl.indexOf('?') === -1 ? '?' : '&')
         + '_pe_ts=' + String(Date.now())
+        + '&shop=' + encodeURIComponent(config.shopDomain)
         + '&externalId=' + encodeURIComponent(existingExternalId);
 
       data = await tryBootstrapFetch(requestUrl, config.shopDomain, true);
@@ -2153,9 +2155,63 @@
     }
   }
 
+  async function refreshOptInSettings(config, boot) {
+    if (!boot || !config || !config.shopDomain) {
+      return boot;
+    }
+
+    if (boot.bootstrapSource === 'proxy' && boot.optIn && boot.optIn.promptType) {
+      return boot;
+    }
+
+    if (!config.appUrl) {
+      return boot;
+    }
+
+    try {
+      var refreshUrl = config.appUrl.replace(/\/$/, '') + '/api/storefront/bootstrap'
+        + '?shop=' + encodeURIComponent(config.shopDomain)
+        + '&_pe_ts=' + String(Date.now())
+        + '&externalId=' + encodeURIComponent(boot.externalId || getOrCreateAnonExternalId(config.shopDomain));
+      var fresh = await tryBootstrapFetch(refreshUrl, config.shopDomain, false);
+
+      if (fresh && fresh.ok) {
+        if (fresh.optIn) {
+          boot.optIn = fresh.optIn;
+        }
+        if (fresh.firebase) {
+          boot.firebase = fresh.firebase;
+        }
+        if (fresh.webPushVapidPublicKey) {
+          boot.webPushVapidPublicKey = fresh.webPushVapidPublicKey;
+        }
+        if (fresh.shopifyCapabilities) {
+          boot.shopifyCapabilities = fresh.shopifyCapabilities;
+        }
+
+        var cacheKey = getStorageKey(config.shopDomain, 'bootstrap_cache');
+        var cachedRaw = safeLocalStorageGet(cacheKey);
+        if (cachedRaw) {
+          try {
+            var cachedBoot = JSON.parse(cachedRaw);
+            if (cachedBoot && cachedBoot.ok) {
+              cachedBoot.optIn = boot.optIn;
+              cachedBoot.firebase = boot.firebase;
+              cachedBoot.webPushVapidPublicKey = boot.webPushVapidPublicKey;
+              safeLocalStorageSet(cacheKey, JSON.stringify(cachedBoot));
+            }
+          } catch (_cacheMergeError) {}
+        }
+      }
+    } catch (_refreshError) {}
+
+    return boot;
+  }
+
   async function runBrowserNativePermissionFlow(root, config, boot, clientProfile, options) {
-    closePrompt(root);
     var flowOptions = options || {};
+    var primaryButton = root.querySelector('[data-push-eagle-action]');
+    var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
 
     if (hasReachedBrowserPromptLimit(config.shopDomain)) {
       return;
@@ -2181,17 +2237,66 @@
       return;
     }
 
-    incrementSessionDisplayCount(config.shopDomain);
-    recordPromptAttempt(config.shopDomain);
-    void sendOptInEvent(boot, 'browser', 'view');
-
     refreshClientProfile(clientProfile);
-    var result = await registerToken(config, boot, { silent: false, optInPromptType: 'browser' }, clientProfile);
 
-    if (result && result.ok) {
-      void sendOptInEvent(boot, 'browser', 'click');
+    if (clientProfile.permissionState === 'granted') {
+      await registerToken(config, boot, { silent: true }, clientProfile);
       closePrompt(root);
+      return;
     }
+
+    if (clientProfile.permissionState === 'denied') {
+      openPrompt(root);
+      explainUnsupported(root, 'permission-denied');
+      return;
+    }
+
+    incrementSessionDisplayCount(config.shopDomain);
+    void sendOptInEvent(boot, 'browser', 'view');
+    openPrompt(root);
+
+    if (secondaryButton) {
+      secondaryButton.onclick = function () {
+        closePrompt(root);
+      };
+    }
+
+    if (!primaryButton) {
+      return;
+    }
+
+    primaryButton.disabled = false;
+    primaryButton.removeAttribute('aria-busy');
+
+    primaryButton.onclick = async function () {
+      refreshClientProfile(clientProfile);
+
+      primaryButton.disabled = true;
+      primaryButton.setAttribute('aria-busy', 'true');
+      recordPromptAttempt(config.shopDomain);
+      void sendOptInEvent(boot, 'browser', 'click');
+
+      var result = await registerToken(config, boot, { silent: false, optInPromptType: 'browser' }, clientProfile);
+
+      if (result && result.ok) {
+        closePrompt(root);
+        return;
+      }
+
+      openPrompt(root);
+      if (result && result.reason === 'permission-denied') {
+        explainUnsupported(root, 'permission-denied');
+      } else if (result && result.reason === 'sw-script-missing') {
+        showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+      } else if (result && result.reason === 'sw-not-active') {
+        showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
+      } else {
+        showStatus(root, 'Setup failed. Please try again. (' + (result && (result.message || result.reason) ? (result.message || result.reason) : 'unknown') + ')', 'error');
+      }
+
+      primaryButton.disabled = false;
+      primaryButton.removeAttribute('aria-busy');
+    };
   }
 
   async function requestNotificationPermission() {
@@ -2673,6 +2778,7 @@
 
     root.dataset.initialized = '1';
 
+    try {
     var config = {
       enabled: root.dataset.enabled === 'true',
       mode: root.dataset.mode || 'custom',
@@ -2701,6 +2807,7 @@
     }
 
     var boot = await bootstrap(config);
+    boot = await refreshOptInSettings(config, boot);
     void resolveVisitorGeo(config.appUrl);
     syncExternalIdToCart(
       boot && boot.externalId ? boot.externalId : null,
@@ -2764,19 +2871,15 @@
         return;
       }
 
-      if (clientProfile.permissionState !== 'default' && effectiveMode === 'custom') {
-        closePrompt(root);
+      if (clientProfile.permissionState === 'denied') {
+        openPrompt(root);
+        explainUnsupported(root, 'permission-denied');
         return;
       }
 
       if (effectiveMode === 'browser') {
         if (isMarkedSubscribed(config.shopDomain)) {
           await registerToken(config, boot, { silent: true }, clientProfile);
-          closePrompt(root);
-          return;
-        }
-
-        if (clientProfile.permissionState !== 'default') {
           closePrompt(root);
           return;
         }
@@ -2825,6 +2928,46 @@
         openPrompt(root);
       };
 
+      var bindCustomAllowHandler = function () {
+        if (!primaryButton || effectiveMode !== 'custom') {
+          return;
+        }
+
+        primaryButton.disabled = false;
+        primaryButton.removeAttribute('aria-busy');
+        primaryButton.onclick = async function () {
+          if (isRealIosDevice(clientProfile) && !isStandaloneIos()) {
+            showStatus(root, 'Open this store from your Home Screen icon first, then try again.', 'info');
+            return;
+          }
+
+          refreshClientProfile(clientProfile);
+
+          primaryButton.disabled = true;
+          primaryButton.setAttribute('aria-busy', 'true');
+
+          void sendOptInEvent(boot, 'custom', 'click');
+          closePrompt(root);
+
+          var result = await registerToken(config, boot, { silent: false, optInPromptType: 'custom' }, clientProfile);
+
+          if (!result.ok) {
+            openPrompt(root);
+            if (result.reason === 'sw-script-missing') {
+              showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+            } else if (result.reason === 'sw-not-active') {
+              showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
+            } else if (result.reason === 'permission-denied') {
+              showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+            } else {
+              showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
+            }
+            primaryButton.disabled = false;
+            primaryButton.removeAttribute('aria-busy');
+          }
+        };
+      };
+
       if (config.displayTrigger === 'manual') {
         if (effectiveMode === 'browser') {
           var browserManualBound = bindManualTrigger(root, config, function () {
@@ -2838,6 +2981,7 @@
         }
 
         var bound = bindManualTrigger(root, config, function () {
+          bindCustomAllowHandler();
           showPrompt();
         });
 
@@ -2864,66 +3008,8 @@
         await delay(standardDelayMs);
       }
 
+      bindCustomAllowHandler();
       showPrompt();
-
-      if (primaryButton) {
-        primaryButton.onclick = async function () {
-          if (isRealIosDevice(clientProfile) && !isStandaloneIos()) {
-            showStatus(root, 'Open this store from your Home Screen icon first, then try again.', 'info');
-            return;
-          }
-
-          refreshClientProfile(clientProfile);
-
-          primaryButton.disabled = true;
-          primaryButton.setAttribute('aria-busy', 'true');
-
-          void sendOptInEvent(boot, 'custom', 'click');
-
-          // Custom mode should dismiss instantly after click.
-          if (effectiveMode === 'custom') {
-            closePrompt(root);
-          }
-
-          var result = await registerToken(config, boot, { silent: false, optInPromptType: 'custom' }, clientProfile);
-
-          if (effectiveMode === 'custom') {
-            if (!result.ok) {
-              openPrompt(root);
-              if (result.reason === 'sw-script-missing') {
-                showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
-              } else if (result.reason === 'sw-not-active') {
-                showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
-              } else if (result.reason === 'permission-denied') {
-                showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
-              } else {
-                showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
-              }
-              primaryButton.disabled = false;
-              primaryButton.removeAttribute('aria-busy');
-            }
-            return;
-          }
-
-          if (result.ok) {
-            showStatus(root, 'Notifications enabled.', 'success');
-            closePrompt(root);
-          } else if (result.reason === 'sw-script-missing') {
-            showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
-          } else if (result.reason === 'sw-not-active') {
-            showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
-          } else if (result.reason === 'unsupported' || result.reason === 'https-required') {
-            explainUnsupported(root, result.reason);
-          } else if (result.reason === 'permission-denied') {
-            showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
-          } else {
-            showStatus(root, 'Setup failed (' + result.reason + '). Please retry.', 'error');
-          }
-
-          primaryButton.disabled = false;
-          primaryButton.removeAttribute('aria-busy');
-        };
-      }
     }
 
     async function startIosOnboardingFlow() {
@@ -3083,6 +3169,13 @@
     }
 
     await startStandardPromptFlow();
+    } catch (error) {
+      console.error('[PushEagle] Prompt flow failed', error);
+      try {
+        openPrompt(root);
+        showStatus(root, 'Push Eagle could not start. Please refresh and try again.', 'error');
+      } catch (_displayError) {}
+    }
   }
 
   function schedulePrompt(root) {
