@@ -45,6 +45,7 @@
   var BROWSER_PROMPT_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
   var TOKEN_SAVE_MAX_ATTEMPTS = 4;
   var IOS_HOME_SCREEN_POLL_MS = 1000;
+  var pushInfrastructurePromises = {};
 
   function queuePreBootstrapCartSignal(details, source) {
     if (window.__pushEaglePreCartCaptureDisabled) {
@@ -246,6 +247,54 @@
 
     var contentType = String(response.headers.get('content-type') || '').toLowerCase();
     return contentType.indexOf('application/json') !== -1;
+  }
+
+  function appendQueryParam(url, key, value) {
+    if (!url || !key) {
+      return url;
+    }
+
+    var joiner = url.indexOf('?') === -1 ? '?' : '&';
+    return url + joiner + encodeURIComponent(key) + '=' + encodeURIComponent(String(value || ''));
+  }
+
+  function buildTokenEndpoints(runtimeConfig, boot) {
+    var endpoints = [];
+    var primaryTokenEndpoint = boot.tokenEndpoint || runtimeConfig.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH;
+
+    if (primaryTokenEndpoint) {
+      endpoints.push(appendQueryParam(primaryTokenEndpoint, 'shop', boot.shopDomain));
+    }
+
+    var directTokenEndpoint = runtimeConfig.appUrl
+      ? runtimeConfig.appUrl.replace(/\/$/, '') + '/api/storefront/token?shop=' + encodeURIComponent(boot.shopDomain)
+      : '';
+
+    if (directTokenEndpoint && endpoints.indexOf(directTokenEndpoint) === -1) {
+      endpoints.push(directTokenEndpoint);
+    }
+
+    return endpoints;
+  }
+
+  function beginPermissionFromUserGesture() {
+    if (!('Notification' in window)) {
+      return Promise.resolve('unsupported');
+    }
+
+    if (Notification.permission === 'granted' || Notification.permission === 'denied') {
+      return Promise.resolve(Notification.permission);
+    }
+
+    try {
+      var result = Notification.requestPermission();
+      if (result && typeof result.then === 'function') {
+        return result;
+      }
+      return Promise.resolve(result || Notification.permission);
+    } catch (_requestError) {
+      return Promise.resolve(Notification.permission);
+    }
   }
 
   function getProxyBasePathFromBootstrapPath(bootstrapPath) {
@@ -2125,15 +2174,53 @@
       return null;
     }
 
-    var existing = await registration.pushManager.getSubscription();
-    if (existing) {
-      return existing;
+    async function subscribeFresh() {
+      return registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey)
+      });
     }
 
-    return registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidKey)
-    });
+    try {
+      var existing = await registration.pushManager.getSubscription();
+      if (existing && existing.endpoint) {
+        return existing;
+      }
+    } catch (_existingLookupError) {}
+
+    try {
+      return await subscribeFresh();
+    } catch (_subscribeError) {
+      try {
+        var stale = await registration.pushManager.getSubscription();
+        if (stale) {
+          await stale.unsubscribe();
+        }
+      } catch (_unsubscribeError) {}
+
+      return await subscribeFresh();
+    }
+  }
+
+  function subscriptionToTokenFields(subscription) {
+    if (!subscription || !subscription.endpoint) {
+      return null;
+    }
+
+    var subscriptionJson = subscription.toJSON ? subscription.toJSON() : null;
+    var keys = subscriptionJson && subscriptionJson.keys ? subscriptionJson.keys : null;
+
+    return {
+      token: subscription.endpoint,
+      tokenType: 'vapid',
+      vapidEndpoint: subscription.endpoint,
+      vapidP256dh: keys && keys.p256dh
+        ? keys.p256dh
+        : arrayBufferToBase64Url(subscription.getKey && subscription.getKey('p256dh')),
+      vapidAuth: keys && keys.auth
+        ? keys.auth
+        : arrayBufferToBase64Url(subscription.getKey && subscription.getKey('auth'))
+    };
   }
 
   async function preparePushInfrastructure(runtimeConfig, boot) {
@@ -2143,16 +2230,37 @@
 
     var swPath = normalizeServiceWorkerPath((boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH);
     var swScope = deriveServiceWorkerScope(swPath);
+    var registration = null;
 
     try {
-      return await navigator.serviceWorker.register(swPath, { scope: swScope });
+      registration = await navigator.serviceWorker.register(swPath, { scope: swScope });
     } catch (_scopedRegisterError) {
       try {
-        return await navigator.serviceWorker.register(swPath);
+        registration = await navigator.serviceWorker.register(swPath);
       } catch (_fallbackRegisterError) {
-        return null;
+        registration = null;
       }
     }
+
+    if (registration) {
+      try {
+        await waitForActiveServiceWorker(registration, 12000);
+      } catch (_activationError) {}
+    }
+
+    try {
+      await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
+    } catch (_firebaseWarmupError) {}
+
+    return registration;
+  }
+
+  function ensurePushInfrastructure(runtimeConfig, boot) {
+    var cacheKey = runtimeConfig.shopDomain || 'default';
+    if (!pushInfrastructurePromises[cacheKey]) {
+      pushInfrastructurePromises[cacheKey] = preparePushInfrastructure(runtimeConfig, boot);
+    }
+    return pushInfrastructurePromises[cacheKey];
   }
 
   async function refreshOptInSettings(config, boot) {
@@ -2268,7 +2376,7 @@
     primaryButton.disabled = false;
     primaryButton.removeAttribute('aria-busy');
 
-    primaryButton.onclick = async function () {
+    primaryButton.onclick = function () {
       refreshClientProfile(clientProfile);
 
       primaryButton.disabled = true;
@@ -2276,26 +2384,52 @@
       recordPromptAttempt(config.shopDomain);
       void sendOptInEvent(boot, 'browser', 'click');
 
-      var result = await registerToken(config, boot, { silent: false, optInPromptType: 'browser' }, clientProfile);
+      var permissionPromise = beginPermissionFromUserGesture();
+      closePrompt(root);
 
-      if (result && result.ok) {
-        closePrompt(root);
-        return;
-      }
+      permissionPromise.then(async function (permission) {
+        if (clientProfile) {
+          clientProfile.permissionState = permission;
+        }
 
-      openPrompt(root);
-      if (result && result.reason === 'permission-denied') {
-        explainUnsupported(root, 'permission-denied');
-      } else if (result && result.reason === 'sw-script-missing') {
-        showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
-      } else if (result && result.reason === 'sw-not-active') {
-        showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
-      } else {
-        showStatus(root, 'Setup failed. Please try again. (' + (result && (result.message || result.reason) ? (result.message || result.reason) : 'unknown') + ')', 'error');
-      }
+        if (permission !== 'granted') {
+          openPrompt(root);
+          explainUnsupported(root, permission === 'denied' ? 'permission-denied' : 'unsupported');
+          primaryButton.disabled = false;
+          primaryButton.removeAttribute('aria-busy');
+          return;
+        }
 
-      primaryButton.disabled = false;
-      primaryButton.removeAttribute('aria-busy');
+        var result = await registerToken(config, boot, {
+          silent: false,
+          optInPromptType: 'browser',
+          skipPermissionRequest: true
+        }, clientProfile);
+
+        if (result && result.ok) {
+          closePrompt(root);
+          return;
+        }
+
+        openPrompt(root);
+        if (result && result.reason === 'permission-denied') {
+          explainUnsupported(root, 'permission-denied');
+        } else if (result && result.reason === 'sw-script-missing') {
+          showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+        } else if (result && result.reason === 'sw-not-active') {
+          showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
+        } else {
+          showStatus(root, 'Setup failed. Please try again. (' + (result && (result.message || result.reason) ? (result.message || result.reason) : 'unknown') + ')', 'error');
+        }
+
+        primaryButton.disabled = false;
+        primaryButton.removeAttribute('aria-busy');
+      }).catch(function () {
+        openPrompt(root);
+        showStatus(root, 'Setup failed. Please try again.', 'error');
+        primaryButton.disabled = false;
+        primaryButton.removeAttribute('aria-busy');
+      });
     };
   }
 
@@ -2340,7 +2474,9 @@
       if (settings.silent) {
         return { ok: false, reason: 'permission-default' };
       }
-      permission = await requestNotificationPermission();
+      if (!settings.skipPermissionRequest) {
+        permission = await requestNotificationPermission();
+      }
     }
 
     if (permission !== 'granted') {
@@ -2359,43 +2495,48 @@
         messaging = null;
       }
 
+      var registration = await ensurePushInfrastructure(runtimeConfig, boot);
       var swPath = normalizeServiceWorkerPath((boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH);
       var swScope = deriveServiceWorkerScope(swPath);
-      var registration;
 
-      try {
-        registration = await navigator.serviceWorker.register(swPath, { scope: swScope });
-      } catch (_scopedRegisterError) {
+      if (!registration) {
         try {
-          // Fallback to default scope derived from script directory for stricter browser/proxy combinations.
-          registration = await navigator.serviceWorker.register(swPath);
-        } catch (swRegisterError) {
-          var reusedExistingRegistration = false;
+          registration = await navigator.serviceWorker.register(swPath, { scope: swScope });
+        } catch (_scopedRegisterError) {
           try {
-            var existingRegistrations = await navigator.serviceWorker.getRegistrations();
-            for (var r = 0; r < existingRegistrations.length; r += 1) {
-              var existing = existingRegistrations[r];
-              if (existing && typeof existing.scope === 'string' && existing.scope.indexOf('/apps/push-eagle/') !== -1) {
-                registration = existing;
-                reusedExistingRegistration = true;
-                break;
+            registration = await navigator.serviceWorker.register(swPath);
+          } catch (swRegisterError) {
+            var reusedExistingRegistration = false;
+            try {
+              var existingRegistrations = await navigator.serviceWorker.getRegistrations();
+              for (var r = 0; r < existingRegistrations.length; r += 1) {
+                var existing = existingRegistrations[r];
+                if (existing && typeof existing.scope === 'string' && existing.scope.indexOf('/apps/push-eagle/') !== -1) {
+                  registration = existing;
+                  reusedExistingRegistration = true;
+                  break;
+                }
               }
-            }
-            if (!reusedExistingRegistration) {
+              if (!reusedExistingRegistration) {
+                throw swRegisterError;
+              }
+            } catch (_existingRegistrationLookupError) {
               throw swRegisterError;
             }
-          } catch (_existingRegistrationLookupError) {
-            throw swRegisterError;
-          }
 
-          if (!reusedExistingRegistration) {
-            var swMessage = swRegisterError && swRegisterError.message ? String(swRegisterError.message) : '';
-            if (/404|bad http response|script/i.test(swMessage)) {
-              return { ok: false, reason: 'sw-script-missing', message: swMessage };
+            if (!reusedExistingRegistration) {
+              var swMessage = swRegisterError && swRegisterError.message ? String(swRegisterError.message) : '';
+              if (/404|bad http response|script/i.test(swMessage)) {
+                return { ok: false, reason: 'sw-script-missing', message: swMessage };
+              }
+              throw swRegisterError;
             }
-            throw swRegisterError;
           }
         }
+      }
+
+      if (!registration) {
+        return { ok: false, reason: 'sw-script-missing', message: 'Service worker registration unavailable.' };
       }
 
       try {
@@ -2412,6 +2553,7 @@
       var vapidEndpoint = null;
       var vapidP256dh = null;
       var vapidAuth = null;
+      var tokenErrorMessage = '';
 
       if (messaging && messaging.getToken) {
         try {
@@ -2419,64 +2561,64 @@
             vapidKey: firebaseVapidKey,
             serviceWorkerRegistration: registration
           });
-        } catch (_fcmError) {
+        } catch (fcmError) {
           token = null;
+          tokenErrorMessage = fcmError && fcmError.message ? String(fcmError.message) : tokenErrorMessage;
         }
       }
 
       if (!token && registration && registration.pushManager) {
         try {
           var existingSubscription = await registration.pushManager.getSubscription();
-          if (existingSubscription && existingSubscription.endpoint) {
-            token = existingSubscription.endpoint;
-            tokenType = 'vapid';
-            vapidEndpoint = existingSubscription.endpoint;
-
-            var existingJson = existingSubscription.toJSON ? existingSubscription.toJSON() : null;
-            var existingKeys = existingJson && existingJson.keys ? existingJson.keys : null;
-            vapidP256dh = existingKeys && existingKeys.p256dh
-              ? existingKeys.p256dh
-              : arrayBufferToBase64Url(existingSubscription.getKey && existingSubscription.getKey('p256dh'));
-            vapidAuth = existingKeys && existingKeys.auth
-              ? existingKeys.auth
-              : arrayBufferToBase64Url(existingSubscription.getKey && existingSubscription.getKey('auth'));
+          var existingFields = subscriptionToTokenFields(existingSubscription);
+          if (existingFields) {
+            token = existingFields.token;
+            tokenType = existingFields.tokenType;
+            vapidEndpoint = existingFields.vapidEndpoint;
+            vapidP256dh = existingFields.vapidP256dh;
+            vapidAuth = existingFields.vapidAuth;
           }
-        } catch (_existingSubscriptionError) {
-          token = null;
+        } catch (existingSubscriptionError) {
+          tokenErrorMessage = existingSubscriptionError && existingSubscriptionError.message
+            ? String(existingSubscriptionError.message)
+            : tokenErrorMessage;
         }
       }
 
-      // Firefox/Safari may not return FCM token; fallback to native Web Push subscription.
-      if (!token && webPushVapidPublicKey) {
+      var vapidCandidates = [];
+      if (webPushVapidPublicKey) {
+        vapidCandidates.push(webPushVapidPublicKey);
+      }
+      if (firebaseVapidKey && vapidCandidates.indexOf(firebaseVapidKey) === -1) {
+        vapidCandidates.push(firebaseVapidKey);
+      }
+
+      for (var vapidIndex = 0; vapidIndex < vapidCandidates.length && !token; vapidIndex += 1) {
         try {
-          var subscription = await subscribeWithVapid(registration, webPushVapidPublicKey);
-          if (subscription && subscription.endpoint) {
-            token = subscription.endpoint;
-            tokenType = 'vapid';
-            vapidEndpoint = subscription.endpoint;
-            var subscriptionJson = subscription.toJSON ? subscription.toJSON() : null;
-            var keys = subscriptionJson && subscriptionJson.keys ? subscriptionJson.keys : null;
-            vapidP256dh = keys && keys.p256dh
-              ? keys.p256dh
-              : arrayBufferToBase64Url(subscription.getKey && subscription.getKey('p256dh'));
-            vapidAuth = keys && keys.auth
-              ? keys.auth
-              : arrayBufferToBase64Url(subscription.getKey && subscription.getKey('auth'));
+          var subscription = await subscribeWithVapid(registration, vapidCandidates[vapidIndex]);
+          var subscriptionFields = subscriptionToTokenFields(subscription);
+          if (subscriptionFields) {
+            token = subscriptionFields.token;
+            tokenType = subscriptionFields.tokenType;
+            vapidEndpoint = subscriptionFields.vapidEndpoint;
+            vapidP256dh = subscriptionFields.vapidP256dh;
+            vapidAuth = subscriptionFields.vapidAuth;
           }
-        } catch (_vapidError) {
-          token = null;
+        } catch (vapidError) {
+          tokenErrorMessage = vapidError && vapidError.message ? String(vapidError.message) : tokenErrorMessage;
         }
       }
 
       if (!token && messaging && messaging.getToken) {
         try {
-          await delay(1200);
+          await delay(800);
           token = await messaging.getToken({
             vapidKey: firebaseVapidKey,
             serviceWorkerRegistration: registration
           });
-        } catch (_retryFcmError) {
+        } catch (retryFcmError) {
           token = null;
+          tokenErrorMessage = retryFcmError && retryFcmError.message ? String(retryFcmError.message) : tokenErrorMessage;
         }
       }
 
@@ -2484,16 +2626,14 @@
         return {
           ok: false,
           reason: 'token-empty',
-          message: webPushVapidPublicKey
+          message: tokenErrorMessage || (webPushVapidPublicKey
             ? 'No FCM token and no Web Push subscription returned by browser.'
-            : 'No FCM token and Web Push VAPID public key is missing.'
+            : 'No FCM token and Web Push VAPID public key is missing.')
         };
       }
 
-      // Resolve the visitor's real city/country from their own IP before saving.
-      // This is done client-side so it stays correct even when the token save is
-      // relayed through the Shopify app proxy (which would otherwise hide the IP).
-      var visitorGeo = await resolveVisitorGeo(runtimeConfig.appUrl);
+      var visitorGeoPromise = resolveVisitorGeo(runtimeConfig.appUrl);
+      var visitorGeo = await visitorGeoPromise;
       var resolvedCountry = visitorGeo.country
         || (clientProfile && clientProfile.country ? clientProfile.country : null);
       var resolvedCity = visitorGeo.city
@@ -2533,18 +2673,7 @@
           : (runtimeConfig.mode && runtimeConfig.mode !== 'off' ? runtimeConfig.mode : null)
       };
 
-      var primaryTokenEndpoint = boot.tokenEndpoint || runtimeConfig.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH;
-      var directTokenEndpoint = runtimeConfig.appUrl
-        ? runtimeConfig.appUrl.replace(/\/$/, '') + '/api/storefront/token?shop=' + encodeURIComponent(boot.shopDomain)
-        : '';
-      var tokenEndpoints = [];
-
-      if (directTokenEndpoint) {
-        tokenEndpoints.push(directTokenEndpoint);
-      }
-      if (primaryTokenEndpoint && tokenEndpoints.indexOf(primaryTokenEndpoint) === -1) {
-        tokenEndpoints.push(primaryTokenEndpoint);
-      }
+      var tokenEndpoints = buildTokenEndpoints(runtimeConfig, boot);
 
       var tokenSaved = false;
       var tokenSaveReason = '';
@@ -2562,7 +2691,8 @@
               method: 'POST',
               credentials: isSameOriginEndpoint(endpoint) ? 'include' : 'omit',
               headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-Shop-Domain': boot.shopDomain
               },
               body: JSON.stringify(payload)
             });
@@ -2808,6 +2938,7 @@
 
     var boot = await bootstrap(config);
     boot = await refreshOptInSettings(config, boot);
+    void ensurePushInfrastructure(config, boot);
     void resolveVisitorGeo(config.appUrl);
     syncExternalIdToCart(
       boot && boot.externalId ? boot.externalId : null,
@@ -2935,36 +3066,63 @@
 
         primaryButton.disabled = false;
         primaryButton.removeAttribute('aria-busy');
-        primaryButton.onclick = async function () {
+        primaryButton.onclick = function () {
           if (isRealIosDevice(clientProfile) && !isStandaloneIos()) {
             showStatus(root, 'Open this store from your Home Screen icon first, then try again.', 'info');
             return;
           }
 
           refreshClientProfile(clientProfile);
-
           primaryButton.disabled = true;
           primaryButton.setAttribute('aria-busy', 'true');
 
+          var permissionPromise = beginPermissionFromUserGesture();
           void sendOptInEvent(boot, 'custom', 'click');
           closePrompt(root);
 
-          var result = await registerToken(config, boot, { silent: false, optInPromptType: 'custom' }, clientProfile);
-
-          if (!result.ok) {
-            openPrompt(root);
-            if (result.reason === 'sw-script-missing') {
-              showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
-            } else if (result.reason === 'sw-not-active') {
-              showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
-            } else if (result.reason === 'permission-denied') {
-              showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
-            } else {
-              showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
+          permissionPromise.then(async function (permission) {
+            if (clientProfile) {
+              clientProfile.permissionState = permission;
             }
+
+            if (permission !== 'granted') {
+              openPrompt(root);
+              if (permission === 'denied') {
+                showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+              } else {
+                showStatus(root, 'Notification permission was not granted. Please try again.', 'error');
+              }
+              primaryButton.disabled = false;
+              primaryButton.removeAttribute('aria-busy');
+              return;
+            }
+
+            var result = await registerToken(config, boot, {
+              silent: false,
+              optInPromptType: 'custom',
+              skipPermissionRequest: true
+            }, clientProfile);
+
+            if (!result.ok) {
+              openPrompt(root);
+              if (result.reason === 'sw-script-missing') {
+                showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+              } else if (result.reason === 'sw-not-active') {
+                showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
+              } else if (result.reason === 'permission-denied') {
+                showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+              } else {
+                showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
+              }
+              primaryButton.disabled = false;
+              primaryButton.removeAttribute('aria-busy');
+            }
+          }).catch(function () {
+            openPrompt(root);
+            showStatus(root, 'Setup failed. Please try again.', 'error');
             primaryButton.disabled = false;
             primaryButton.removeAttribute('aria-busy');
-          }
+          });
         };
       };
 
