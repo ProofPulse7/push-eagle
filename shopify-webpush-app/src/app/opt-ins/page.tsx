@@ -89,7 +89,7 @@ export default function OptInsPage() {
   const { toast } = useToast();
   const { data: optInData } = useOptInSettings();
   const saveOptInMutation = useSaveOptInSettings();
-  const [selectedPromptType, setSelectedPromptType] = useState<'browser' | 'custom'>('custom');
+  const [selectedPromptType, setSelectedPromptType] = useState<'browser' | 'custom' | 'off'>('custom');
 
   const mergedSettings = useMemo(() => {
     if (!shopDomain) {
@@ -99,13 +99,28 @@ export default function OptInsPage() {
     return mergePendingSettings(shopDomain, 'optIn', optInData?.ok ? optInData : null);
   }, [shopDomain, optInData]);
 
-  const livePromptType = mergedSettings?.promptType === 'browser' ? 'browser' : 'custom';
+  const livePromptType = mergedSettings?.promptType === 'browser'
+    ? 'browser'
+    : mergedSettings?.promptType === 'off'
+      ? 'off'
+      : 'custom';
   const iosWidgetEnabled = mergedSettings?.iosWidgetEnabled !== false;
   const promptStats = useMemo(() => parseOptInStats(optInData), [optInData]);
+  const activeStats = livePromptType === 'browser'
+    ? promptStats.browser
+    : livePromptType === 'custom'
+      ? promptStats.custom
+      : emptyTypeStats;
+  const livePromptLabel = livePromptType === 'browser'
+    ? 'Browser'
+    : livePromptType === 'off'
+      ? 'Off'
+      : 'Custom';
 
   useEffect(() => {
     if (mergedSettings) {
-      setSelectedPromptType(mergedSettings.promptType === 'browser' ? 'browser' : 'custom');
+      const next = mergedSettings.promptType;
+      setSelectedPromptType(next === 'browser' || next === 'off' ? next : 'custom');
     }
   }, [mergedSettings?.promptType]);
 
@@ -125,7 +140,7 @@ export default function OptInsPage() {
   }, [mergedSettings, optInData?.ok]);
 
   const updatePromptTypeSelection = (value: string) => {
-    const next = value === 'browser' ? 'browser' : 'custom';
+    const next = value === 'browser' ? 'browser' : value === 'off' ? 'off' : 'custom';
     setSelectedPromptType(next);
   };
 
@@ -140,7 +155,7 @@ export default function OptInsPage() {
       onSuccess: () => {
         toast({
           title: 'Prompt type saved',
-          description: `${selectedPromptType === 'browser' ? 'Browser' : 'Custom'} prompt is now live.`,
+          description: `${selectedPromptType === 'browser' ? 'Browser' : selectedPromptType === 'off' ? 'Off' : 'Custom'} prompt is now live.`,
         });
       },
       onError: (error) => {
@@ -189,16 +204,15 @@ export default function OptInsPage() {
 
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold tracking-tight">Stats (both opt-ins)</h2>
+            <h2 className="text-xl font-semibold tracking-tight">Stats ({livePromptLabel} prompt — live)</h2>
         </div>
         <Card>
             <CardContent className="p-0">
-                <div className="grid grid-cols-2 lg:grid-cols-5 divide-y lg:divide-y-0 lg:divide-x">
-                    <TopStat label="Total views" value={promptStats.totals.views} tooltipText="Combined prompt impressions across browser and custom opt-ins." />
-                    <TopStat label="Total clicks" value={promptStats.totals.clicks} tooltipText="Combined allow/subscribe clicks across both opt-in types." />
-                    <TopStat label="Total subscribers" value={promptStats.totals.conversions} tooltipText="Successful subscriptions attributed to each opt-in prompt type." />
-                    <TopStat label="Overall conversion" value={formatPercent(promptStats.totals.conversionPercent)} tooltipText="Total subscribers divided by total views across both opt-ins." />
-                    <TopStat label="Avg conversion" value={formatPercent(promptStats.totals.avgConversionPercent)} tooltipText="Average view-to-subscribe conversion rate across active opt-in types." />
+                <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x">
+                    <TopStat label="Total views" value={activeStats.views} tooltipText={`Impressions for the live ${livePromptLabel.toLowerCase()} opt-in prompt.`} />
+                    <TopStat label="Total clicks" value={activeStats.clicks} tooltipText={`Allow/subscribe clicks for the live ${livePromptLabel.toLowerCase()} opt-in prompt.`} />
+                    <TopStat label="Total subscribers" value={activeStats.conversions} tooltipText={`Successful subscriptions from the live ${livePromptLabel.toLowerCase()} opt-in prompt.`} />
+                    <TopStat label="Overall conversion" value={formatPercent(activeStats.conversionPercent)} tooltipText="Subscribers divided by views for the live prompt." />
                 </div>
             </CardContent>
         </Card>
@@ -214,6 +228,29 @@ export default function OptInsPage() {
           </CardHeader>
           <CardContent>
             <RadioGroup value={selectedPromptType} onValueChange={updatePromptTypeSelection} className="space-y-4">
+
+              <div
+                className={cn(
+                  'rounded-lg border p-4 transition-all',
+                  selectedPromptType === 'off' ? 'border-primary bg-primary/5' : 'bg-card hover:bg-muted/50'
+                )}
+              >
+                <div className="flex items-center justify-between">
+                    <div className="flex items-start gap-4">
+                         <RadioGroupItem value="off" id="off-prompt" className="mt-1" />
+                         <div className="grid gap-1.5">
+                            <Label htmlFor="off-prompt" className="font-semibold text-base cursor-pointer">
+                                Off
+                            {livePromptType === 'off' && <Badge variant="default" className="ml-2">LIVE</Badge>}
+                            {selectedPromptType === 'off' && livePromptType !== 'off' && <Badge variant="secondary" className="ml-2">SELECTED</Badge>}
+                            </Label>
+                            <p className="text-sm text-muted-foreground">
+                                Hide both browser and custom opt-in prompts on your storefront
+                            </p>
+                        </div>
+                    </div>
+                </div>
+              </div>
               
               <div
                 className={cn(
@@ -296,7 +333,9 @@ export default function OptInsPage() {
               <p>{statusLabel}</p>
               {settingsSummary ? (
                 <p className="mt-1">
-                  {livePromptType === 'browser'
+                  {livePromptType === 'off'
+                    ? 'Both opt-in prompts are hidden. Existing subscribers can still receive notifications.'
+                    : livePromptType === 'browser'
                     ? `Delays: ${settingsSummary.desktopDelay}s desktop / ${settingsSummary.mobileDelay}s mobile. Browser mode asks at most once per session and up to 3 times in 2 days.`
                     : `Position: ${settingsSummary.position}. Delays: ${settingsSummary.desktopDelay}s desktop / ${settingsSummary.mobileDelay}s mobile. Hide for ${settingsSummary.hideForDays} days, max ${settingsSummary.maxDisplaysPerSession} displays per session.`}
                 </p>

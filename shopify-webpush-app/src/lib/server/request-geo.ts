@@ -1,6 +1,9 @@
+import { normalizeRegion } from '@/lib/server/infer-subscriber-region';
+
 type RequestGeo = {
   city: string | null;
   country: string | null;
+  region: string | null;
 };
 
 const decodeHeaderValue = (value: string) => {
@@ -40,8 +43,18 @@ export const getRequestGeo = (request: Request): RequestGeo => {
     'x-appengine-country',
   ]);
 
+  const region = normalizeRegion(
+    pickHeader(request.headers, [
+      'x-vercel-ip-country-region',
+      'cf-region',
+      'cf-ipregion',
+      'x-appengine-region',
+    ]),
+  );
+
   return {
     city,
     country,
+    region,
   };
 };

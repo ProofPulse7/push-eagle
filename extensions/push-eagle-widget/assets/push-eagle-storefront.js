@@ -43,6 +43,7 @@
   var BROWSER_PROMPT_MAX_DISPLAYS_PER_SESSION = 1;
   var BROWSER_PROMPT_MAX_ATTEMPTS = 3;
   var BROWSER_PROMPT_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+  var TOKEN_SAVE_MAX_ATTEMPTS = 4;
   var IOS_HOME_SCREEN_POLL_MS = 1000;
 
   function queuePreBootstrapCartSignal(details, source) {
@@ -1110,9 +1111,66 @@
     return trimmed;
   }
 
+  function normalizeGeoRegion(value) {
+    var trimmed = String(value == null ? '' : value).trim();
+    return trimmed || null;
+  }
+
+  function mergeVisitorGeo(primary, secondary) {
+    return {
+      country: primary.country || secondary.country || null,
+      city: primary.city || secondary.city || null,
+      region: primary.region || secondary.region || null
+    };
+  }
+
+  function inferRegionFromCityCountry(city, country) {
+    var cityKey = String(city || '').trim().toLowerCase();
+    var countryKey = String(country || '').trim().toLowerCase();
+    if (!cityKey) {
+      return null;
+    }
+
+    if (countryKey === 'pk' || countryKey === 'pakistan') {
+      var pkMap = {
+        karachi: 'Sindh',
+        hyderabad: 'Sindh',
+        sukkur: 'Sindh',
+        larkana: 'Sindh',
+        nawabshah: 'Sindh',
+        mirpurkhas: 'Sindh',
+        lahore: 'Punjab',
+        faisalabad: 'Punjab',
+        rawalpindi: 'Punjab',
+        multan: 'Punjab',
+        gujranwala: 'Punjab',
+        sialkot: 'Punjab',
+        bahawalpur: 'Punjab',
+        peshawar: 'Khyber Pakhtunkhwa',
+        quetta: 'Balochistan',
+        islamabad: 'Islamabad'
+      };
+      return pkMap[cityKey] || null;
+    }
+
+    return null;
+  }
+
+  function finalizeVisitorGeo(geo) {
+    var next = {
+      country: geo.country || null,
+      city: geo.city || null,
+      region: geo.region || null
+    };
+    if (!next.region) {
+      next.region = inferRegionFromCityCountry(next.city, next.country);
+    }
+    return next;
+  }
+
   async function fetchGeoFromOwnEndpoint(appUrl) {
     if (!appUrl) {
-      return { country: null, city: null };
+      return { country: null, city: null, region: null };
     }
 
     try {
@@ -1126,16 +1184,17 @@
       });
 
       if (!response.ok) {
-        return { country: null, city: null };
+        return { country: null, city: null, region: null };
       }
 
       var data = await response.json();
       return {
         country: normalizeGeoCountry(data && data.country ? data.country : null),
-        city: data && data.city ? String(data.city).trim() || null : null
+        city: data && data.city ? String(data.city).trim() || null : null,
+        region: normalizeGeoRegion(data && data.region ? data.region : null)
       };
     } catch (_error) {
-      return { country: null, city: null };
+      return { country: null, city: null, region: null };
     }
   }
 
@@ -1152,16 +1211,46 @@
       });
 
       if (!response.ok) {
-        return { country: null, city: null };
+        return { country: null, city: null, region: null };
       }
 
       var data = await response.json();
       return {
         country: normalizeGeoCountry(data && data.country_code ? data.country_code : null),
-        city: data && data.city ? String(data.city).trim() || null : null
+        city: data && data.city ? String(data.city).trim() || null : null,
+        region: normalizeGeoRegion(data && data.region ? data.region : null)
       };
     } catch (_error) {
-      return { country: null, city: null };
+      return { country: null, city: null, region: null };
+    }
+  }
+
+  async function fetchGeoFromIpWho() {
+    try {
+      var response = await fetch('https://ipwho.is/', {
+        method: 'GET',
+        credentials: 'omit',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        return { country: null, city: null, region: null };
+      }
+
+      var data = await response.json();
+      if (!data || data.success === false) {
+        return { country: null, city: null, region: null };
+      }
+
+      return {
+        country: normalizeGeoCountry(data.country_code),
+        city: data.city ? String(data.city).trim() || null : null,
+        region: normalizeGeoRegion(data.region)
+      };
+    } catch (_error) {
+      return { country: null, city: null, region: null };
     }
   }
 
@@ -1178,13 +1267,16 @@
 
     __peGeoPromise = (async function () {
       var geo = await fetchGeoFromOwnEndpoint(appUrl);
-      if (!geo.country || !geo.city) {
-        var fallback = await fetchGeoFromPublicApi();
-        geo = {
-          country: geo.country || fallback.country,
-          city: geo.city || fallback.city
-        };
+      var providers = [fetchGeoFromPublicApi, fetchGeoFromIpWho];
+
+      for (var i = 0; i < providers.length; i += 1) {
+        if (geo.country && geo.city && geo.region) {
+          break;
+        }
+        geo = mergeVisitorGeo(geo, await providers[i]());
       }
+
+      geo = finalizeVisitorGeo(geo);
       __peGeoCache = geo;
       return geo;
     })();
@@ -1323,10 +1415,15 @@
     var deviceType = detectDeviceType(ua, osName, uaData && uaData.mobile);
     var geoHints = await getBrowserGeoHints();
 
-    if ((navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) && osName === 'macos') {
-      osName = 'ios';
-      if (deviceType === 'desktop') {
-        deviceType = 'tablet';
+    if (platform === 'MacIntel' && navigator.maxTouchPoints > 1 && /Macintosh/i.test(ua)) {
+      var isWebkit = /AppleWebKit/i.test(ua);
+      var isIosBrowser = /CriOS|FxiOS|EdgiOS/i.test(ua);
+      var isDesktopEmbedded = /Chrome|Chromium|Edg\/|OPR|Firefox/i.test(ua) && !isIosBrowser;
+      if (isWebkit && !isDesktopEmbedded) {
+        osName = 'ios';
+        if (deviceType === 'desktop') {
+          deviceType = 'tablet';
+        }
       }
     }
 
@@ -1430,6 +1527,7 @@
       timezone: profile.timezone,
       country: profile.country,
       city: profile.city,
+      region: profile.region,
       geolocationPermission: profile.geolocationPermission,
       maxTouchPoints: profile.maxTouchPoints,
       hardwareConcurrency: profile.hardwareConcurrency,
@@ -1485,7 +1583,7 @@
       return { supported: false, reason: 'https-required' };
     }
 
-    if (clientProfile.osName === 'ios' && !clientProfile.isStandalone) {
+    if (isRealIosDevice(clientProfile) && !clientProfile.isStandalone) {
       return { supported: false, reason: 'ios-home-screen' };
     }
 
@@ -1714,7 +1812,11 @@
       }
     }
 
-    runtimeConfig.mode = settings.promptType === 'browser' ? 'browser' : 'custom';
+    runtimeConfig.mode = settings.promptType === 'browser'
+      ? 'browser'
+      : settings.promptType === 'off'
+        ? 'off'
+        : 'custom';
     runtimeConfig.delayMs = (isMobileViewport() ? settings.mobileDelaySeconds : settings.desktopDelaySeconds) * 1000;
     runtimeConfig.maxDisplaysPerSession = settings.promptType === 'browser'
       ? BROWSER_PROMPT_MAX_DISPLAYS_PER_SESSION
@@ -2032,6 +2134,90 @@
     });
   }
 
+  async function preparePushInfrastructure(runtimeConfig, boot) {
+    if (!('serviceWorker' in navigator)) {
+      return null;
+    }
+
+    var swPath = normalizeServiceWorkerPath((boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH);
+    var swScope = deriveServiceWorkerScope(swPath);
+
+    try {
+      return await navigator.serviceWorker.register(swPath, { scope: swScope });
+    } catch (_scopedRegisterError) {
+      try {
+        return await navigator.serviceWorker.register(swPath);
+      } catch (_fallbackRegisterError) {
+        return null;
+      }
+    }
+  }
+
+  async function runBrowserNativePermissionFlow(root, config, boot, clientProfile, options) {
+    closePrompt(root);
+    var flowOptions = options || {};
+
+    if (hasReachedBrowserPromptLimit(config.shopDomain)) {
+      return;
+    }
+
+    if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
+      return;
+    }
+
+    if (!flowOptions.skipTimingWait) {
+      void preparePushInfrastructure(config, boot);
+      var remainingDelayMs = getRemainingDelayMs(config.startedAt, config.delayMs);
+      if (remainingDelayMs > 0) {
+        await delay(remainingDelayMs);
+      }
+    }
+
+    if (hasReachedBrowserPromptLimit(config.shopDomain)) {
+      return;
+    }
+
+    if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
+      return;
+    }
+
+    incrementSessionDisplayCount(config.shopDomain);
+    recordPromptAttempt(config.shopDomain);
+    void sendOptInEvent(boot, 'browser', 'view');
+
+    refreshClientProfile(clientProfile);
+    var result = await registerToken(config, boot, { silent: false, optInPromptType: 'browser' }, clientProfile);
+
+    if (result && result.ok) {
+      void sendOptInEvent(boot, 'browser', 'click');
+      closePrompt(root);
+    }
+  }
+
+  async function requestNotificationPermission() {
+    if (!('Notification' in window)) {
+      return 'unsupported';
+    }
+
+    if (Notification.permission === 'granted' || Notification.permission === 'denied') {
+      return Notification.permission;
+    }
+
+    try {
+      if (typeof Notification.requestPermission === 'function') {
+        var result = Notification.requestPermission();
+        if (result && typeof result.then === 'function') {
+          return await result;
+        }
+        return result || Notification.permission;
+      }
+    } catch (_requestError) {
+      return Notification.permission;
+    }
+
+    return Notification.permission;
+  }
+
   async function registerToken(runtimeConfig, boot, options, profile) {
     var clientProfile = refreshClientProfile(profile);
     var support = getBrowserSupport(clientProfile);
@@ -2049,7 +2235,7 @@
       if (settings.silent) {
         return { ok: false, reason: 'permission-default' };
       }
-      permission = await Notification.requestPermission();
+      permission = await requestNotificationPermission();
     }
 
     if (permission !== 'granted') {
@@ -2207,9 +2393,13 @@
         || (clientProfile && clientProfile.country ? clientProfile.country : null);
       var resolvedCity = visitorGeo.city
         || (clientProfile && clientProfile.city ? clientProfile.city : null);
+      var resolvedRegion = visitorGeo.region
+        || (clientProfile && clientProfile.region ? clientProfile.region : null)
+        || inferRegionFromCityCountry(resolvedCity, resolvedCountry);
       if (clientProfile) {
         clientProfile.country = resolvedCountry;
         clientProfile.city = resolvedCity;
+        clientProfile.region = resolvedRegion;
       }
 
       var payload = {
@@ -2226,10 +2416,16 @@
         locale: clientProfile && clientProfile.language ? clientProfile.language : navigator.language,
         country: resolvedCountry,
         city: resolvedCity,
+        region: resolvedRegion,
         deviceContext: Object.assign({}, serializeClientProfile(clientProfile) || {}, {
-          clientId: boot.clientId || null
+          clientId: boot.clientId || null,
+          country: resolvedCountry,
+          city: resolvedCity,
+          region: resolvedRegion
         }),
-        optInPromptType: settings.optInPromptType || runtimeConfig.mode || null
+        optInPromptType: settings.optInPromptType && settings.optInPromptType !== 'off'
+          ? settings.optInPromptType
+          : (runtimeConfig.mode && runtimeConfig.mode !== 'off' ? runtimeConfig.mode : null)
       };
 
       var primaryTokenEndpoint = boot.tokenEndpoint || runtimeConfig.proxyTokenPath || DEFAULT_PROXY_TOKEN_PATH;
@@ -2248,36 +2444,42 @@
       var tokenSaved = false;
       var tokenSaveReason = '';
 
-      for (var endpointIndex = 0; endpointIndex < tokenEndpoints.length; endpointIndex += 1) {
-        var endpoint = tokenEndpoints[endpointIndex];
+      for (var attempt = 0; attempt < TOKEN_SAVE_MAX_ATTEMPTS && !tokenSaved; attempt += 1) {
+        if (attempt > 0) {
+          await delay(Math.min(4000, 500 * Math.pow(2, attempt - 1)));
+        }
 
-        try {
-          var tokenResponse = await fetch(endpoint, {
-            method: 'POST',
-            credentials: isSameOriginEndpoint(endpoint) ? 'include' : 'omit',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(payload)
-          });
+        for (var endpointIndex = 0; endpointIndex < tokenEndpoints.length; endpointIndex += 1) {
+          var endpoint = tokenEndpoints[endpointIndex];
 
-          // Same as activity: treat 200 HTML proxy fallback pages as failed saves.
-          if (tokenResponse.ok && isJsonResponse(tokenResponse)) {
-            tokenSaved = true;
-            break;
-          }
-
-          var responseError = '';
           try {
-            var responseJson = await tokenResponse.json();
-            responseError = responseJson && responseJson.error ? String(responseJson.error) : '';
-          } catch (_jsonError) {
-            responseError = '';
-          }
+            var tokenResponse = await fetch(endpoint, {
+              method: 'POST',
+              credentials: isSameOriginEndpoint(endpoint) ? 'include' : 'omit',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(payload)
+            });
 
-          tokenSaveReason = 'http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
-        } catch (_tokenSaveError) {
-          tokenSaveReason = 'network-error';
+            // Same as activity: treat 200 HTML proxy fallback pages as failed saves.
+            if (tokenResponse.ok && isJsonResponse(tokenResponse)) {
+              tokenSaved = true;
+              break;
+            }
+
+            var responseError = '';
+            try {
+              var responseJson = await tokenResponse.json();
+              responseError = responseJson && responseJson.error ? String(responseJson.error) : '';
+            } catch (_jsonError) {
+              responseError = '';
+            }
+
+            tokenSaveReason = 'http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
+          } catch (_tokenSaveError) {
+            tokenSaveReason = 'network-error';
+          }
         }
       }
 
@@ -2349,11 +2551,42 @@
   }
 
   function isIosSafari() {
-    var ua = navigator.userAgent || '';
-    var isIos = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    var isWebkit = /WebKit/.test(ua);
-    var isCriOS = /CriOS/.test(ua);
-    return isIos && isWebkit && !isCriOS;
+    return isRealIosDevice();
+  }
+
+  function isRealIosDevice(profile) {
+    var ua = String((profile && profile.userAgent) || navigator.userAgent || '');
+    var platform = String(navigator.platform || '');
+
+    if (/Windows NT|Win32|Win64|WOW64/i.test(ua)) {
+      return false;
+    }
+    if (/Android/i.test(ua)) {
+      return false;
+    }
+    if (/CrOS/i.test(ua)) {
+      return false;
+    }
+
+    if (/iPhone|iPod/i.test(ua)) {
+      return true;
+    }
+    if (/iPad/i.test(ua)) {
+      return true;
+    }
+    if (/CPU (?:iPhone )?OS [\d_]+/i.test(ua)) {
+      return true;
+    }
+
+    // iPadOS 13+ can masquerade as desktop Safari (MacIntel + touch).
+    if (platform === 'MacIntel' && navigator.maxTouchPoints > 1 && /Macintosh/i.test(ua)) {
+      var isWebkit = /AppleWebKit/i.test(ua);
+      var isIosBrowser = /CriOS|FxiOS|EdgiOS/i.test(ua);
+      var isDesktopEmbedded = /Chrome|Chromium|Edg\/|OPR|Firefox/i.test(ua) && !isIosBrowser;
+      return isWebkit && !isDesktopEmbedded;
+    }
+
+    return false;
   }
 
   function isStandaloneIos() {
@@ -2468,6 +2701,7 @@
     }
 
     var boot = await bootstrap(config);
+    void resolveVisitorGeo(config.appUrl);
     syncExternalIdToCart(
       boot && boot.externalId ? boot.externalId : null,
       boot && boot.clientId ? boot.clientId : getOrCreateStableClientId(config.shopDomain),
@@ -2483,7 +2717,6 @@
     applyOptInSettings(root, config, boot);
 
     var settings = config.resolvedOptIn || getResolvedOptInSettings(boot);
-    var isOnIos = clientProfile.osName === 'ios';
     var iosWatcherCleanup = null;
 
     function cleanupIosWatcher() {
@@ -2494,7 +2727,7 @@
     }
 
     async function maybeReportIosHomeScreen() {
-      if (isOnIos && isStandaloneIos()) {
+      if (isRealIosDevice(clientProfile) && isStandaloneIos()) {
         refreshClientProfile(clientProfile);
         await reportIosHomeScreenConfirmed(boot, clientProfile);
       }
@@ -2507,6 +2740,12 @@
       var primaryButton = root.querySelector('[data-push-eagle-action]');
       var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
       refreshClientProfile(clientProfile);
+
+      if (isRealIosDevice(clientProfile) && !isStandaloneIos()) {
+        closePrompt(root);
+        return;
+      }
+
       var support = getBrowserSupport(clientProfile);
       var effectiveMode = config.mode;
 
@@ -2516,6 +2755,11 @@
       // silently sync token so previously failed browsers can self-heal.
       if (clientProfile.permissionState === 'granted') {
         await registerToken(config, boot, { silent: true }, clientProfile);
+        closePrompt(root);
+        return;
+      }
+
+      if (effectiveMode === 'off') {
         closePrompt(root);
         return;
       }
@@ -2548,6 +2792,11 @@
       }
 
       if (!support.supported && effectiveMode !== 'custom') {
+        if (effectiveMode === 'browser') {
+          closePrompt(root);
+          return;
+        }
+
         explainUnsupported(root, support.reason);
         if (config.displayTrigger === 'manual') {
           bindManualTrigger(root, config, function () {
@@ -2566,25 +2815,28 @@
       }
 
       var showPrompt = function () {
-        if (effectiveMode === 'browser' && hasReachedBrowserPromptLimit(config.shopDomain)) {
-          closePrompt(root);
-          return;
-        }
-
         if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
           closePrompt(root);
           return;
         }
 
         incrementSessionDisplayCount(config.shopDomain);
-        if (effectiveMode === 'browser') {
-          recordPromptAttempt(config.shopDomain);
-        }
-        void sendOptInEvent(boot, effectiveMode, 'view');
+        void sendOptInEvent(boot, 'custom', 'view');
         openPrompt(root);
       };
 
       if (config.displayTrigger === 'manual') {
+        if (effectiveMode === 'browser') {
+          var browserManualBound = bindManualTrigger(root, config, function () {
+            void runBrowserNativePermissionFlow(root, config, boot, clientProfile, { skipTimingWait: true });
+          });
+          closePrompt(root);
+          if (!browserManualBound) {
+            void runBrowserNativePermissionFlow(root, config, boot, clientProfile);
+          }
+          return;
+        }
+
         var bound = bindManualTrigger(root, config, function () {
           showPrompt();
         });
@@ -2602,42 +2854,22 @@
         return;
       }
 
+      if (effectiveMode === 'browser') {
+        await runBrowserNativePermissionFlow(root, config, boot, clientProfile);
+        return;
+      }
+
       var standardDelayMs = getRemainingDelayMs(config.startedAt, config.delayMs);
       if (standardDelayMs > 0) {
         await delay(standardDelayMs);
-      }
-
-      // Browser mode: fire native dialog directly — no custom popup shown at all
-      if (effectiveMode === 'browser') {
-        if (hasReachedBrowserPromptLimit(config.shopDomain)) { closePrompt(root); return; }
-        if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) { closePrompt(root); return; }
-        incrementSessionDisplayCount(config.shopDomain);
-        recordPromptAttempt(config.shopDomain);
-        void sendOptInEvent(boot, 'browser', 'view');
-        void sendOptInEvent(boot, 'browser', 'click');
-        var browserModeResult = await registerToken(config, boot, { silent: false, optInPromptType: 'browser' }, clientProfile);
-        if (!browserModeResult.ok) {
-          if (browserModeResult.reason === 'sw-script-missing') {
-            showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
-          } else if (browserModeResult.reason === 'permission-denied') {
-            showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
-          } else if (browserModeResult.reason === 'unsupported' || browserModeResult.reason === 'https-required') {
-            explainUnsupported(root, browserModeResult.reason);
-          } else {
-            showStatus(root, 'Setup failed (' + browserModeResult.reason + '). Please retry.', 'error');
-          }
-          openPrompt(root);
-          return;
-        }
-        return;
       }
 
       showPrompt();
 
       if (primaryButton) {
         primaryButton.onclick = async function () {
-          if (isOnIos && !isStandaloneIos()) {
-            showStatus(root, 'Open this store from Home Screen first, then try again.', 'info');
+          if (isRealIosDevice(clientProfile) && !isStandaloneIos()) {
+            showStatus(root, 'Open this store from your Home Screen icon first, then try again.', 'info');
             return;
           }
 
@@ -2646,14 +2878,14 @@
           primaryButton.disabled = true;
           primaryButton.setAttribute('aria-busy', 'true');
 
-          void sendOptInEvent(boot, effectiveMode, 'click');
+          void sendOptInEvent(boot, 'custom', 'click');
 
           // Custom mode should dismiss instantly after click.
           if (effectiveMode === 'custom') {
             closePrompt(root);
           }
 
-          var result = await registerToken(config, boot, { silent: false, optInPromptType: effectiveMode }, clientProfile);
+          var result = await registerToken(config, boot, { silent: false, optInPromptType: 'custom' }, clientProfile);
 
           if (effectiveMode === 'custom') {
             if (!result.ok) {
@@ -2695,16 +2927,27 @@
     }
 
     async function startIosOnboardingFlow() {
+      if (!isRealIosDevice(clientProfile)) {
+        closePrompt(root);
+        return;
+      }
+
       var primaryButton = root.querySelector('[data-push-eagle-action]');
       var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
 
       applyIosWidgetSettings(root, settings);
 
       function handleStandaloneReady() {
+        if (!isStandaloneIos()) {
+          return;
+        }
+
         cleanupIosWatcher();
+        closePrompt(root);
         refreshClientProfile(clientProfile);
-        showStatus(root, 'Home Screen mode detected. Continuing with your notification prompt...', 'success');
-        startStandardPromptFlow();
+        void reportIosHomeScreenConfirmed(boot, clientProfile).then(function () {
+          startStandardPromptFlow();
+        });
       }
 
       function watchStandalone() {
@@ -2769,22 +3012,36 @@
 
       if (primaryButton) {
         primaryButton.onclick = function () {
-          if (isStandaloneIos()) {
-            handleStandaloneReady();
+          refreshClientProfile(clientProfile);
+          if (!isStandaloneIos()) {
+            showStatus(
+              root,
+              'Add this store to Home Screen, open it from the icon, then tap "I\'ve added it" again.',
+              'info'
+            );
             return;
           }
 
-          showStatus(root, 'Tap Share, choose "Add to Home Screen", then open the store from that icon. We will continue automatically.', 'info');
+          handleStandaloneReady();
         };
       }
 
       var showWidget = function () {
+        if (!isRealIosDevice(clientProfile)) {
+          closePrompt(root);
+          return;
+        }
+
         if (isIosWidgetDismissedForSession(config.shopDomain)) {
           closePrompt(root);
           return;
         }
 
-        showStatus(root, 'Add this store to Home Screen. We will keep checking while this widget is open.', 'info');
+        if (isStandaloneIos()) {
+          handleStandaloneReady();
+          return;
+        }
+
         openPrompt(root);
         watchStandalone();
       };
@@ -2810,7 +3067,13 @@
       showWidget();
     }
 
-    if (isOnIos && !isStandaloneIos()) {
+    if (isRealIosDevice(clientProfile) && isStandaloneIos()) {
+      await maybeReportIosHomeScreen();
+      await startStandardPromptFlow();
+      return;
+    }
+
+    if (isRealIosDevice(clientProfile) && !isStandaloneIos()) {
       if (settings.iosWidgetEnabled !== false) {
         await startIosOnboardingFlow();
       } else {

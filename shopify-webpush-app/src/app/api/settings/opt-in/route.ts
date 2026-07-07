@@ -9,7 +9,7 @@ export const runtime = 'nodejs';
 
 const updateSchema = z.object({
   shopDomain: z.string().optional(),
-  promptType: z.enum(['browser', 'custom']).optional(),
+  promptType: z.enum(['browser', 'custom', 'off']).optional(),
   title: z.string().min(1).max(120).optional(),
   message: z.string().min(1).max(300).optional(),
   allowText: z.string().min(1).max(40).optional(),
@@ -34,10 +34,8 @@ const updateSchema = z.object({
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    const [settings, stats] = await Promise.all([
-      getOptInSettings(shopDomain),
-      getOptInPromptStats(shopDomain),
-    ]);
+    const settings = await getOptInSettings(shopDomain);
+    const stats = await getOptInPromptStats(shopDomain, settings.promptType);
     return NextResponse.json({ ok: true, shopDomain, ...settings, stats });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch opt-in settings.';

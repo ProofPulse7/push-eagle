@@ -1418,6 +1418,60 @@ export const d1DeleteWelcomeAutomationData = async (shopDomain: string) => {
   return { deliveries: deliveryRows.length, clicks: clickRows.length };
 };
 
+export type D1ClickStatRow = { subscriber_id: number; total: number; last_at: string | null };
+
+/** Per-subscriber click count + last click time (segment "Clicked"). */
+export const d1GetClickedSubscriberStats = async (
+  shopDomain: string,
+  externalIdToSubscriberId?: Map<string, number>,
+): Promise<D1ClickStatRow[]> => {
+  await ensureD1DeliveriesSchema();
+  const rows = await runD1Query(
+    `
+      SELECT subscriber_id, external_id, clicked_at
+      FROM campaign_clicks
+      WHERE shop_domain = ?
+      UNION ALL
+      SELECT subscriber_id, external_id, clicked_at
+      FROM automation_clicks
+      WHERE shop_domain = ?
+    `,
+    [shopDomain, shopDomain],
+  );
+
+  const stats = new Map<number, { total: number; last_at: string | null }>();
+
+  for (const row of asRows(rows)) {
+    let subscriberId =
+      row.subscriber_id != null && Number.isFinite(Number(row.subscriber_id))
+        ? Number(row.subscriber_id)
+        : null;
+    if (!subscriberId && row.external_id && externalIdToSubscriberId) {
+      subscriberId = externalIdToSubscriberId.get(String(row.external_id)) ?? null;
+    }
+    if (!subscriberId || !Number.isFinite(subscriberId)) {
+      continue;
+    }
+
+    const clickedAt = row.clicked_at == null ? null : String(row.clicked_at);
+    const existing = stats.get(subscriberId);
+    if (existing) {
+      existing.total += 1;
+      if (clickedAt && (!existing.last_at || clickedAt > existing.last_at)) {
+        existing.last_at = clickedAt;
+      }
+    } else {
+      stats.set(subscriberId, { total: 1, last_at: clickedAt });
+    }
+  }
+
+  return Array.from(stats.entries()).map(([subscriber_id, { total, last_at }]) => ({
+    subscriber_id,
+    total,
+    last_at,
+  }));
+};
+
 export const d1GetCampaignClickTimes = async (
   shopDomain: string,
   subscriberId: number,

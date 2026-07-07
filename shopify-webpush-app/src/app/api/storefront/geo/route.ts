@@ -46,6 +46,7 @@ export async function GET(request: Request) {
         ok: true,
         country: geo.country,
         city: geo.city,
+        region: geo.region,
       },
       { headers: { 'Cache-Control': 'no-store' } },
     );

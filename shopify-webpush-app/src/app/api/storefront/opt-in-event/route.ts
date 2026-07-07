@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { recordOptInPromptEvent } from '@/lib/server/data/store';
+import { getOptInSettings, recordOptInPromptEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
 
@@ -41,9 +41,20 @@ export async function POST(request: Request) {
       );
     }
 
+    const settings = await getOptInSettings(shopDomain);
+    if (settings.promptType === 'off') {
+      return NextResponse.json({ ok: true, ignored: true }, { headers: buildCorsHeaders(origin) });
+    }
+
+    const activePromptType = settings.promptType === 'browser' ? 'browser' : 'custom';
+
+    if (body.promptType !== activePromptType) {
+      return NextResponse.json({ ok: true, ignored: true }, { headers: buildCorsHeaders(origin) });
+    }
+
     await recordOptInPromptEvent({
       shopDomain,
-      promptType: body.promptType,
+      promptType: activePromptType,
       eventType: body.eventType,
     });
 

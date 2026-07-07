@@ -71,7 +71,7 @@ type UpdateAttributionSettingsInput = {
 };
 
 type OptInSettings = {
-  promptType: 'browser' | 'custom';
+  promptType: 'browser' | 'custom' | 'off';
   title: string;
   message: string;
   allowText: string;
@@ -4044,6 +4044,11 @@ export const enqueueAutomationJob = async (input: {
 }) => {
   await ensureSchema();
   const sql = getNeonSql();
+  const { isD1AudienceOnly } = await import('@/lib/server/integrations/d1-audience');
+  // In d1_only, token/subscriber rows live in D1 — Neon FK columns must stay null;
+  // processAutomationJob resolves the live token via payload.externalId in D1.
+  const tokenId = isD1AudienceOnly() ? null : (input.tokenId ?? null);
+  const subscriberId = isD1AudienceOnly() ? null : (input.subscriberId ?? null);
 
   const jobId = randomUUID();
   const dueAt = input.dueAt ?? new Date();
@@ -4063,8 +4068,8 @@ export const enqueueAutomationJob = async (input: {
       ${jobId},
       ${input.shopDomain},
       ${input.ruleKey},
-      ${input.tokenId ?? null},
-      ${input.subscriberId ?? null},
+      ${tokenId},
+      ${subscriberId},
       ${input.dedupeKey ?? null},
       ${JSON.stringify(input.payload)}::jsonb,
       ${dueAt}
@@ -6168,15 +6173,38 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
   let matched = new Set<number>();
 
   if (condition.type === 'Clicked') {
-    const rows = await sql`
-      SELECT subscriber_id, COUNT(*)::INT AS total, MAX(clicked_at) AS last_at
-      FROM campaign_clicks
-      WHERE shop_domain = ${shopDomain}
-        AND subscriber_id IS NOT NULL
-      GROUP BY subscriber_id
-    `;
+    const { isD1DeliveriesEnabled, d1GetClickedSubscriberStats } = await import(
+      '@/lib/server/integrations/d1-deliveries'
+    );
 
-    for (const row of rows) {
+    const clickRows = isD1DeliveriesEnabled()
+      ? await (async () => {
+          const { d1GetSubscriberIdExternalIdPairs } = await import(
+            '@/lib/server/integrations/d1-audience'
+          );
+          const pairs = await d1GetSubscriberIdExternalIdPairs(shopDomain);
+          const externalMap = new Map(
+            pairs
+              .filter((pair) => pair.external_id)
+              .map((pair) => [String(pair.external_id), Number(pair.id)]),
+          );
+          return d1GetClickedSubscriberStats(shopDomain, externalMap);
+        })()
+      : ((await sql`
+          SELECT subscriber_id, COUNT(*)::INT AS total, MAX(clicked_at) AS last_at
+          FROM (
+            SELECT subscriber_id, clicked_at
+            FROM campaign_clicks
+            WHERE shop_domain = ${shopDomain} AND subscriber_id IS NOT NULL
+            UNION ALL
+            SELECT subscriber_id, clicked_at
+            FROM automation_clicks
+            WHERE shop_domain = ${shopDomain} AND subscriber_id IS NOT NULL
+          ) combined
+          GROUP BY subscriber_id
+        `) as Array<{ subscriber_id: number; total: number; last_at: string | null }>);
+
+    for (const row of clickRows) {
       const subscriberId = Number(row.subscriber_id);
       const total = Number(row.total ?? 0);
       const lastAt = toDate(row.last_at ? String(row.last_at) : null);
@@ -8163,16 +8191,27 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     }
   }
 
-  await maybeEnqueueWelcomeAutomation({
-    shopDomain: input.shopDomain,
-    externalId: input.externalId,
-    subscriberId,
-    tokenId,
-    tokenWasInserted,
-  });
+  try {
+    await maybeEnqueueWelcomeAutomation({
+      shopDomain: input.shopDomain,
+      externalId: input.externalId,
+      subscriberId,
+      tokenId,
+      tokenWasInserted,
+    });
+  } catch (welcomeError) {
+    console.error(
+      '[audience] welcome automation enqueue failed; token saved',
+      welcomeError instanceof Error ? welcomeError.message : welcomeError,
+    );
+  }
 
-  if (tokenWasInserted && optInPromptType) {
-    await recordOptInPromptConversion(input.shopDomain, optInPromptType);
+  if (tokenWasInserted) {
+    const { promptType } = await getOptInSettings(input.shopDomain);
+    if (promptType !== 'off') {
+      const activePromptType: OptInPromptType = promptType === 'browser' ? 'browser' : 'custom';
+      await recordOptInPromptConversion(input.shopDomain, activePromptType);
+    }
   }
 
   const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
@@ -8233,7 +8272,10 @@ export const recordOptInPromptConversion = async (shopDomain: string, promptType
   `;
 };
 
-export const getOptInPromptStats = async (shopDomain: string): Promise<OptInPromptStatsBundle> => {
+export const getOptInPromptStats = async (
+  shopDomain: string,
+  activePromptType: OptInSettings['promptType'] = 'custom',
+): Promise<OptInPromptStatsBundle> => {
   await ensureSchema();
   const sql = getNeonSql();
 
@@ -8257,33 +8299,23 @@ export const getOptInPromptStats = async (shopDomain: string): Promise<OptInProm
   const browser = buildOptInTypeStats(browserRow.views, browserRow.clicks, browserRow.conversions);
   const custom = buildOptInTypeStats(customRow.views, customRow.clicks, customRow.conversions);
 
-  const totalViews = browser.views + custom.views;
-  const totalClicks = browser.clicks + custom.clicks;
-  const totalConversions = browser.conversions + custom.conversions;
+  if (activePromptType === 'off') {
+    const empty = buildOptInTypeStats(0, 0, 0);
+    return { browser, custom, totals: { ...empty, avgConversionPercent: 0, avgClickConversionPercent: 0 } };
+  }
 
-  const conversionPercents = [browser, custom]
-    .filter((entry) => entry.views > 0)
-    .map((entry) => entry.conversionPercent);
-  const clickConversionPercents = [browser, custom]
-    .filter((entry) => entry.clicks > 0)
-    .map((entry) => entry.clickConversionPercent);
+  const active = activePromptType === 'browser' ? browser : custom;
 
   return {
     browser,
     custom,
     totals: {
-      views: totalViews,
-      clicks: totalClicks,
-      conversions: totalConversions,
-      conversionPercent: totalViews > 0 ? roundOptInPercent((totalConversions / totalViews) * 100) : 0,
-      avgConversionPercent:
-        conversionPercents.length > 0
-          ? roundOptInPercent(conversionPercents.reduce((sum, value) => sum + value, 0) / conversionPercents.length)
-          : 0,
-      avgClickConversionPercent:
-        clickConversionPercents.length > 0
-          ? roundOptInPercent(clickConversionPercents.reduce((sum, value) => sum + value, 0) / clickConversionPercents.length)
-          : 0,
+      views: active.views,
+      clicks: active.clicks,
+      conversions: active.conversions,
+      conversionPercent: active.conversionPercent,
+      avgConversionPercent: active.conversionPercent,
+      avgClickConversionPercent: active.clickConversionPercent,
     },
   };
 };

@@ -577,7 +577,7 @@ export default function NewSegmentPage() {
                  {condition.selectedValues.length > 0 && (
                     <div className="flex flex-wrap items-center gap-2 pt-2">
                         {condition.selectedValues.map(v => (
-                            <Badge key={v.value} variant="outline" className="gap-1.5 pr-1 bg-background">
+                            <Badge key={v.value} variant="outline" className="gap-1.5 pr-1 bg-white border-border shadow-sm">
                             {v.label}
                             <button onClick={() => handleLocationUnselect(v.value)} className="rounded-full hover:bg-black/10 dark:hover:bg-white/10">
                                 <X className="h-3 w-3" />
@@ -615,7 +615,7 @@ export default function NewSegmentPage() {
                 {condition.selectedValues.length > 0 ? (
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     {condition.selectedValues.map((entry) => (
-                      <Badge key={entry.value} variant="outline" className="gap-1.5 pr-1 bg-background">
+                      <Badge key={entry.value} variant="outline" className="gap-1.5 pr-1 bg-white border-border shadow-sm">
                         {entry.label}
                         <button onClick={() => handleTagUnselect(entry.value)} className="rounded-full hover:bg-black/10 dark:hover:bg-white/10">
                           <X className="h-3 w-3" />
