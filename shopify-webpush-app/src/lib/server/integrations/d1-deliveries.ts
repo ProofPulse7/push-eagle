@@ -1420,11 +1420,27 @@ export const d1DeleteWelcomeAutomationData = async (shopDomain: string) => {
 
 export type D1ClickStatRow = { subscriber_id: number; total: number; last_at: string | null };
 
-/** Per-subscriber click count + last click time (segment "Clicked"). */
-export const d1GetClickedSubscriberStats = async (
+export type D1ClickEventRow = { subscriber_id: number; clicked_at: string };
+
+const resolveClickSubscriberId = (
+  row: Record<string, unknown>,
+  externalIdToSubscriberId?: Map<string, number>,
+) => {
+  let subscriberId =
+    row.subscriber_id != null && Number.isFinite(Number(row.subscriber_id))
+      ? Number(row.subscriber_id)
+      : null;
+  if (!subscriberId && row.external_id && externalIdToSubscriberId) {
+    subscriberId = externalIdToSubscriberId.get(String(row.external_id)) ?? null;
+  }
+  return subscriberId != null && Number.isFinite(subscriberId) ? subscriberId : null;
+};
+
+/** Individual click events for date-window segment filters. */
+export const d1ListClickEvents = async (
   shopDomain: string,
   externalIdToSubscriberId?: Map<string, number>,
-): Promise<D1ClickStatRow[]> => {
+): Promise<D1ClickEventRow[]> => {
   await ensureD1DeliveriesSchema();
   const rows = await runD1Query(
     `
@@ -1439,29 +1455,36 @@ export const d1GetClickedSubscriberStats = async (
     [shopDomain, shopDomain],
   );
 
-  const stats = new Map<number, { total: number; last_at: string | null }>();
-
+  const events: D1ClickEventRow[] = [];
   for (const row of asRows(rows)) {
-    let subscriberId =
-      row.subscriber_id != null && Number.isFinite(Number(row.subscriber_id))
-        ? Number(row.subscriber_id)
-        : null;
-    if (!subscriberId && row.external_id && externalIdToSubscriberId) {
-      subscriberId = externalIdToSubscriberId.get(String(row.external_id)) ?? null;
-    }
-    if (!subscriberId || !Number.isFinite(subscriberId)) {
+    const subscriberId = resolveClickSubscriberId(row, externalIdToSubscriberId);
+    if (!subscriberId || row.clicked_at == null) {
       continue;
     }
+    events.push({
+      subscriber_id: subscriberId,
+      clicked_at: String(row.clicked_at),
+    });
+  }
+  return events;
+};
 
-    const clickedAt = row.clicked_at == null ? null : String(row.clicked_at);
-    const existing = stats.get(subscriberId);
+/** Per-subscriber click count + last click time (segment "Clicked"). */
+export const d1GetClickedSubscriberStats = async (
+  shopDomain: string,
+  externalIdToSubscriberId?: Map<string, number>,
+): Promise<D1ClickStatRow[]> => {
+  const stats = new Map<number, { total: number; last_at: string | null }>();
+
+  for (const event of await d1ListClickEvents(shopDomain, externalIdToSubscriberId)) {
+    const existing = stats.get(event.subscriber_id);
     if (existing) {
       existing.total += 1;
-      if (clickedAt && (!existing.last_at || clickedAt > existing.last_at)) {
-        existing.last_at = clickedAt;
+      if (!existing.last_at || event.clicked_at > existing.last_at) {
+        existing.last_at = event.clicked_at;
       }
     } else {
-      stats.set(subscriberId, { total: 1, last_at: clickedAt });
+      stats.set(event.subscriber_id, { total: 1, last_at: event.clicked_at });
     }
   }
 

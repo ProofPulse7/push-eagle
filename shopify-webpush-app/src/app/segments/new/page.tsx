@@ -64,7 +64,7 @@ const subscribeDateOptions = [
 
 type SelectOption = { value: string; label: string };
 
-type LocationValue = { type: 'country' | 'region' | 'city'; value: string; label: string };
+type LocationValue = { type: 'country' | 'region' | 'city' | 'tag'; value: string; label: string };
 
 type Condition = {
   id: string;
@@ -218,6 +218,7 @@ export default function NewSegmentPage() {
   const [cityOptions, setCityOptions] = useState<SelectOption[]>([]);
   const [customerTagOptions, setCustomerTagOptions] = useState<SelectOption[]>([]);
   const [isEstimating, setIsEstimating] = useState(false);
+  const [estimateError, setEstimateError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [conditionGroups, setConditionGroups] = useState<ConditionGroup[]>([
     { id: crypto.randomUUID(), conditions: [createNewCondition()] },
@@ -257,7 +258,11 @@ export default function NewSegmentPage() {
         setCityOptions(toOptions(json.cities));
         setCustomerTagOptions(toOptions(json.customerTags));
       } catch {
-        // keep form usable even if options endpoint fails
+        toast({
+          title: 'Could not load segment filters',
+          description: 'Location and customer tag options may be unavailable. Try refreshing the page.',
+          variant: 'destructive',
+        });
       }
     };
 
@@ -272,6 +277,7 @@ export default function NewSegmentPage() {
     const timer = setTimeout(async () => {
       try {
         setIsEstimating(true);
+        setEstimateError('');
         const response = await fetch(`/api/segments/estimate?shop=${encodeURIComponent(resolvedShopDomain)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -296,8 +302,9 @@ export default function NewSegmentPage() {
         }
 
         setEstimatedCount(Number(json.estimatedCount ?? 0));
-      } catch {
+      } catch (error) {
         setEstimatedCount(0);
+        setEstimateError(error instanceof Error ? error.message : 'Failed to estimate audience.');
       } finally {
         setIsEstimating(false);
       }
@@ -577,7 +584,7 @@ export default function NewSegmentPage() {
                  {condition.selectedValues.length > 0 && (
                     <div className="flex flex-wrap items-center gap-2 pt-2">
                         {condition.selectedValues.map(v => (
-                            <Badge key={v.value} variant="outline" className="gap-1.5 pr-1 bg-white border-border shadow-sm">
+                            <Badge key={`${v.type}:${v.value}`} variant="outline" className="gap-1.5 pr-1 bg-white border-border shadow-sm">
                             {v.label}
                             <button onClick={() => handleLocationUnselect(v.value)} className="rounded-full hover:bg-black/10 dark:hover:bg-white/10">
                                 <X className="h-3 w-3" />
@@ -590,7 +597,7 @@ export default function NewSegmentPage() {
         case 'Customer tag':
             const handleTagSelect = (value: string, label: string) => {
               if (!condition.selectedValues.some((entry) => entry.value === value)) {
-                change('selectedValues', [...condition.selectedValues, { type: 'country', value, label }]);
+                change('selectedValues', [...condition.selectedValues, { type: 'tag', value, label }]);
               }
             };
             const handleTagUnselect = (value: string) => {
@@ -673,7 +680,12 @@ export default function NewSegmentPage() {
                     value={segmentName}
                     onChange={(e) => setSegmentName(e.target.value)}
                     />
-                    <p className="text-sm text-muted-foreground pt-2">Estimated subscriber count: {estimatedCount.toLocaleString()}</p>
+                    <p className="text-sm text-muted-foreground pt-2">
+                      Estimated subscriber count: {isEstimating ? 'Calculating…' : estimatedCount.toLocaleString()}
+                    </p>
+                    {estimateError ? (
+                      <p className="text-sm text-destructive pt-1">{estimateError}</p>
+                    ) : null}
                 </div>
             </div>
 
@@ -733,10 +745,13 @@ export default function NewSegmentPage() {
                     <div className="flex items-center gap-2">
                       {isEstimating && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                       <Input
-                        value={estimatedCount.toLocaleString()}
+                        value={isEstimating ? 'Calculating…' : estimatedCount.toLocaleString()}
                         disabled
                       />
                     </div>
+                    {estimateError ? (
+                      <p className="text-sm text-destructive">{estimateError}</p>
+                    ) : null}
                 </div>
             </div>
 

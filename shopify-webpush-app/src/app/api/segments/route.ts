@@ -12,7 +12,7 @@ import { extractShopDomain } from '@/lib/server/shop-context';
 export const runtime = 'nodejs';
 
 const locationValueSchema = z.object({
-  type: z.enum(['country', 'region', 'city']),
+  type: z.enum(['country', 'region', 'city', 'tag']),
   value: z.string(),
   label: z.string().optional(),
 });

@@ -385,7 +385,7 @@ type ProcessFulfillmentUpdateInput = {
 };
 
 type SegmentConditionSelectedValue = {
-  type: 'country' | 'region' | 'city';
+  type: 'country' | 'region' | 'city' | 'tag';
   value: string;
   label?: string;
 };
@@ -6113,6 +6113,81 @@ const applyCountOperator = (count: number, condition?: SegmentCondition) => {
   }
 };
 
+const segmentDateFilterActive = (condition?: SegmentCondition) =>
+  (condition?.dateOperator ?? 'at any time') !== 'at any time';
+
+const aggregateTimedEventsForCondition = (
+  events: Array<{ subscriberId: number; at: Date }>,
+  condition: SegmentCondition,
+) => {
+  const counts = new Map<number, number>();
+  const filterByDate = segmentDateFilterActive(condition);
+
+  for (const event of events) {
+    if (filterByDate && !applyDateOperator(event.at, condition)) {
+      continue;
+    }
+    counts.set(event.subscriberId, (counts.get(event.subscriberId) ?? 0) + 1);
+  }
+
+  const matched = new Set<number>();
+  counts.forEach((total, subscriberId) => {
+    if (applyCountOperator(total, condition)) {
+      matched.add(subscriberId);
+    }
+  });
+  return matched;
+};
+
+const matchSubscribersFromStatRows = (
+  rows: Array<{ subscriber_id: number; total: number; last_at: string | null }>,
+  condition: SegmentCondition,
+) => {
+  const matched = new Set<number>();
+  for (const row of rows) {
+    const subscriberId = Number(row.subscriber_id);
+    const total = Number(row.total ?? 0);
+    const lastAt = toDate(row.last_at ? String(row.last_at) : null);
+    if (!applyCountOperator(total, condition)) {
+      continue;
+    }
+    if (segmentDateFilterActive(condition) && !applyDateOperator(lastAt, condition)) {
+      continue;
+    }
+    matched.add(subscriberId);
+  }
+  return matched;
+};
+
+const loadExternalIdToSubscriberMap = async (shopDomain: string) => {
+  const { audienceRead, d1GetSubscriberIdExternalIdPairs } = await import(
+    '@/lib/server/integrations/d1-audience'
+  );
+  const sql = getNeonSql();
+  const pairs = await audienceRead<Array<{ id: number; external_id: string | null }>>({
+    label: 'segment.externalIdMap',
+    key: (arr) => arr.map((row) => `${Number(row.id)}:${row.external_id || ''}`).sort().join(','),
+    neon: async () => {
+      const rows = await sql`
+        SELECT id, external_id
+        FROM subscribers
+        WHERE shop_domain = ${shopDomain}
+          AND external_id IS NOT NULL
+      `;
+      return (rows as Array<Record<string, unknown>>).map((row) => ({
+        id: Number(row.id),
+        external_id: row.external_id == null ? null : String(row.external_id),
+      }));
+    },
+    d1: async () => d1GetSubscriberIdExternalIdPairs(shopDomain),
+  });
+  return new Map(
+    pairs
+      .filter((pair) => pair.external_id)
+      .map((pair) => [String(pair.external_id), Number(pair.id)]),
+  );
+};
+
 const buildCriteriaSummary = (conditionGroups: SegmentConditionGroup[]) => {
   const first = conditionGroups[0]?.conditions[0];
   if (!first) {
@@ -6173,96 +6248,160 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
   let matched = new Set<number>();
 
   if (condition.type === 'Clicked') {
-    const { isD1DeliveriesEnabled, d1GetClickedSubscriberStats } = await import(
+    const { isD1DeliveriesEnabled, d1GetClickedSubscriberStats, d1ListClickEvents } = await import(
       '@/lib/server/integrations/d1-deliveries'
     );
+    const externalMap = await loadExternalIdToSubscriberMap(shopDomain);
 
-    const clickRows = isD1DeliveriesEnabled()
-      ? await (async () => {
-          const { d1GetSubscriberIdExternalIdPairs } = await import(
-            '@/lib/server/integrations/d1-audience'
-          );
-          const pairs = await d1GetSubscriberIdExternalIdPairs(shopDomain);
-          const externalMap = new Map(
-            pairs
-              .filter((pair) => pair.external_id)
-              .map((pair) => [String(pair.external_id), Number(pair.id)]),
-          );
-          return d1GetClickedSubscriberStats(shopDomain, externalMap);
-        })()
-      : ((await sql`
-          SELECT subscriber_id, COUNT(*)::INT AS total, MAX(clicked_at) AS last_at
-          FROM (
-            SELECT subscriber_id, clicked_at
-            FROM campaign_clicks
-            WHERE shop_domain = ${shopDomain} AND subscriber_id IS NOT NULL
-            UNION ALL
-            SELECT subscriber_id, clicked_at
-            FROM automation_clicks
-            WHERE shop_domain = ${shopDomain} AND subscriber_id IS NOT NULL
-          ) combined
-          GROUP BY subscriber_id
-        `) as Array<{ subscriber_id: number; total: number; last_at: string | null }>);
+    if (segmentDateFilterActive(condition)) {
+      const clickEvents = isD1DeliveriesEnabled()
+        ? (await d1ListClickEvents(shopDomain, externalMap)).map((row) => ({
+            subscriberId: Number(row.subscriber_id),
+            at: toDate(row.clicked_at) as Date,
+          }))
+        : (
+            (await sql`
+              SELECT subscriber_id, clicked_at
+              FROM campaign_clicks
+              WHERE shop_domain = ${shopDomain} AND subscriber_id IS NOT NULL
+              UNION ALL
+              SELECT subscriber_id, clicked_at
+              FROM automation_clicks
+              WHERE shop_domain = ${shopDomain} AND subscriber_id IS NOT NULL
+            `) as Array<{ subscriber_id: number; clicked_at: string }>
+          ).map((row) => ({
+            subscriberId: Number(row.subscriber_id),
+            at: toDate(String(row.clicked_at)) as Date,
+          }));
 
-    for (const row of clickRows) {
-      const subscriberId = Number(row.subscriber_id);
-      const total = Number(row.total ?? 0);
-      const lastAt = toDate(row.last_at ? String(row.last_at) : null);
-      if (applyCountOperator(total, condition) && applyDateOperator(lastAt, condition)) {
-        matched.add(subscriberId);
-      }
+      matched = aggregateTimedEventsForCondition(
+        clickEvents.filter((event) => event.at != null),
+        condition,
+      );
+    } else {
+      const clickRows = isD1DeliveriesEnabled()
+        ? await d1GetClickedSubscriberStats(shopDomain, externalMap)
+        : ((await sql`
+            SELECT subscriber_id, COUNT(*)::INT AS total, MAX(clicked_at) AS last_at
+            FROM (
+              SELECT subscriber_id, clicked_at
+              FROM campaign_clicks
+              WHERE shop_domain = ${shopDomain} AND subscriber_id IS NOT NULL
+              UNION ALL
+              SELECT subscriber_id, clicked_at
+              FROM automation_clicks
+              WHERE shop_domain = ${shopDomain} AND subscriber_id IS NOT NULL
+            ) combined
+            GROUP BY subscriber_id
+          `) as Array<{ subscriber_id: number; total: number; last_at: string | null }>);
+
+      matched = matchSubscribersFromStatRows(clickRows, condition);
     }
   } else if (condition.type === 'Purchased') {
-    const { isD1CommerceEnabled, d1GetPurchasedSubscriberStats } = await import(
+    const { isD1CommerceEnabled, d1GetPurchasedSubscriberStats, d1ListPurchaseEvents } = await import(
       '@/lib/server/integrations/d1-commerce'
     );
-    const rows = isD1CommerceEnabled()
-      ? await d1GetPurchasedSubscriberStats(shopDomain)
-      : await sql`
-      SELECT subscriber_id, COUNT(*)::INT AS total, MAX(created_at) AS last_at
-      FROM shopify_orders
-      WHERE shop_domain = ${shopDomain}
-        AND subscriber_id IS NOT NULL
-      GROUP BY subscriber_id
-    `;
 
-    for (const row of rows) {
-      const subscriberId = Number(row.subscriber_id);
-      const total = Number(row.total ?? 0);
-      const lastAt = toDate(row.last_at ? String(row.last_at) : null);
-      if (applyCountOperator(total, condition) && applyDateOperator(lastAt, condition)) {
-        matched.add(subscriberId);
-      }
+    if (segmentDateFilterActive(condition)) {
+      const purchaseEvents = isD1CommerceEnabled()
+        ? (await d1ListPurchaseEvents(shopDomain)).map((row) => ({
+            subscriberId: Number(row.subscriber_id),
+            at: toDate(row.created_at) as Date,
+          }))
+        : (
+            (await sql`
+              SELECT subscriber_id, created_at
+              FROM shopify_orders
+              WHERE shop_domain = ${shopDomain}
+                AND subscriber_id IS NOT NULL
+            `) as Array<{ subscriber_id: number; created_at: string }>
+          ).map((row) => ({
+            subscriberId: Number(row.subscriber_id),
+            at: toDate(String(row.created_at)) as Date,
+          }));
+
+      matched = aggregateTimedEventsForCondition(
+        purchaseEvents.filter((event) => event.at != null),
+        condition,
+      );
+    } else {
+      const rows = isD1CommerceEnabled()
+        ? await d1GetPurchasedSubscriberStats(shopDomain)
+        : await sql`
+            SELECT subscriber_id, COUNT(*)::INT AS total, MAX(created_at) AS last_at
+            FROM shopify_orders
+            WHERE shop_domain = ${shopDomain}
+              AND subscriber_id IS NOT NULL
+            GROUP BY subscriber_id
+          `;
+
+      matched = matchSubscribersFromStatRows(
+        rows as Array<{ subscriber_id: number; total: number; last_at: string | null }>,
+        condition,
+      );
     }
   } else if (condition.type === 'Purchased a product' || condition.type === 'Purchased from collection') {
-    const { isD1CommerceEnabled, d1GetProductPurchaseStats } = await import(
-      '@/lib/server/integrations/d1-commerce'
-    );
-    const rows = isD1CommerceEnabled()
-      ? await d1GetProductPurchaseStats(shopDomain, {
-          byCollection: condition.type === 'Purchased from collection',
-          textFilter,
-        })
-      : await sql`
-      SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
-      FROM shopify_order_items i
-      JOIN shopify_orders o ON o.id = i.order_event_id
-      WHERE o.shop_domain = ${shopDomain}
-        AND o.subscriber_id IS NOT NULL
-        AND (
-          ${textFilter ? true : false} = false
-          OR ${condition.type === 'Purchased from collection'} = true AND i.collection_hint ILIKE ${`%${textFilter}%`}
-          OR ${condition.type === 'Purchased a product'} = true AND i.product_title ILIKE ${`%${textFilter}%`}
-        )
-      GROUP BY o.subscriber_id
-    `;
+    if (!textFilter) {
+      matched = new Set<number>();
+    } else {
+      const { isD1CommerceEnabled, d1GetProductPurchaseStats, d1ListProductPurchaseEvents } =
+        await import('@/lib/server/integrations/d1-commerce');
+      const productOptions = {
+        byCollection: condition.type === 'Purchased from collection',
+        textFilter,
+      };
 
-    for (const row of rows) {
-      const subscriberId = Number(row.subscriber_id);
-      const total = Number(row.total ?? 0);
-      const lastAt = toDate(row.last_at ? String(row.last_at) : null);
-      if (applyCountOperator(total, condition) && applyDateOperator(lastAt, condition)) {
-        matched.add(subscriberId);
+      if (segmentDateFilterActive(condition)) {
+        const purchaseEvents = isD1CommerceEnabled()
+          ? (await d1ListProductPurchaseEvents(shopDomain, productOptions)).map((row) => ({
+              subscriberId: Number(row.subscriber_id),
+              at: toDate(row.created_at) as Date,
+            }))
+          : (
+              (await sql`
+                SELECT o.subscriber_id, o.created_at
+                FROM shopify_order_items i
+                JOIN shopify_orders o ON o.id = i.order_event_id
+                WHERE o.shop_domain = ${shopDomain}
+                  AND o.subscriber_id IS NOT NULL
+                  AND (
+                    ${condition.type === 'Purchased from collection'} = true
+                      AND i.collection_hint ILIKE ${`%${textFilter}%`}
+                    OR ${condition.type === 'Purchased a product'} = true
+                      AND i.product_title ILIKE ${`%${textFilter}%`}
+                  )
+              `) as Array<{ subscriber_id: number; created_at: string }>
+            ).map((row) => ({
+              subscriberId: Number(row.subscriber_id),
+              at: toDate(String(row.created_at)) as Date,
+            }));
+
+        matched = aggregateTimedEventsForCondition(
+          purchaseEvents.filter((event) => event.at != null),
+          condition,
+        );
+      } else {
+        const rows = isD1CommerceEnabled()
+          ? await d1GetProductPurchaseStats(shopDomain, productOptions)
+          : await sql`
+              SELECT o.subscriber_id, COUNT(*)::INT AS total, MAX(o.created_at) AS last_at
+              FROM shopify_order_items i
+              JOIN shopify_orders o ON o.id = i.order_event_id
+              WHERE o.shop_domain = ${shopDomain}
+                AND o.subscriber_id IS NOT NULL
+                AND (
+                  ${condition.type === 'Purchased from collection'} = true
+                    AND i.collection_hint ILIKE ${`%${textFilter}%`}
+                  OR ${condition.type === 'Purchased a product'} = true
+                    AND i.product_title ILIKE ${`%${textFilter}%`}
+                )
+              GROUP BY o.subscriber_id
+            `;
+
+        matched = matchSubscribersFromStatRows(
+          rows as Array<{ subscriber_id: number; total: number; last_at: string | null }>,
+          condition,
+        );
       }
     }
   } else if (condition.type === 'Subscribed') {
@@ -6303,6 +6442,9 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
     const cities = selected.filter((value) => value.type === 'city').map((value) => String(value.value).toLowerCase());
     const regions = selected.filter((value) => value.type === 'region').map((value) => String(value.value).toLowerCase());
 
+    if (countries.length === 0 && cities.length === 0 && regions.length === 0) {
+      matched = new Set<number>();
+    } else {
     const { audienceRead, d1GetLocationRows } = await import(
       '@/lib/server/integrations/d1-audience'
     );
@@ -6347,6 +6489,7 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
       if (countryMatch && cityMatch && regionMatch) {
         matched.add(subscriberId);
       }
+    }
     }
   } else if (condition.type === 'Customer tag') {
     const selectedTags = Array.isArray(condition.selectedValues)

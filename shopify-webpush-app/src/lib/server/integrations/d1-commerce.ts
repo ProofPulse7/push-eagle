@@ -426,64 +426,109 @@ export const d1GetHistoricalOrderExternalIds = async (input: {
 
 export type D1PurchaseStatRow = { subscriber_id: number; total: number; last_at: string | null };
 
+export type D1PurchaseEventRow = { subscriber_id: number; created_at: string };
+
+/** Individual order events for date-window segment filters. */
+export const d1ListPurchaseEvents = async (shopDomain: string): Promise<D1PurchaseEventRow[]> => {
+  await ensureD1CommerceSchema();
+  const rows = await runD1Query(
+    `
+      SELECT subscriber_id, created_at
+      FROM shopify_orders
+      WHERE shop_domain = ? AND subscriber_id IS NOT NULL
+    `,
+    [shopDomain],
+  );
+  return asRows(rows)
+    .map((row) => ({
+      subscriber_id: Number(row.subscriber_id),
+      created_at: row.created_at == null ? '' : String(row.created_at),
+    }))
+    .filter((row) => Number.isFinite(row.subscriber_id) && row.created_at.length > 0);
+};
+
 /** Per-subscriber order count + last order time (segment "Purchased"). */
 export const d1GetPurchasedSubscriberStats = async (
   shopDomain: string,
 ): Promise<D1PurchaseStatRow[]> => {
-  await ensureD1CommerceSchema();
-  const rows = await runD1Query(
-    `
-      SELECT subscriber_id, COUNT(*) AS total, MAX(created_at) AS last_at
-      FROM shopify_orders
-      WHERE shop_domain = ? AND subscriber_id IS NOT NULL
-      GROUP BY subscriber_id
-    `,
-    [shopDomain],
-  );
-  return asRows(rows).map((row) => ({
-    subscriber_id: Number(row.subscriber_id),
-    total: Number(row.total ?? 0),
-    last_at: row.last_at == null ? null : String(row.last_at),
+  const stats = new Map<number, { total: number; last_at: string | null }>();
+
+  for (const event of await d1ListPurchaseEvents(shopDomain)) {
+    const existing = stats.get(event.subscriber_id);
+    if (existing) {
+      existing.total += 1;
+      if (!existing.last_at || event.created_at > existing.last_at) {
+        existing.last_at = event.created_at;
+      }
+    } else {
+      stats.set(event.subscriber_id, { total: 1, last_at: event.created_at });
+    }
+  }
+
+  return Array.from(stats.entries()).map(([subscriber_id, { total, last_at }]) => ({
+    subscriber_id,
+    total,
+    last_at,
   }));
 };
 
 /**
  * Per-subscriber product/collection purchase count + last time (segment
- * "Purchased a product" / "Purchased from collection"). Joins items->orders
- * inside D1; subscriber_id is just returned. SQLite has no ILIKE, so we lower-case
- * both sides for a case-insensitive contains match, matching the Neon ILIKE.
+ * "Purchased a product" / "Purchased from collection").
  */
-export const d1GetProductPurchaseStats = async (
+/** Individual product/collection purchase events for date-window segment filters. */
+export const d1ListProductPurchaseEvents = async (
   shopDomain: string,
   options: { byCollection: boolean; textFilter: string },
-): Promise<D1PurchaseStatRow[]> => {
+): Promise<D1PurchaseEventRow[]> => {
   await ensureD1CommerceSchema();
   const textFilter = options.textFilter.trim();
-
-  const params: unknown[] = [shopDomain];
-  let filterClause = '';
-  if (textFilter) {
-    const column = options.byCollection ? 'i.collection_hint' : 'i.product_title';
-    filterClause = `AND LOWER(${column}) LIKE ?`;
-    params.push(`%${textFilter.toLowerCase()}%`);
+  if (!textFilter) {
+    return [];
   }
 
+  const column = options.byCollection ? 'i.collection_hint' : 'i.product_title';
   const rows = await runD1Query(
     `
-      SELECT o.subscriber_id AS subscriber_id, COUNT(*) AS total, MAX(o.created_at) AS last_at
+      SELECT o.subscriber_id AS subscriber_id, o.created_at AS created_at
       FROM shopify_order_items i
       JOIN shopify_orders o ON o.id = i.order_event_id
       WHERE o.shop_domain = ?
         AND o.subscriber_id IS NOT NULL
-        ${filterClause}
-      GROUP BY o.subscriber_id
+        AND LOWER(${column}) LIKE ?
     `,
-    params,
+    [shopDomain, `%${textFilter.toLowerCase()}%`],
   );
-  return asRows(rows).map((row) => ({
-    subscriber_id: Number(row.subscriber_id),
-    total: Number(row.total ?? 0),
-    last_at: row.last_at == null ? null : String(row.last_at),
+  return asRows(rows)
+    .map((row) => ({
+      subscriber_id: Number(row.subscriber_id),
+      created_at: row.created_at == null ? '' : String(row.created_at),
+    }))
+    .filter((row) => Number.isFinite(row.subscriber_id) && row.created_at.length > 0);
+};
+
+export const d1GetProductPurchaseStats = async (
+  shopDomain: string,
+  options: { byCollection: boolean; textFilter: string },
+): Promise<D1PurchaseStatRow[]> => {
+  const stats = new Map<number, { total: number; last_at: string | null }>();
+
+  for (const event of await d1ListProductPurchaseEvents(shopDomain, options)) {
+    const existing = stats.get(event.subscriber_id);
+    if (existing) {
+      existing.total += 1;
+      if (!existing.last_at || event.created_at > existing.last_at) {
+        existing.last_at = event.created_at;
+      }
+    } else {
+      stats.set(event.subscriber_id, { total: 1, last_at: event.created_at });
+    }
+  }
+
+  return Array.from(stats.entries()).map(([subscriber_id, { total, last_at }]) => ({
+    subscriber_id,
+    total,
+    last_at,
   }));
 };
 
