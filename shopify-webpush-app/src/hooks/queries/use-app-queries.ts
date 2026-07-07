@@ -51,6 +51,8 @@ export function useAppBootstrap() {
 }
 
 const SETTINGS_STALE_MS = 30 * 60 * 1000;
+const OPT_IN_STATS_STALE_MS = 15_000;
+const OPT_IN_STATS_POLL_MS = 20_000;
 
 export function useMerchantOverview() {
   const shop = useShopDomain();
@@ -373,17 +375,19 @@ export function useThemeEmbedStatus() {
   });
 }
 
-export function useOptInSettings() {
+export function useOptInSettings(options?: { refreshStats?: boolean }) {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
+  const refreshStats = options?.refreshStats === true;
 
   return useQuery({
     queryKey: queryKeys.optIn(shop),
     queryFn: () => fetchJsonWithShop<Record<string, unknown>>('/api/settings/opt-in', shop),
     enabled: Boolean(shop),
-    staleTime: SETTINGS_STALE_MS,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: refreshStats ? OPT_IN_STATS_STALE_MS : SETTINGS_STALE_MS,
+    refetchOnMount: refreshStats ? 'always' : true,
+    refetchOnWindowFocus: refreshStats,
+    refetchInterval: refreshStats ? OPT_IN_STATS_POLL_MS : false,
     placeholderData: (previous) =>
       previous ??
       (queryClient.getQueryData<Record<string, unknown>>(queryKeys.optIn(shop)) as
@@ -536,7 +540,7 @@ export function useSaveOptInSettings() {
       clearPendingSettings(shop, 'optIn');
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.optIn(shop), refetchType: 'none' });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.optIn(shop) });
     },
   });
 }

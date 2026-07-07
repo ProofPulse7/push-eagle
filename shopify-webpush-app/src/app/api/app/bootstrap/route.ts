@@ -6,6 +6,7 @@ import {
   getBrandingSettings,
   getCampaignStats,
   getMerchantOverview,
+  getOptInPromptStats,
   getOptInSettings,
   getPrivacySettings,
   getSubscriberGrowth,
@@ -58,7 +59,6 @@ export async function GET(request: Request) {
       attribution,
       privacy,
       branding,
-      optIn,
       billing,
       automationsOverview,
       subscriberGrowth,
@@ -71,11 +71,16 @@ export async function GET(request: Request) {
       getAttributionSettings(shopDomain),
       getPrivacySettings(shopDomain),
       getBrandingSettings(shopDomain),
-      getOptInSettings(shopDomain),
       getMerchantBillingFast(shopDomain),
       getAutomationOverview(shopDomain),
       getSubscriberGrowth(shopDomain),
     ]);
+
+    const optInSettings = await getOptInSettings(shopDomain);
+    const optIn = {
+      ...optInSettings,
+      stats: await getOptInPromptStats(shopDomain, optInSettings.promptType),
+    };
 
     const subscriberGrowthSeries = {
       ok: true,

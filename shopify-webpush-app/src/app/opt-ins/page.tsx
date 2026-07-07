@@ -87,7 +87,7 @@ const parseOptInStats = (data: Record<string, unknown> | null | undefined): OptI
 export default function OptInsPage() {
   const shopDomain = useShopDomain();
   const { toast } = useToast();
-  const { data: optInData } = useOptInSettings();
+  const { data: optInData } = useOptInSettings({ refreshStats: true });
   const saveOptInMutation = useSaveOptInSettings();
   const [selectedPromptType, setSelectedPromptType] = useState<'browser' | 'custom' | 'off'>('custom');
 

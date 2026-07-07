@@ -36,7 +36,10 @@ export async function GET(request: Request) {
     const shopDomain = extractShopDomain(request);
     const settings = await getOptInSettings(shopDomain);
     const stats = await getOptInPromptStats(shopDomain, settings.promptType);
-    return NextResponse.json({ ok: true, shopDomain, ...settings, stats });
+    return NextResponse.json(
+      { ok: true, shopDomain, ...settings, stats },
+      { headers: { 'Cache-Control': 'private, no-store' } },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch opt-in settings.';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

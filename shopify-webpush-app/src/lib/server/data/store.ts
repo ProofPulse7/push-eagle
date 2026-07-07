@@ -8415,6 +8415,9 @@ export const recordOptInPromptEvent = async (input: {
       clicks = opt_in_prompt_stats.clicks + ${clickDelta},
       updated_at = NOW()
   `;
+
+  const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+  void invalidateShopDashboardCaches(input.shopDomain);
 };
 
 export const recordOptInPromptConversion = async (shopDomain: string, promptType: OptInPromptType) => {
@@ -8430,6 +8433,9 @@ export const recordOptInPromptConversion = async (shopDomain: string, promptType
       conversions = opt_in_prompt_stats.conversions + 1,
       updated_at = NOW()
   `;
+
+  const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+  void invalidateShopDashboardCaches(shopDomain);
 };
 
 export const getOptInPromptStats = async (
