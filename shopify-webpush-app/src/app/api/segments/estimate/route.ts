@@ -14,7 +14,7 @@ const locationValueSchema = z.object({
 
 const conditionSchema = z.object({
   id: z.string().optional(),
-  type: z.enum(['Clicked', 'Purchased', 'Purchased a product', 'Purchased from collection', 'Subscribed', 'Location', 'Customer tag']),
+  type: z.enum(['Clicked', 'Purchased', 'Purchased a product', 'Purchased from collection', 'Subscribed', 'Location', 'Country', 'City', 'Region', 'Customer tag']),
   operator: z.enum(['is', 'is not', 'has', 'has not']).optional(),
   countOperator: z.enum(['at least once', 'more than', 'less than', 'exactly']).optional(),
   countValue: z.number().optional(),

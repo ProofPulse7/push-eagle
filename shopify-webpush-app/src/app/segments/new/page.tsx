@@ -32,7 +32,9 @@ const segmentCriteria = {
   ],
   properties: [
     { value: 'Subscribed', label: 'Subscribed' },
-    { value: 'Location', label: 'Location' },
+    { value: 'Country', label: 'Country' },
+    { value: 'City', label: 'City' },
+    { value: 'Region', label: 'Region' },
     { value: 'Customer tag', label: 'Customer tag' },
   ]
 };
@@ -541,59 +543,68 @@ export default function NewSegmentPage() {
                 </div>
             );
         case 'Subscribed': return <div className="flex items-center gap-2 flex-wrap"><span>Subscriber has subscribed</span>{dateInputs}</div>;
-        case 'Location':
-            const handleLocationSelect = (type: 'country' | 'region' | 'city') => (value: string, label: string) => {
-              if (!condition.selectedValues.some(v => v.value === value)) {
-                change('selectedValues', [...condition.selectedValues, { type, value, label }]);
+        case 'Country':
+        case 'City':
+        case 'Region': {
+            const geoConfig = {
+              Country: { type: 'country' as const, options: countryOptions, placeholder: 'Select country' },
+              City: { type: 'city' as const, options: cityOptions, placeholder: 'Select city' },
+              Region: { type: 'region' as const, options: regionOptions, placeholder: 'Select region' },
+            }[condition.type];
+            const handleGeoSelect = (value: string, label: string) => {
+              if (!condition.selectedValues.some((entry) => entry.value === value)) {
+                change('selectedValues', [
+                  ...condition.selectedValues,
+                  { type: geoConfig.type, value, label },
+                ]);
               }
             };
-            const handleLocationUnselect = (value: string) => {
-              change('selectedValues', condition.selectedValues.filter(v => v.value !== value));
+            const handleGeoUnselect = (value: string) => {
+              change('selectedValues', condition.selectedValues.filter((entry) => entry.value !== value));
             };
 
-            return <div className="flex flex-col gap-2">
+            return (
+              <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                    <span>Subscriber</span>
-                    <Select value={condition.operator} onValueChange={(v) => change('operator', v)}>
-                        <SelectTrigger className="w-auto bg-card"><SelectValue /></SelectTrigger>
-                        <SelectContent><SelectItem value="is">is</SelectItem><SelectItem value="is not">is not</SelectItem></SelectContent>
-                    </Select>
-                    <span>from</span>
-                    <MultiSelectPillFilter
-                        placeholder="Select country"
-                        options={countryOptions}
-                        selectedValues={condition.selectedValues.filter(v => v.type === 'country').map(v => v.value)}
-                        onSelect={(value, label) => handleLocationSelect('country')(value, label)}
-                        onUnselect={handleLocationUnselect}
-                    />
-                    <MultiSelectPillFilter
-                        placeholder="Select region"
-                        options={regionOptions}
-                        selectedValues={condition.selectedValues.filter(v => v.type === 'region').map(v => v.value)}
-                        onSelect={(value, label) => handleLocationSelect('region')(value, label)}
-                        onUnselect={handleLocationUnselect}
-                    />
-                    <MultiSelectPillFilter
-                        placeholder="Select city"
-                        options={cityOptions}
-                        selectedValues={condition.selectedValues.filter(v => v.type === 'city').map(v => v.value)}
-                        onSelect={(value, label) => handleLocationSelect('city')(value, label)}
-                        onUnselect={handleLocationUnselect}
-                    />
+                  <span>Subscriber</span>
+                  <Select value={condition.operator} onValueChange={(v) => change('operator', v)}>
+                    <SelectTrigger className="w-auto bg-card"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="is">is</SelectItem>
+                      <SelectItem value="is not">is not</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <span>from</span>
+                  <MultiSelectPillFilter
+                    placeholder={geoConfig.placeholder}
+                    options={geoConfig.options}
+                    selectedValues={condition.selectedValues.map((entry) => entry.value)}
+                    onSelect={handleGeoSelect}
+                    onUnselect={handleGeoUnselect}
+                  />
                 </div>
-                 {condition.selectedValues.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2 pt-2">
-                        {condition.selectedValues.map(v => (
-                            <Badge key={`${v.type}:${v.value}`} variant="outline" className="gap-1.5 pr-1 bg-white border-border shadow-sm">
-                            {v.label}
-                            <button onClick={() => handleLocationUnselect(v.value)} className="rounded-full hover:bg-black/10 dark:hover:bg-white/10">
-                                <X className="h-3 w-3" />
-                            </button>
-                            </Badge>
-                        ))}
-                    </div>
-                )}
-            </div>
+                {condition.selectedValues.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2 pt-2">
+                    {condition.selectedValues.map((entry) => (
+                      <Badge
+                        key={`${entry.type}:${entry.value}`}
+                        variant="outline"
+                        className="gap-1.5 pr-1 bg-white border-border shadow-sm"
+                      >
+                        {entry.label}
+                        <button
+                          onClick={() => handleGeoUnselect(entry.value)}
+                          className="rounded-full hover:bg-black/10 dark:hover:bg-white/10"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+        }
         case 'Customer tag':
             const handleTagSelect = (value: string, label: string) => {
               if (!condition.selectedValues.some((entry) => entry.value === value)) {

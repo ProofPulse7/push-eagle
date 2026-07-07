@@ -392,7 +392,7 @@ type SegmentConditionSelectedValue = {
 
 type SegmentCondition = {
   id?: string;
-  type: 'Clicked' | 'Purchased' | 'Purchased a product' | 'Purchased from collection' | 'Subscribed' | 'Location' | 'Customer tag';
+  type: 'Clicked' | 'Purchased' | 'Purchased a product' | 'Purchased from collection' | 'Subscribed' | 'Location' | 'Country' | 'City' | 'Region' | 'Customer tag';
   operator?: 'is' | 'is not' | 'has' | 'has not';
   countOperator?: 'at least once' | 'more than' | 'less than' | 'exactly';
   countValue?: number;
@@ -6436,11 +6436,28 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
         matched.add(subscriberId);
       }
     }
-  } else if (condition.type === 'Location') {
+  } else if (
+    condition.type === 'Location' ||
+    condition.type === 'Country' ||
+    condition.type === 'City' ||
+    condition.type === 'Region'
+  ) {
     const selected = Array.isArray(condition.selectedValues) ? condition.selectedValues : [];
-    const countries = selected.filter((value) => value.type === 'country').map((value) => String(value.value).toLowerCase());
-    const cities = selected.filter((value) => value.type === 'city').map((value) => String(value.value).toLowerCase());
-    const regions = selected.filter((value) => value.type === 'region').map((value) => String(value.value).toLowerCase());
+    let countries: string[] = [];
+    let cities: string[] = [];
+    let regions: string[] = [];
+
+    if (condition.type === 'Location') {
+      countries = selected.filter((value) => value.type === 'country').map((value) => String(value.value).toLowerCase());
+      cities = selected.filter((value) => value.type === 'city').map((value) => String(value.value).toLowerCase());
+      regions = selected.filter((value) => value.type === 'region').map((value) => String(value.value).toLowerCase());
+    } else if (condition.type === 'Country') {
+      countries = selected.map((value) => String(value.value).toLowerCase());
+    } else if (condition.type === 'City') {
+      cities = selected.map((value) => String(value.value).toLowerCase());
+    } else if (condition.type === 'Region') {
+      regions = selected.map((value) => String(value.value).toLowerCase());
+    }
 
     if (countries.length === 0 && cities.length === 0 && regions.length === 0) {
       matched = new Set<number>();
@@ -6567,7 +6584,7 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
     }
   }
 
-  const operator = condition.operator ?? (condition.type === 'Location' || condition.type === 'Customer tag' ? 'is' : 'has');
+  const operator = condition.operator ?? (['Location', 'Country', 'City', 'Region', 'Customer tag'].includes(condition.type) ? 'is' : 'has');
   if (operator === 'has not' || operator === 'is not') {
     const complement = new Set<number>();
     for (const id of allIds) {
