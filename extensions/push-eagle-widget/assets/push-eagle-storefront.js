@@ -41,6 +41,8 @@
     iosWidgetMessage: 'Add this store to your Home Screen. When you open it from there, we will ask for notification permission using your saved opt-in settings.'
   };
   var BROWSER_PROMPT_MAX_DISPLAYS_PER_SESSION = 1;
+  var BROWSER_PROMPT_MAX_ATTEMPTS = 3;
+  var BROWSER_PROMPT_WINDOW_MS = 48 * 60 * 60 * 1000;
   var TOKEN_SAVE_MAX_ATTEMPTS = 6;
   var TOKEN_SAVE_GEO_TIMEOUT_MS = 1200;
   var IOS_HOME_SCREEN_POLL_MS = 1000;
@@ -1850,11 +1852,50 @@
     safeSessionStorageSet(getStorageKey(shopDomain, 'session_displays'), '0');
   }
 
+  function getRecentBrowserPromptAttempts(shopDomain) {
+    var key = getStorageKey(shopDomain, 'prompt_attempts');
+    var cutoff = Date.now() - BROWSER_PROMPT_WINDOW_MS;
+    var raw = safeLocalStorageGet(key);
+    var attempts = [];
+
+    if (raw) {
+      try {
+        var parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          attempts = parsed
+            .map(function (value) { return Number(value); })
+            .filter(function (value) { return !isNaN(value) && value >= cutoff; });
+        }
+      } catch (_error) {
+        attempts = [];
+      }
+    }
+
+    safeLocalStorageSet(key, JSON.stringify(attempts));
+    return attempts;
+  }
+
+  function recordBrowserPromptAttempt(shopDomain) {
+    var key = getStorageKey(shopDomain, 'prompt_attempts');
+    var attempts = getRecentBrowserPromptAttempts(shopDomain);
+    attempts.push(Date.now());
+    safeLocalStorageSet(key, JSON.stringify(attempts));
+  }
+
+  function hasReachedBrowserPromptLimit(shopDomain) {
+    // Max 3 native permission asks across separate sessions inside 48 hours.
+    return getRecentBrowserPromptAttempts(shopDomain).length >= BROWSER_PROMPT_MAX_ATTEMPTS;
+  }
+
   function canShowBrowserPromptThisSession(shopDomain) {
-    // Once per browser session only — no multi-day attempt caps.
-    // Clear any legacy multi-day attempt counter so old limits never block new sessions.
-    safeLocalStorageRemove(getStorageKey(shopDomain, 'prompt_attempts'));
-    return safeSessionStorageGet(getStorageKey(shopDomain, 'browser_prompt_shown')) !== '1';
+    // Always ask once in every new session, unless the 48h / 3-session cap is reached.
+    if (safeSessionStorageGet(getStorageKey(shopDomain, 'browser_prompt_shown')) === '1') {
+      return false;
+    }
+    if (hasReachedBrowserPromptLimit(shopDomain)) {
+      return false;
+    }
+    return true;
   }
 
   function markBrowserPromptShownThisSession(shopDomain) {
@@ -1897,6 +1938,7 @@
 
     markBrowserPromptShownThisSession(config.shopDomain);
     incrementSessionDisplayCount(config.shopDomain);
+    recordBrowserPromptAttempt(config.shopDomain);
     void sendOptInEvent(boot, 'browser', 'view');
     void sendOptInEvent(boot, 'browser', 'click');
 
