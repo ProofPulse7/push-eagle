@@ -41,8 +41,6 @@
     iosWidgetMessage: 'Add this store to your Home Screen. When you open it from there, we will ask for notification permission using your saved opt-in settings.'
   };
   var BROWSER_PROMPT_MAX_DISPLAYS_PER_SESSION = 1;
-  var BROWSER_PROMPT_MAX_ATTEMPTS = 3;
-  var BROWSER_PROMPT_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
   var TOKEN_SAVE_MAX_ATTEMPTS = 6;
   var TOKEN_SAVE_GEO_TIMEOUT_MS = 1200;
   var IOS_HOME_SCREEN_POLL_MS = 1000;
@@ -1852,41 +1850,10 @@
     safeSessionStorageSet(getStorageKey(shopDomain, 'session_displays'), '0');
   }
 
-  function getRecentPromptAttempts(shopDomain) {
-    var key = getStorageKey(shopDomain, 'prompt_attempts');
-    var cutoff = Date.now() - BROWSER_PROMPT_WINDOW_MS;
-    var raw = safeLocalStorageGet(key);
-    var attempts = [];
-
-    if (raw) {
-      try {
-        var parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          attempts = parsed
-            .map(function (value) { return Number(value); })
-            .filter(function (value) { return !isNaN(value) && value >= cutoff; });
-        }
-      } catch (_error) {
-        attempts = [];
-      }
-    }
-
-    safeLocalStorageSet(key, JSON.stringify(attempts));
-    return attempts;
-  }
-
-  function recordPromptAttempt(shopDomain) {
-    var key = getStorageKey(shopDomain, 'prompt_attempts');
-    var attempts = getRecentPromptAttempts(shopDomain);
-    attempts.push(Date.now());
-    safeLocalStorageSet(key, JSON.stringify(attempts));
-  }
-
-  function hasReachedBrowserPromptLimit(shopDomain) {
-    return getRecentPromptAttempts(shopDomain).length >= BROWSER_PROMPT_MAX_ATTEMPTS;
-  }
-
   function canShowBrowserPromptThisSession(shopDomain) {
+    // Once per browser session only — no multi-day attempt caps.
+    // Clear any legacy multi-day attempt counter so old limits never block new sessions.
+    safeLocalStorageRemove(getStorageKey(shopDomain, 'prompt_attempts'));
     return safeSessionStorageGet(getStorageKey(shopDomain, 'browser_prompt_shown')) !== '1';
   }
 
@@ -1917,10 +1884,6 @@
       return { ok: false, skipped: true };
     }
 
-    if (hasReachedBrowserPromptLimit(config.shopDomain)) {
-      return { ok: false, skipped: true };
-    }
-
     refreshClientProfile(clientProfile);
 
     if (clientProfile.permissionState === 'granted') {
@@ -1934,7 +1897,6 @@
 
     markBrowserPromptShownThisSession(config.shopDomain);
     incrementSessionDisplayCount(config.shopDomain);
-    recordPromptAttempt(config.shopDomain);
     void sendOptInEvent(boot, 'browser', 'view');
     void sendOptInEvent(boot, 'browser', 'click');
 
@@ -1960,10 +1922,6 @@
     }
 
     if (!canShowBrowserPromptThisSession(config.shopDomain)) {
-      return;
-    }
-
-    if (hasReachedBrowserPromptLimit(config.shopDomain)) {
       return;
     }
 
@@ -2620,10 +2578,6 @@
       return;
     }
 
-    if (hasReachedBrowserPromptLimit(config.shopDomain)) {
-      return;
-    }
-
     refreshClientProfile(clientProfile);
 
     if (clientProfile.permissionState === 'granted') {
@@ -2644,10 +2598,6 @@
     }
 
     if (!canShowBrowserPromptThisSession(config.shopDomain)) {
-      return;
-    }
-
-    if (hasReachedBrowserPromptLimit(config.shopDomain)) {
       return;
     }
 
