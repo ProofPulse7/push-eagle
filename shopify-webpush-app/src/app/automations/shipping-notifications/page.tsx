@@ -18,6 +18,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/componen
 import { InlineNotificationPreview } from '@/components/automations/inline-notification-preview';
 import { formatCurrency } from '@/lib/utils';
 import { useSettings } from '@/context/settings-context';
+import { useAutomationFlowOverview } from '@/hooks/use-automation-flow-overview';
 
 const flowData = {
     title: "Shipping Notifications",
@@ -36,44 +37,49 @@ export default function ShippingNotificationsPage() {
     const [notifications, setNotifications] = useState([{ id: 'shipping-1', title: 'Shipping Confirmation', notification: { title: 'Your order is on its way!', message: 'Good news! Your order has shipped. Track your package using the button below.', iconUrl: '', heroUrl: null, windowsImageUrl: null, macosImageUrl: null, androidImageUrl: null, siteName: '', actionButtons: [{ title: 'Track Package', link: '/' }] } }]);
     const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
 
+    const { rule: shippingRule } = useAutomationFlowOverview(shopDomain, 'shipping_notifications');
+
     useEffect(() => {
         setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
     }, []);
 
     useEffect(() => {
-        if (!shopDomain) return;
-        fetch('/api/automations/overview?shop=' + encodeURIComponent(shopDomain))
-            .then(res => res.json())
-            .then(payload => {
-                if (!payload?.ok) return;
-                const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'shipping_notifications');
-                if (rule) {
-                    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
-                    setRuleEnabled(rule.enabled ?? false);
-                    const step = rule.config?.steps?.['shipping-1'];
-                    if (step) {
-                        setNotifications([
-                            {
-                                id: 'shipping-1',
-                                title: 'Shipping Confirmation',
-                                notification: {
-                                    title: step.title ?? 'Your order is on its way!',
-                                    message: step.body ?? 'Good news! Your order has shipped. Track your package using the button below.',
-                                    iconUrl: step.iconUrl ?? '',
-                                    heroUrl: step.imageUrl ?? null,
-                                    windowsImageUrl: step.windowsImageUrl ?? null,
-                                    macosImageUrl: step.macosImageUrl ?? null,
-                                    androidImageUrl: step.androidImageUrl ?? null,
-                                    siteName: '',
-                                    actionButtons: step.actionButtons ?? [{ title: 'Track Package', link: '/' }],
-                                },
-                            },
-                        ]);
-                    }
-                }
-            })
-            .catch(() => undefined);
-    }, [shopDomain]);
+        if (!shippingRule) return;
+        setRuleStats({
+            impressions: shippingRule.impressions ?? 0,
+            clicks: shippingRule.clicks ?? 0,
+            revenueCents: shippingRule.revenueCents ?? 0,
+        });
+        setRuleEnabled(shippingRule.enabled ?? false);
+        const step = shippingRule.config?.steps?.['shipping-1'] as {
+            title?: string;
+            body?: string;
+            iconUrl?: string | null;
+            imageUrl?: string | null;
+            windowsImageUrl?: string | null;
+            macosImageUrl?: string | null;
+            androidImageUrl?: string | null;
+            actionButtons?: Array<{ title: string; link: string }>;
+        } | undefined;
+        if (!step) return;
+        setNotifications([
+            {
+                id: 'shipping-1',
+                title: 'Shipping Confirmation',
+                notification: {
+                    title: step.title ?? 'Your order is on its way!',
+                    message: step.body ?? 'Good news! Your order has shipped. Track your package using the button below.',
+                    iconUrl: step.iconUrl ?? '',
+                    heroUrl: step.imageUrl ?? null,
+                    windowsImageUrl: step.windowsImageUrl ?? null,
+                    macosImageUrl: step.macosImageUrl ?? null,
+                    androidImageUrl: step.androidImageUrl ?? null,
+                    siteName: '',
+                    actionButtons: step.actionButtons ?? [{ title: 'Track Package', link: '/' }],
+                },
+            },
+        ]);
+    }, [shippingRule]);
 
     const handleToggleFlow = async () => {
         if (!shopDomain) return;
