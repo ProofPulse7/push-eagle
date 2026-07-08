@@ -80,6 +80,11 @@ export const verifyStorefrontRequest = async (
     return { ok: true as const, via: 'origin' as const };
   }
 
+  const referer = request.headers.get('referer');
+  if (await isTrustedStorefrontOrigin(shopDomain, referer)) {
+    return { ok: true as const, via: 'referer' as const };
+  }
+
   return { ok: false as const, reason: 'untrusted_origin' };
 };
 
@@ -105,6 +110,11 @@ export const verifyStorefrontBootstrapRequest = async (request: Request, shopDom
   const origin = request.headers.get('origin');
   if (await isTrustedStorefrontOrigin(shopDomain, origin)) {
     return { ok: true as const, via: 'origin' as const };
+  }
+
+  const referer = request.headers.get('referer');
+  if (await isTrustedStorefrontOrigin(shopDomain, referer)) {
+    return { ok: true as const, via: 'referer' as const };
   }
 
   return { ok: false as const, reason: 'untrusted_origin' };

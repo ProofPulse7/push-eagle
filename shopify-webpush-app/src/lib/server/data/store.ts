@@ -8366,12 +8366,12 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     );
   }
 
-  if (tokenWasInserted) {
-    const { promptType } = await getOptInSettings(input.shopDomain);
-    if (promptType !== 'off') {
-      const activePromptType: OptInPromptType = promptType === 'browser' ? 'browser' : 'custom';
-      await recordOptInPromptConversion(input.shopDomain, activePromptType);
-    }
+  if (tokenWasInserted && optInPromptType) {
+    // Attribute conversion to the prompt that collected this token (not the merchant's
+    // *current* setting, which may have changed). Never credit silent re-syncs —
+    // those omit optInPromptType. Conversion also back-fills a click if the click
+    // beacon was lost, so subscribers can never exceed clicks.
+    await recordOptInPromptConversion(input.shopDomain, optInPromptType);
   }
 
   const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
@@ -8425,12 +8425,17 @@ export const recordOptInPromptConversion = async (shopDomain: string, promptType
   const sql = getNeonSql();
   await ensureMerchant(shopDomain);
 
+  // A successful subscribe implies an Allow click. If the click beacon was dropped
+  // (ad blockers, 401, network), raise clicks to match — never drop below conversions.
+  // When the click already landed, GREATEST keeps clicks unchanged (no double count).
   await sql`
     INSERT INTO opt_in_prompt_stats (shop_domain, prompt_type, views, clicks, conversions, updated_at)
-    VALUES (${shopDomain}, ${promptType}, 0, 0, 1, NOW())
+    VALUES (${shopDomain}, ${promptType}, 1, 1, 1, NOW())
     ON CONFLICT (shop_domain, prompt_type)
     DO UPDATE SET
       conversions = opt_in_prompt_stats.conversions + 1,
+      clicks = GREATEST(opt_in_prompt_stats.clicks, opt_in_prompt_stats.conversions + 1),
+      views = GREATEST(opt_in_prompt_stats.views, GREATEST(opt_in_prompt_stats.clicks, opt_in_prompt_stats.conversions + 1)),
       updated_at = NOW()
   `;
 
@@ -8462,8 +8467,54 @@ export const getOptInPromptStats = async (
 
   const browserRow = byType.get('browser') ?? { views: 0, clicks: 0, conversions: 0 };
   const customRow = byType.get('custom') ?? { views: 0, clicks: 0, conversions: 0 };
-  const browser = buildOptInTypeStats(browserRow.views, browserRow.clicks, browserRow.conversions);
-  const custom = buildOptInTypeStats(customRow.views, customRow.clicks, customRow.conversions);
+
+  // Repair historically inconsistent rows (conversions credited without clicks)
+  // so the dashboard never shows more subscribers than clicks.
+  const normalizeRow = (row: { views: number; clicks: number; conversions: number }) => {
+    const conversions = Math.max(0, row.conversions);
+    const clicks = Math.max(row.clicks, conversions);
+    const views = Math.max(row.views, clicks);
+    return { views, clicks, conversions };
+  };
+
+  const browserNormalized = normalizeRow(browserRow);
+  const customNormalized = normalizeRow(customRow);
+
+  // Persist the clamp once so future reads stay consistent without re-computing.
+  if (
+    browserNormalized.clicks !== browserRow.clicks ||
+    browserNormalized.views !== browserRow.views ||
+    customNormalized.clicks !== customRow.clicks ||
+    customNormalized.views !== customRow.views
+  ) {
+    if (browserNormalized.clicks !== browserRow.clicks || browserNormalized.views !== browserRow.views) {
+      await sql`
+        UPDATE opt_in_prompt_stats
+        SET
+          clicks = GREATEST(clicks, conversions),
+          views = GREATEST(views, GREATEST(clicks, conversions)),
+          updated_at = NOW()
+        WHERE shop_domain = ${shopDomain}
+          AND prompt_type = 'browser'
+          AND (clicks < conversions OR views < GREATEST(clicks, conversions))
+      `;
+    }
+    if (customNormalized.clicks !== customRow.clicks || customNormalized.views !== customRow.views) {
+      await sql`
+        UPDATE opt_in_prompt_stats
+        SET
+          clicks = GREATEST(clicks, conversions),
+          views = GREATEST(views, GREATEST(clicks, conversions)),
+          updated_at = NOW()
+        WHERE shop_domain = ${shopDomain}
+          AND prompt_type = 'custom'
+          AND (clicks < conversions OR views < GREATEST(clicks, conversions))
+      `;
+    }
+  }
+
+  const browser = buildOptInTypeStats(browserNormalized.views, browserNormalized.clicks, browserNormalized.conversions);
+  const custom = buildOptInTypeStats(customNormalized.views, customNormalized.clicks, customNormalized.conversions);
 
   if (activePromptType === 'off') {
     const empty = buildOptInTypeStats(0, 0, 0);

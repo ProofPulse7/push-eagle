@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/config/env';
 import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { getStorefrontConfigCached } from '@/lib/server/cache/storefront-config-cache';
+import { recordStorefrontHost } from '@/lib/server/storefront-merchant-hosts-cache';
 import { shouldRunStorefrontAutomationInline } from '@/lib/server/storefront-automation-inline';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { verifyStorefrontBootstrapRequest } from '@/lib/server/storefront-request-auth';
@@ -55,6 +56,9 @@ export async function GET(request: Request) {
     }
 
     const signatureValid = verifyShopifyAppProxySignature(url.searchParams);
+    if (signatureValid) {
+      void recordStorefrontHost(shopDomain, origin ?? request.headers.get('referer')).catch(() => undefined);
+    }
     const requestedExternalIdRaw = String(url.searchParams.get('externalId') ?? '').trim();
     const requestedExternalId = /^[a-z0-9:_-]{8,128}$/i.test(requestedExternalIdRaw)
       ? requestedExternalIdRaw

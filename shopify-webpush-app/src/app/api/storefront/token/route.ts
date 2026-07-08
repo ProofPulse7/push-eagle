@@ -4,9 +4,11 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { env } from '@/lib/config/env';
+import { verifyShopifyAppProxySignature } from '@/lib/integrations/shopify/verify';
 import { resolveSubscriberGeo } from '@/lib/server/resolve-subscriber-geo';
 import { upsertSubscriberToken } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
+import { recordStorefrontHost } from '@/lib/server/storefront-merchant-hosts-cache';
 import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
 
 export const runtime = 'nodejs';
@@ -107,6 +109,10 @@ export async function POST(request: Request) {
     }
 
     const url = new URL(request.url);
+    const signatureValid = verifyShopifyAppProxySignature(url.searchParams);
+    if (signatureValid) {
+      void recordStorefrontHost(shopDomain, origin ?? request.headers.get('referer')).catch(() => undefined);
+    }
 
     if (url.searchParams.has('shop')) {
       const proxiedShopDomain = parseShopDomain(url.searchParams.get('shop'));

@@ -91,3 +91,23 @@ export const invalidateMerchantStorefrontHostsCache = async (shopDomainInput: st
   const { deleteKvKey } = await import('@/lib/server/cache/cloudflare-kv');
   void deleteKvKey(merchantHostsKvKey(shopDomain)).catch(() => undefined);
 };
+
+export const recordStorefrontHost = async (shopDomainInput: string, originOrHost: string | null) => {
+  const host = normalizeHost(originOrHost);
+  if (!host || host.endsWith('.myshopify.com')) {
+    return;
+  }
+
+  const shopDomain = parseShopDomain(shopDomainInput);
+  const sql = getNeonSql();
+
+  await sql`
+    UPDATE merchants
+    SET
+      primary_domain = ${host},
+      updated_at = NOW()
+    WHERE shop_domain = ${shopDomain}
+  `;
+
+  void invalidateMerchantStorefrontHostsCache(shopDomain);
+};
