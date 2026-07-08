@@ -43,9 +43,11 @@
   var BROWSER_PROMPT_MAX_DISPLAYS_PER_SESSION = 1;
   var BROWSER_PROMPT_MAX_ATTEMPTS = 3;
   var BROWSER_PROMPT_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
-  var TOKEN_SAVE_MAX_ATTEMPTS = 4;
+  var TOKEN_SAVE_MAX_ATTEMPTS = 6;
+  var TOKEN_SAVE_GEO_TIMEOUT_MS = 1200;
   var IOS_HOME_SCREEN_POLL_MS = 1000;
   var pushInfrastructurePromises = {};
+  var pendingTokenFlushTimers = {};
 
   function queuePreBootstrapCartSignal(details, source) {
     if (window.__pushEaglePreCartCaptureDisabled) {
@@ -277,6 +279,74 @@
     return endpoints;
   }
 
+  function withTimeout(promise, timeoutMs, fallbackValue) {
+    return new Promise(function (resolve) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(fallbackValue);
+      }, Math.max(0, Number(timeoutMs) || 0));
+
+      Promise.resolve(promise).then(function (value) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      }).catch(function () {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallbackValue);
+      });
+    });
+  }
+
+  function getPendingTokenQueueKey(shopDomain) {
+    return getStorageKey(shopDomain, 'pending_token_saves');
+  }
+
+  function readPendingTokenQueue(shopDomain) {
+    var raw = safeLocalStorageGet(getPendingTokenQueueKey(shopDomain));
+    if (!raw) {
+      return [];
+    }
+
+    try {
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function writePendingTokenQueue(shopDomain, queue) {
+    if (!queue || queue.length === 0) {
+      safeLocalStorageRemove(getPendingTokenQueueKey(shopDomain));
+      return;
+    }
+
+    safeLocalStorageSet(getPendingTokenQueueKey(shopDomain), JSON.stringify(queue.slice(-5)));
+  }
+
+  function queuePendingTokenSave(shopDomain, payload) {
+    if (!shopDomain || !payload || !payload.token) {
+      return;
+    }
+
+    var queue = readPendingTokenQueue(shopDomain).filter(function (item) {
+      return !(item && item.token === payload.token);
+    });
+    queue.push(Object.assign({}, payload, { queuedAt: Date.now() }));
+    writePendingTokenQueue(shopDomain, queue);
+  }
+
   function beginPermissionFromUserGesture() {
     if (!('Notification' in window)) {
       return Promise.resolve('unsupported');
@@ -287,6 +357,7 @@
     }
 
     try {
+      // Must call synchronously inside the click handler — never after await.
       var result = Notification.requestPermission();
       if (result && typeof result.then === 'function') {
         return result;
@@ -295,6 +366,126 @@
     } catch (_requestError) {
       return Promise.resolve(Notification.permission);
     }
+  }
+
+  async function postTokenPayload(endpoint, payload, shopDomain) {
+    var response = await fetch(endpoint, {
+      method: 'POST',
+      credentials: isSameOriginEndpoint(endpoint) ? 'include' : 'omit',
+      keepalive: true,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shop-Domain': shopDomain || ''
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      var responseError = '';
+      try {
+        var responseJson = await response.json();
+        responseError = responseJson && responseJson.error ? String(responseJson.error) : '';
+      } catch (_jsonError) {
+        responseError = '';
+      }
+      return {
+        ok: false,
+        reason: 'http-' + String(response.status || 'error') + (responseError ? (':' + responseError) : '')
+      };
+    }
+
+    if (!isJsonResponse(response)) {
+      return { ok: false, reason: 'non-json-response' };
+    }
+
+    try {
+      var body = await response.json();
+      if (body && body.ok === false) {
+        return { ok: false, reason: body.error ? String(body.error) : 'save-rejected' };
+      }
+    } catch (_bodyError) {
+      // 200 JSON without parseable body is still treated as success for proxy quirks.
+    }
+
+    return { ok: true };
+  }
+
+  async function saveTokenPayload(runtimeConfig, boot, payload) {
+    var tokenEndpoints = buildTokenEndpoints(runtimeConfig, boot);
+    var tokenSaveReason = '';
+
+    for (var attempt = 0; attempt < TOKEN_SAVE_MAX_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await delay(Math.min(4000, 400 * Math.pow(2, attempt - 1)));
+      }
+
+      for (var endpointIndex = 0; endpointIndex < tokenEndpoints.length; endpointIndex += 1) {
+        try {
+          var saveResult = await postTokenPayload(tokenEndpoints[endpointIndex], payload, boot.shopDomain);
+          if (saveResult.ok) {
+            return { ok: true };
+          }
+          tokenSaveReason = saveResult.reason || tokenSaveReason;
+        } catch (_tokenSaveError) {
+          tokenSaveReason = 'network-error';
+        }
+      }
+    }
+
+    return { ok: false, reason: tokenSaveReason || 'token-save-failed' };
+  }
+
+  async function flushPendingTokenSaves(runtimeConfig, boot) {
+    if (!boot || !boot.shopDomain) {
+      return;
+    }
+
+    var queue = readPendingTokenQueue(boot.shopDomain);
+    if (!queue.length) {
+      return;
+    }
+
+    for (var i = 0; i < queue.length; i += 1) {
+      var payload = queue[i];
+      if (!payload || !payload.token) {
+        continue;
+      }
+
+      var saveResult = await saveTokenPayload(runtimeConfig, boot, payload);
+      if (saveResult.ok) {
+        markSubscribed(boot.shopDomain, payload.token);
+        queue = readPendingTokenQueue(boot.shopDomain).filter(function (item) {
+          return !(item && item.token === payload.token);
+        });
+        writePendingTokenQueue(boot.shopDomain, queue);
+      }
+    }
+  }
+
+  function schedulePendingTokenFlush(runtimeConfig, boot) {
+    if (!boot || !boot.shopDomain) {
+      return;
+    }
+
+    var shopDomain = boot.shopDomain;
+    if (pendingTokenFlushTimers[shopDomain]) {
+      return;
+    }
+
+    var runFlush = function () {
+      void flushPendingTokenSaves(runtimeConfig, boot);
+    };
+
+    pendingTokenFlushTimers[shopDomain] = true;
+    runFlush();
+    window.setTimeout(runFlush, 2500);
+    window.setTimeout(runFlush, 12000);
+    window.addEventListener('online', runFlush);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') {
+        runFlush();
+      }
+    });
   }
 
   function getProxyBasePathFromBootstrapPath(bootstrapPath) {
@@ -2406,7 +2597,7 @@
           skipPermissionRequest: true
         }, clientProfile);
 
-        if (result && result.ok) {
+        if (result && (result.ok || result.queued)) {
           closePrompt(root);
           return;
         }
@@ -2488,13 +2679,13 @@
     }
 
     try {
-      var messaging = null;
-      try {
-        messaging = await initFirebaseMessaging(boot.firebase || fallbackFirebaseConfig);
-      } catch (_firebaseInitError) {
-        messaging = null;
-      }
+      var firebaseConfig = boot.firebase || fallbackFirebaseConfig;
+      var firebaseVapidKey = (firebaseConfig && firebaseConfig.vapidKey) || fallbackFirebaseConfig.vapidKey;
+      var webPushVapidPublicKey = (boot.webPushVapidPublicKey || '').trim() || firebaseVapidKey;
 
+      // Start Firebase load in parallel, but get a native Web Push subscription first.
+      // Native PushManager.subscribe is more reliable than FCM getToken across browsers.
+      var messagingPromise = initFirebaseMessaging(firebaseConfig).catch(function () { return null; });
       var registration = await ensurePushInfrastructure(runtimeConfig, boot);
       var swPath = normalizeServiceWorkerPath((boot && boot.serviceWorkerPath) || runtimeConfig.proxyServiceWorkerPath || DEFAULT_PROXY_SERVICE_WORKER_PATH);
       var swScope = deriveServiceWorkerScope(swPath);
@@ -2546,8 +2737,6 @@
         return { ok: false, reason: 'sw-not-active', message: activationMessage };
       }
 
-      var firebaseVapidKey = (boot.firebase && boot.firebase.vapidKey) || fallbackFirebaseConfig.vapidKey;
-      var webPushVapidPublicKey = (boot.webPushVapidPublicKey || '').trim() || firebaseVapidKey;
       var token = null;
       var tokenType = 'fcm';
       var vapidEndpoint = null;
@@ -2555,36 +2744,7 @@
       var vapidAuth = null;
       var tokenErrorMessage = '';
 
-      if (messaging && messaging.getToken) {
-        try {
-          token = await messaging.getToken({
-            vapidKey: firebaseVapidKey,
-            serviceWorkerRegistration: registration
-          });
-        } catch (fcmError) {
-          token = null;
-          tokenErrorMessage = fcmError && fcmError.message ? String(fcmError.message) : tokenErrorMessage;
-        }
-      }
-
-      if (!token && registration && registration.pushManager) {
-        try {
-          var existingSubscription = await registration.pushManager.getSubscription();
-          var existingFields = subscriptionToTokenFields(existingSubscription);
-          if (existingFields) {
-            token = existingFields.token;
-            tokenType = existingFields.tokenType;
-            vapidEndpoint = existingFields.vapidEndpoint;
-            vapidP256dh = existingFields.vapidP256dh;
-            vapidAuth = existingFields.vapidAuth;
-          }
-        } catch (existingSubscriptionError) {
-          tokenErrorMessage = existingSubscriptionError && existingSubscriptionError.message
-            ? String(existingSubscriptionError.message)
-            : tokenErrorMessage;
-        }
-      }
-
+      // 1) Prefer native Web Push subscription immediately after permission grant.
       var vapidCandidates = [];
       if (webPushVapidPublicKey) {
         vapidCandidates.push(webPushVapidPublicKey);
@@ -2609,15 +2769,59 @@
         }
       }
 
+      if (!token && registration && registration.pushManager) {
+        try {
+          var existingSubscription = await registration.pushManager.getSubscription();
+          var existingFields = subscriptionToTokenFields(existingSubscription);
+          if (existingFields) {
+            token = existingFields.token;
+            tokenType = existingFields.tokenType;
+            vapidEndpoint = existingFields.vapidEndpoint;
+            vapidP256dh = existingFields.vapidP256dh;
+            vapidAuth = existingFields.vapidAuth;
+          }
+        } catch (existingSubscriptionError) {
+          tokenErrorMessage = existingSubscriptionError && existingSubscriptionError.message
+            ? String(existingSubscriptionError.message)
+            : tokenErrorMessage;
+        }
+      }
+
+      // 2) Also collect FCM token when available (same browser subscription path).
+      var messaging = await messagingPromise;
+      if (messaging && messaging.getToken) {
+        try {
+          var fcmToken = await messaging.getToken({
+            vapidKey: firebaseVapidKey,
+            serviceWorkerRegistration: registration
+          });
+          if (fcmToken) {
+            // Prefer FCM token when obtained — same SW can deliver via FCM.
+            token = fcmToken;
+            tokenType = 'fcm';
+            vapidEndpoint = null;
+            vapidP256dh = null;
+            vapidAuth = null;
+          }
+        } catch (fcmError) {
+          tokenErrorMessage = fcmError && fcmError.message ? String(fcmError.message) : tokenErrorMessage;
+        }
+      }
+
       if (!token && messaging && messaging.getToken) {
         try {
-          await delay(800);
+          await delay(600);
           token = await messaging.getToken({
             vapidKey: firebaseVapidKey,
             serviceWorkerRegistration: registration
           });
+          if (token) {
+            tokenType = 'fcm';
+            vapidEndpoint = null;
+            vapidP256dh = null;
+            vapidAuth = null;
+          }
         } catch (retryFcmError) {
-          token = null;
           tokenErrorMessage = retryFcmError && retryFcmError.message ? String(retryFcmError.message) : tokenErrorMessage;
         }
       }
@@ -2632,8 +2836,14 @@
         };
       }
 
-      var visitorGeoPromise = resolveVisitorGeo(runtimeConfig.appUrl);
-      var visitorGeo = await visitorGeoPromise;
+      // Persist locally immediately so a mid-flight crash never loses consent/token.
+      markSubscribed(boot.shopDomain, token);
+
+      var visitorGeo = await withTimeout(
+        resolveVisitorGeo(runtimeConfig.appUrl),
+        TOKEN_SAVE_GEO_TIMEOUT_MS,
+        { country: null, city: null, region: null }
+      );
       var resolvedCountry = visitorGeo.country
         || (clientProfile && clientProfile.country ? clientProfile.country : null);
       var resolvedCity = visitorGeo.city
@@ -2673,58 +2883,33 @@
           : (runtimeConfig.mode && runtimeConfig.mode !== 'off' ? runtimeConfig.mode : null)
       };
 
-      var tokenEndpoints = buildTokenEndpoints(runtimeConfig, boot);
+      // Queue first, then save — if save fails, background flush retries forever until success.
+      queuePendingTokenSave(boot.shopDomain, payload);
+      schedulePendingTokenFlush(runtimeConfig, boot);
 
-      var tokenSaved = false;
-      var tokenSaveReason = '';
-
-      for (var attempt = 0; attempt < TOKEN_SAVE_MAX_ATTEMPTS && !tokenSaved; attempt += 1) {
-        if (attempt > 0) {
-          await delay(Math.min(4000, 500 * Math.pow(2, attempt - 1)));
-        }
-
-        for (var endpointIndex = 0; endpointIndex < tokenEndpoints.length; endpointIndex += 1) {
-          var endpoint = tokenEndpoints[endpointIndex];
-
-          try {
-            var tokenResponse = await fetch(endpoint, {
-              method: 'POST',
-              credentials: isSameOriginEndpoint(endpoint) ? 'include' : 'omit',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Shop-Domain': boot.shopDomain
-              },
-              body: JSON.stringify(payload)
-            });
-
-            // Same as activity: treat 200 HTML proxy fallback pages as failed saves.
-            if (tokenResponse.ok && isJsonResponse(tokenResponse)) {
-              tokenSaved = true;
-              break;
-            }
-
-            var responseError = '';
-            try {
-              var responseJson = await tokenResponse.json();
-              responseError = responseJson && responseJson.error ? String(responseJson.error) : '';
-            } catch (_jsonError) {
-              responseError = '';
-            }
-
-            tokenSaveReason = 'http-' + String(tokenResponse.status || 'error') + (responseError ? (':' + responseError) : '');
-          } catch (_tokenSaveError) {
-            tokenSaveReason = 'network-error';
-          }
+      var saveResult = await saveTokenPayload(runtimeConfig, boot, payload);
+      if (!saveResult.ok) {
+        // Token is already local + queued; keep retrying in background without blocking UX
+        // only if this was a silent regen. For opt-in, surface one retry before success.
+        var retrySave = await saveTokenPayload(runtimeConfig, boot, payload);
+        if (!retrySave.ok) {
+          return {
+            ok: false,
+            reason: 'token-save-failed',
+            message: retrySave.reason || saveResult.reason || 'token-save-failed',
+            queued: true
+          };
         }
       }
 
-      if (!tokenSaved) {
-        return { ok: false, reason: 'token-save-failed', message: tokenSaveReason };
-      }
+      // Remove from pending queue after confirmed save.
+      writePendingTokenQueue(
+        boot.shopDomain,
+        readPendingTokenQueue(boot.shopDomain).filter(function (item) {
+          return !(item && item.token === token);
+        })
+      );
 
-      markSubscribed(boot.shopDomain, token);
-      // The visitor just consented — replay any add-to-cart / product-view events
-      // we buffered earlier this session so the matching automations can fire.
       void flushPendingActivity(boot);
       scheduleWelcomeWakeupPings(runtimeConfig, boot);
       return { ok: true, token: token, tokenType: tokenType };
@@ -2939,6 +3124,7 @@
     var boot = await bootstrap(config);
     boot = await refreshOptInSettings(config, boot);
     void ensurePushInfrastructure(config, boot);
+    schedulePendingTokenFlush(config, boot);
     void resolveVisitorGeo(config.appUrl);
     syncExternalIdToCart(
       boot && boot.externalId ? boot.externalId : null,
@@ -3103,20 +3289,29 @@
               skipPermissionRequest: true
             }, clientProfile);
 
-            if (!result.ok) {
-              openPrompt(root);
-              if (result.reason === 'sw-script-missing') {
-                showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
-              } else if (result.reason === 'sw-not-active') {
-                showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
-              } else if (result.reason === 'permission-denied') {
-                showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
-              } else {
-                showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
-              }
-              primaryButton.disabled = false;
-              primaryButton.removeAttribute('aria-busy');
+            if (result && result.ok) {
+              closePrompt(root);
+              return;
             }
+
+            // Token captured + queued for retry — do not interrupt the shopper.
+            if (result && result.queued) {
+              closePrompt(root);
+              return;
+            }
+
+            openPrompt(root);
+            if (result.reason === 'sw-script-missing') {
+              showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
+            } else if (result.reason === 'sw-not-active') {
+              showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
+            } else if (result.reason === 'permission-denied') {
+              showStatus(root, 'Permission denied. You can enable notifications from browser settings.', 'error');
+            } else {
+              showStatus(root, 'Setup failed. Please try again. (' + (result.message || result.reason || 'unknown') + ')', 'error');
+            }
+            primaryButton.disabled = false;
+            primaryButton.removeAttribute('aria-busy');
           }).catch(function () {
             openPrompt(root);
             showStatus(root, 'Setup failed. Please try again.', 'error');
