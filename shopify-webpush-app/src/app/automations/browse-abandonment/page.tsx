@@ -1,12 +1,12 @@
 'use client';
 
-import React, { Fragment, useEffect, useMemo, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Zap } from 'lucide-react';
 
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
+import { FlowNotificationListSkeleton } from '@/components/automations/flow-notification-card-skeleton';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -17,10 +17,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
 import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
 import { useCachedJson } from '@/hooks/use-cached-json';
+import { useFlowStepsHydration } from '@/hooks/use-flow-steps-hydration';
 import {
-  applyPendingFlowStepStates,
   createDebouncedAutomationStepsSaver,
-  hasPendingFlowSteps,
   stepEnabledFromConfig,
 } from '@/lib/client/automation-flow-steps';
 import { formatCurrency } from '@/lib/utils';
@@ -236,10 +235,42 @@ export default function BrowseAbandonmentPage() {
   const shopDomain = queryShop || settingsShop || '';
 
   const [previewDevice, setPreviewDevice] = useState<'windows' | 'macos' | 'android' | 'ios'>('android');
-  const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [showReminderStats, setShowReminderStats] = useState(true);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
   const [ruleEnabled, setRuleEnabled] = useState(false);
+
+  const mergeBrowseSteps = useCallback(
+    (current: FlowNotification[], steps: Record<string, Record<string, unknown>>) =>
+      current.map((item) => {
+        const step = (steps[item.id] ?? {}) as BrowseRuleStepConfig;
+        return {
+          ...item,
+          delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
+          status: stepEnabledFromConfig(step.enabled),
+          notification: {
+            ...item.notification,
+            title: step.title ?? item.notification.title,
+            message: step.body ?? item.notification.message,
+            iconUrl: step.iconUrl ?? item.notification.iconUrl,
+            heroUrl: step.imageUrl ?? item.notification.heroUrl,
+            actionButtons: step.actionButtons ?? item.notification.actionButtons,
+          },
+        };
+      }),
+    [],
+  );
+
+  const {
+    notifications,
+    setNotifications,
+    flowStepsReady,
+    applyServerSteps,
+  } = useFlowStepsHydration({
+    shopDomain,
+    ruleKey: 'browse_abandonment_15m',
+    template: flowData.notifications as FlowNotification[],
+    mergeSteps: mergeBrowseSteps,
+  });
 
   const overviewUrl = shopDomain ? '/api/automations/overview?shop=' + encodeURIComponent(shopDomain) : '';
   const rulesUrl = shopDomain ? '/api/automations/rules?shop=' + encodeURIComponent(shopDomain) : '';
@@ -284,11 +315,6 @@ export default function BrowseAbandonmentPage() {
   }, [overviewPayload]);
 
   useEffect(() => {
-    if (!shopDomain) return;
-    setNotifications((current) => applyPendingFlowStepStates(shopDomain, 'browse_abandonment_15m', current));
-  }, [shopDomain]);
-
-  useEffect(() => {
     if (!rulesPayload?.ok) return;
     const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'browse_abandonment_15m');
     if (!rule) return;
@@ -298,29 +324,8 @@ export default function BrowseAbandonmentPage() {
     const steps = rule.config?.steps;
     if (!steps) return;
 
-    setNotifications((current) =>
-      applyPendingFlowStepStates(
-        shopDomain,
-        'browse_abandonment_15m',
-        current.map((item) => {
-          const step = steps[item.id] ?? {};
-          return {
-            ...item,
-            delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
-            status: stepEnabledFromConfig(step.enabled),
-            notification: {
-              ...item.notification,
-              title: step.title ?? item.notification.title,
-              message: step.body ?? item.notification.message,
-              iconUrl: step.iconUrl ?? item.notification.iconUrl,
-              heroUrl: step.imageUrl ?? item.notification.heroUrl,
-              actionButtons: step.actionButtons ?? item.notification.actionButtons,
-            },
-          };
-        }),
-      ),
-    );
-  }, [rulesPayload, shopDomain]);
+    applyServerSteps(steps);
+  }, [applyServerSteps, rulesPayload]);
 
   const saveBrowseConfig = useMemo(
     () =>
@@ -350,15 +355,6 @@ export default function BrowseAbandonmentPage() {
   };
 
   const isFlowActive = ruleEnabled && notifications.some((item) => item.status === 'Active');
-  const flowConfigReady =
-    Boolean(rulesPayload?.ok) || hasPendingFlowSteps(shopDomain, 'browse_abandonment_15m');
-  const flowConfigLoading = Boolean(shopDomain) && !flowConfigReady;
-
-  if (flowConfigLoading) {
-    return (
-      <PageLoadingView title="Browse abandonment" pathname="/automations" />
-    );
-  }
 
   return (
     <div className="flex flex-col bg-muted/40 min-h-screen">
@@ -447,7 +443,10 @@ export default function BrowseAbandonmentPage() {
               </div>
               <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />
               <div className="w-full flex flex-col items-center">
-                {notifications.map((step, index) => (
+                {!flowStepsReady ? (
+                  <FlowNotificationListSkeleton count={notifications.length} />
+                ) : (
+                  notifications.map((step, index) => (
                   <Fragment key={step.id}>
                     <div className="w-full">
                       <FlowNotificationCard
@@ -464,7 +463,8 @@ export default function BrowseAbandonmentPage() {
                       <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />
                     )}
                   </Fragment>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </TabsContent>

@@ -1,16 +1,16 @@
 'use client';
 
-import React, { Fragment, useEffect, useMemo, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, TabletSmartphone, Zap } from 'lucide-react';
 
 import { AutomationRuleStatusBadge, AutomationRuleToggleButton } from '@/components/automations/automation-rule-toggle';
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
+import { FlowNotificationListSkeleton } from '@/components/automations/flow-notification-card-skeleton';
 import { FlowStats } from '@/components/automations/flow-stats';
 import { Button } from '@/components/ui/button';
 import {
-  applyPendingFlowStepStates,
   createDebouncedAutomationStepsSaver,
   stepEnabledFromConfig,
 } from '@/lib/client/automation-flow-steps';
@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useCachedJson } from '@/hooks/use-cached-json';
+import { useFlowStepsHydration } from '@/hooks/use-flow-steps-hydration';
 import { useSettings } from '@/context/settings-context';
 import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
 
@@ -167,10 +168,46 @@ export default function WelcomeNotificationsPage() {
   const shopDomain = queryShop || settingsShop || '';
 
   const [previewDevice, setPreviewDevice] = useState<'windows' | 'macos' | 'android' | 'ios'>('android');
-  const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
   const [ruleEnabled, setRuleEnabled] = useState(false);
   const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
+
+  const mergeWelcomeSteps = useCallback(
+    (current: FlowNotification[], steps: Record<string, Record<string, unknown>>) =>
+      current.map((item) => {
+        const step = (steps[item.id] ?? {}) as WelcomeRuleStepConfig;
+        return {
+          ...item,
+          delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
+          status: stepEnabledFromConfig(step.enabled),
+          notification: {
+            ...item.notification,
+            title: step.title ?? item.notification.title,
+            message: step.body ?? item.notification.message,
+            targetUrl: step.targetUrl ?? item.notification.targetUrl,
+            iconUrl: step.iconUrl ?? item.notification.iconUrl,
+            heroUrl: step.imageUrl ?? item.notification.heroUrl,
+            windowsImageUrl: step.windowsImageUrl ?? item.notification.windowsImageUrl ?? item.notification.heroUrl,
+            macosImageUrl: step.macosImageUrl ?? item.notification.macosImageUrl ?? item.notification.heroUrl,
+            androidImageUrl: step.androidImageUrl ?? item.notification.androidImageUrl ?? item.notification.heroUrl,
+            actionButtons: step.actionButtons ?? item.notification.actionButtons,
+          },
+        };
+      }),
+    [],
+  );
+
+  const {
+    notifications,
+    setNotifications,
+    flowStepsReady,
+    applyServerSteps,
+  } = useFlowStepsHydration({
+    shopDomain,
+    ruleKey: 'welcome_subscriber',
+    template: flowData.notifications as FlowNotification[],
+    mergeSteps: mergeWelcomeSteps,
+  });
 
   const overviewUrl = shopDomain ? '/api/automations/overview?shop=' + encodeURIComponent(shopDomain) : '';
   const rulesUrl = shopDomain ? '/api/automations/rules?shop=' + encodeURIComponent(shopDomain) : '';
@@ -216,11 +253,6 @@ export default function WelcomeNotificationsPage() {
 
   useEffect(() => {
     if (!shopDomain) return;
-    setNotifications((current) => applyPendingFlowStepStates(shopDomain, 'welcome_subscriber', current));
-  }, [shopDomain]);
-
-  useEffect(() => {
-    if (!shopDomain) return;
     const apiRule = rulesPayload?.ok
       ? (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber')
       : undefined;
@@ -240,38 +272,10 @@ export default function WelcomeNotificationsPage() {
   useEffect(() => {
     if (!rulesPayload?.ok) return;
     const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber');
-    if (!rule) return;
-
-    const steps = rule.config?.steps;
+    const steps = rule?.config?.steps;
     if (!steps) return;
-
-    setNotifications((current) =>
-      applyPendingFlowStepStates(
-        shopDomain,
-        'welcome_subscriber',
-        current.map((item) => {
-          const step = steps[item.id] ?? {};
-          return {
-            ...item,
-            delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
-            status: stepEnabledFromConfig(step.enabled),
-            notification: {
-              ...item.notification,
-              title: step.title ?? item.notification.title,
-              message: step.body ?? item.notification.message,
-              targetUrl: step.targetUrl ?? item.notification.targetUrl,
-              iconUrl: step.iconUrl ?? item.notification.iconUrl,
-              heroUrl: step.imageUrl ?? item.notification.heroUrl,
-              windowsImageUrl: step.windowsImageUrl ?? item.notification.windowsImageUrl ?? item.notification.heroUrl,
-              macosImageUrl: step.macosImageUrl ?? item.notification.macosImageUrl ?? item.notification.heroUrl,
-              androidImageUrl: step.androidImageUrl ?? item.notification.androidImageUrl ?? item.notification.heroUrl,
-              actionButtons: step.actionButtons ?? item.notification.actionButtons,
-            },
-          };
-        }),
-      ),
-    );
-  }, [rulesPayload, shopDomain]);
+    applyServerSteps(steps);
+  }, [applyServerSteps, rulesPayload]);
 
   const saveWelcomeConfig = useMemo(
     () =>
@@ -368,7 +372,10 @@ export default function WelcomeNotificationsPage() {
           </div>
           <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />
           <div className="w-full flex flex-col items-center">
-            {notifications.map((step, index) => (
+            {!flowStepsReady ? (
+              <FlowNotificationListSkeleton count={notifications.length} />
+            ) : (
+              notifications.map((step, index) => (
               <Fragment key={step.id}>
                 <div className="w-full">
                   <FlowNotificationCard
@@ -382,7 +389,8 @@ export default function WelcomeNotificationsPage() {
                 </div>
                 {index < notifications.length - 1 && <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />}
               </Fragment>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>

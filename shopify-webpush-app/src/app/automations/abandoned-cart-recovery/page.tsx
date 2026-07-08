@@ -1,12 +1,13 @@
 'use client';
 
-import React, { Fragment, useEffect, useMemo, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Zap } from 'lucide-react';
 
 import { AutomationRuleStatusBadge, AutomationRuleToggleButton } from '@/components/automations/automation-rule-toggle';
 import { FlowNotificationCard } from '@/components/automations/flow-notification-card';
+import { FlowNotificationListSkeleton } from '@/components/automations/flow-notification-card-skeleton';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -18,8 +19,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
 import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
 import { useCachedJson } from '@/hooks/use-cached-json';
+import { useFlowStepsHydration } from '@/hooks/use-flow-steps-hydration';
 import {
-  applyPendingFlowStepStates,
   createDebouncedAutomationStepsSaver,
   stepEnabledFromConfig,
 } from '@/lib/client/automation-flow-steps';
@@ -239,10 +240,42 @@ export default function AbandonedCartPage() {
   const shopDomain = queryShop || settingsShop || '';
 
   const [previewDevice, setPreviewDevice] = useState<'windows' | 'macos' | 'android' | 'ios'>('android');
-  const [notifications, setNotifications] = useState<FlowNotification[]>(flowData.notifications as FlowNotification[]);
   const [showReminderStats, setShowReminderStats] = useState(true);
   const [ruleStats, setRuleStats] = useState({ impressions: 0, clicks: 0, revenueCents: 0 });
   const [ruleEnabled, setRuleEnabled] = useState(false);
+
+  const mergeCartSteps = useCallback(
+    (current: FlowNotification[], steps: Record<string, Record<string, unknown>>) =>
+      current.map((item) => {
+        const step = (steps[item.id] ?? {}) as CartRuleStepConfig;
+        return {
+          ...item,
+          delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
+          status: stepEnabledFromConfig(step.enabled),
+          notification: {
+            ...item.notification,
+            title: step.title ?? item.notification.title,
+            message: step.body ?? item.notification.message,
+            iconUrl: step.iconUrl ?? item.notification.iconUrl,
+            heroUrl: step.imageUrl ?? item.notification.heroUrl,
+            actionButtons: step.actionButtons ?? item.notification.actionButtons,
+          },
+        };
+      }),
+    [],
+  );
+
+  const {
+    notifications,
+    setNotifications,
+    flowStepsReady,
+    applyServerSteps,
+  } = useFlowStepsHydration({
+    shopDomain,
+    ruleKey: 'cart_abandonment_30m',
+    template: flowData.notifications as FlowNotification[],
+    mergeSteps: mergeCartSteps,
+  });
 
   const overviewUrl = shopDomain ? `/api/automations/overview?shop=${encodeURIComponent(shopDomain)}` : '';
   const rulesUrl = shopDomain ? `/api/automations/rules?shop=${encodeURIComponent(shopDomain)}` : '';
@@ -288,11 +321,6 @@ export default function AbandonedCartPage() {
 
   useEffect(() => {
     if (!shopDomain) return;
-    setNotifications((current) => applyPendingFlowStepStates(shopDomain, 'cart_abandonment_30m', current));
-  }, [shopDomain]);
-
-  useEffect(() => {
-    if (!shopDomain) return;
     const apiRule = rulesPayload?.ok
       ? (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m')
       : undefined;
@@ -312,34 +340,10 @@ export default function AbandonedCartPage() {
   useEffect(() => {
     if (!rulesPayload?.ok) return;
     const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
-    if (!rule) return;
-
-    const steps = rule.config?.steps;
+    const steps = rule?.config?.steps;
     if (!steps) return;
-
-    setNotifications((current) =>
-      applyPendingFlowStepStates(
-        shopDomain,
-        'cart_abandonment_30m',
-        current.map((item) => {
-          const step = steps[item.id] ?? {};
-          return {
-            ...item,
-            delay: delayMinutesToLabel(Number(step.delayMinutes ?? delayLabelToMinutes(item.delay))),
-            status: stepEnabledFromConfig(step.enabled),
-            notification: {
-              ...item.notification,
-              title: step.title ?? item.notification.title,
-              message: step.body ?? item.notification.message,
-              iconUrl: step.iconUrl ?? item.notification.iconUrl,
-              heroUrl: step.imageUrl ?? item.notification.heroUrl,
-              actionButtons: step.actionButtons ?? item.notification.actionButtons,
-            },
-          };
-        }),
-      ),
-    );
-  }, [rulesPayload, shopDomain]);
+    applyServerSteps(steps);
+  }, [applyServerSteps, rulesPayload]);
 
   const saveCartConfig = useMemo(
     () =>
@@ -481,7 +485,10 @@ export default function AbandonedCartPage() {
               <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />
 
               <div className="w-full flex flex-col items-center">
-                {notifications.map((step, index) => (
+                {!flowStepsReady ? (
+                  <FlowNotificationListSkeleton count={notifications.length} />
+                ) : (
+                  notifications.map((step, index) => (
                   <Fragment key={step.id}>
                     <div className="w-full">
                       <FlowNotificationCard
@@ -496,7 +503,8 @@ export default function AbandonedCartPage() {
                     </div>
                     {index < notifications.length - 1 && <div className="my-4 h-8 border-l-2 border-dashed border-gray-600" />}
                   </Fragment>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </TabsContent>

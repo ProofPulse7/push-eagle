@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { readCachedJsonSync } from '@/lib/client/automation-flow-cache';
+
 type CachedEnvelope<T> = {
   ts: number;
   data: T;
@@ -16,10 +18,20 @@ export const useCachedJson = <T>(input: {
   refreshMs?: number;
 }) => {
   const { cacheKey, url, enabled = true, refreshMs = 0 } = input;
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(Boolean(enabled));
-
   const storageKey = useMemo(() => getStorageKey(cacheKey), [cacheKey]);
+
+  const [data, setData] = useState<T | null>(() => {
+    if (!enabled) {
+      return null;
+    }
+    return readCachedJsonSync<T>(cacheKey);
+  });
+  const [loading, setLoading] = useState(() => {
+    if (!enabled) {
+      return false;
+    }
+    return !readCachedJsonSync<T>(cacheKey);
+  });
 
   useEffect(() => {
     if (!enabled) {
