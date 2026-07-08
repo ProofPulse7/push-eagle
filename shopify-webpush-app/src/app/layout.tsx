@@ -50,6 +50,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <CrispChatWidget />
+      </head>
       <body className={`${inter.variable} font-body antialiased bg-background`}>
         <ThemeProvider
           attribute="class"
@@ -68,7 +71,6 @@ export default function RootLayout({
                     <AppLayout>{children}</AppLayout>
                   </Suspense>
                   <Toaster />
-                  <CrispChatWidget />
                 </AppBootstrapLoader>
               </AppSetupGate>
             </SettingsProvider>
