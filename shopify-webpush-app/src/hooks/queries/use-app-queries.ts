@@ -168,6 +168,30 @@ export function useSegments() {
   });
 }
 
+export function useSegmentCustomAttributes() {
+  const shop = useShopDomain();
+  const queryClient = useQueryClient();
+
+  return useQuery({
+    queryKey: queryKeys.segmentCustomAttributes(shop),
+    queryFn: () =>
+      fetchJsonWithShop<{ attributes: Array<Record<string, unknown>> }>(
+        '/api/segments/custom-attributes',
+        shop,
+      ),
+    enabled: Boolean(shop),
+    staleTime: SETTINGS_STALE_MS,
+    refetchOnMount: false,
+    placeholderData: (previous) =>
+      previous ??
+      (shop
+        ? (queryClient.getQueryData(queryKeys.segmentCustomAttributes(shop)) as
+            | { attributes: Array<Record<string, unknown>> }
+            | undefined)
+        : undefined),
+  });
+}
+
 export function useSubscribersOverview() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
@@ -697,6 +721,10 @@ export async function prefetchAppPages(queryClient: QueryClient, shop: string) {
         const fresh = await fetchJsonWithShop<{ segments: unknown[] }>('/api/segments', shop);
         return mergeSegmentsFromCache(queryClient, shop, fresh);
       }),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.segmentCustomAttributes(shop), () =>
+        fetchJsonWithShop<{ attributes: unknown[] }>('/api/segments/custom-attributes', shop),
+      ),
     () =>
       prefetchIfMissing(queryClient, queryKeys.billingStatus(shop), () =>
         fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=0', shop),

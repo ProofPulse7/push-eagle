@@ -191,6 +191,34 @@ export const d1GetCustomerTagsMap = async (shopDomain: string): Promise<Map<stri
   return map;
 };
 
+export const d1GetCustomerProfileMap = async (
+  shopDomain: string,
+): Promise<Map<string, { firstName: string | null; lastName: string | null }>> => {
+  await ensureD1CustomersSchema();
+  const rows = await runD1Query(
+    `
+      SELECT external_id, first_name, last_name
+      FROM shopify_customers
+      WHERE shop_domain = ?
+        AND external_id IS NOT NULL
+    `,
+    [shopDomain],
+  );
+
+  const map = new Map<string, { firstName: string | null; lastName: string | null }>();
+  for (const row of rows as Array<Record<string, unknown>>) {
+    const externalId = row.external_id == null ? '' : String(row.external_id);
+    if (!externalId) {
+      continue;
+    }
+    map.set(externalId, {
+      firstName: row.first_name == null ? null : String(row.first_name),
+      lastName: row.last_name == null ? null : String(row.last_name),
+    });
+  }
+  return map;
+};
+
 export const d1GetDistinctCustomerTags = async (
   shopDomain: string,
   limit = 500,

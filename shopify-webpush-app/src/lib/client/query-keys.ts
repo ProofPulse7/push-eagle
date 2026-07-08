@@ -12,6 +12,7 @@ export const queryKeys = {
   automationStats: (shop: string, from: string, to: string) =>
     ['pe', shop, 'automations', 'stats', from, to] as const,
   segments: (shop: string) => ['pe', shop, 'segments'] as const,
+  segmentCustomAttributes: (shop: string) => ['pe', shop, 'segments', 'custom-attributes'] as const,
   subscribersOverview: (shop: string) => ['pe', shop, 'subscribers', 'overview'] as const,
   subscribersGrowthSeries: (shop: string) => ['pe', shop, 'subscribers', 'growth-series'] as const,
   subscribersGrowth: (shop: string, from: string, to: string) =>

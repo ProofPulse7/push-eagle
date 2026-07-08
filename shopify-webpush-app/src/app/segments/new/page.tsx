@@ -22,6 +22,7 @@ import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import { useSettings } from '@/context/settings-context';
 import { queryKeys } from '@/lib/client/query-keys';
+import type { SegmentCustomAttribute } from '@/lib/types/segment-custom-attributes';
 
 const segmentCriteria = {
   actions: [
@@ -79,6 +80,7 @@ type Condition = {
   dateValue?: DateRange;
   textValue: string;
   daysValue: number;
+  attributeName?: string;
   selectedValues: LocationValue[];
 };
 
@@ -219,6 +221,7 @@ export default function NewSegmentPage() {
   const [regionOptions, setRegionOptions] = useState<SelectOption[]>([]);
   const [cityOptions, setCityOptions] = useState<SelectOption[]>([]);
   const [customerTagOptions, setCustomerTagOptions] = useState<SelectOption[]>([]);
+  const [customAttributes, setCustomAttributes] = useState<SegmentCustomAttribute[]>([]);
   const [isEstimating, setIsEstimating] = useState(false);
   const [estimateError, setEstimateError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -259,6 +262,7 @@ export default function NewSegmentPage() {
         setRegionOptions(toOptions(json.regions));
         setCityOptions(toOptions(json.cities));
         setCustomerTagOptions(toOptions(json.customerTags));
+        setCustomAttributes(Array.isArray(json.customAttributes) ? json.customAttributes as SegmentCustomAttribute[] : []);
       } catch {
         toast({
           title: 'Could not load segment filters',
@@ -643,12 +647,128 @@ export default function NewSegmentPage() {
                   </div>
                 ) : null}
             </div>;
+        case 'Custom attribute': {
+            const selectedAttribute =
+              customAttributes.find((attribute) => attribute.name === condition.attributeName) ?? null;
+            const optionChoices =
+              selectedAttribute?.options?.map((value) => ({ value, label: value })) ?? [];
+
+            const handleAttributeSelect = (attributeName: string) => {
+              handleConditionChange(groupId, condition.id, 'attributeName', attributeName);
+              handleConditionChange(groupId, condition.id, 'selectedValues', []);
+              handleConditionChange(groupId, condition.id, 'textValue', '');
+            };
+
+            const handleValueSelect = (value: string, label: string) => {
+              if (!condition.selectedValues.some((entry) => entry.value === value)) {
+                change('selectedValues', [...condition.selectedValues, { type: 'tag', value, label }]);
+              }
+            };
+            const handleValueUnselect = (value: string) => {
+              change('selectedValues', condition.selectedValues.filter((entry) => entry.value !== value));
+            };
+
+            return (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span>Attribute</span>
+                  <Select
+                    value={condition.attributeName || ''}
+                    onValueChange={handleAttributeSelect}
+                  >
+                    <SelectTrigger className="w-auto min-w-[12rem] bg-card">
+                      <SelectValue placeholder="Select attribute" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {customAttributes.map((attribute) => (
+                        <SelectItem key={attribute.name} value={attribute.name}>
+                          {attribute.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={condition.operator} onValueChange={(v) => change('operator', v)}>
+                    <SelectTrigger className="w-auto bg-card"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="is">is</SelectItem>
+                      <SelectItem value="is not">is not</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {selectedAttribute?.type === 'number' ? (
+                    <Input
+                      className="w-32 bg-card"
+                      type="number"
+                      placeholder="Value"
+                      value={condition.textValue}
+                      onChange={(e) => change('textValue', e.target.value)}
+                    />
+                  ) : selectedAttribute?.type === 'date' ? (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className={cn(
+                            'font-normal w-auto justify-start bg-card',
+                            !condition.dateValue?.from && 'text-muted-foreground',
+                          )}
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {condition.dateValue?.from ? format(condition.dateValue.from, 'PPP') : 'Pick a date'}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0">
+                        <Calendar
+                          mode="single"
+                          selected={condition.dateValue?.from}
+                          onSelect={(date) => {
+                            change('dateValue', { from: date, to: undefined });
+                            change('textValue', date ? format(date, 'yyyy-MM-dd') : '');
+                          }}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  ) : selectedAttribute?.type === 'category' || selectedAttribute?.type === 'multiple-choice' ? (
+                    <MultiSelectPillFilter
+                      placeholder="Select value"
+                      options={optionChoices}
+                      selectedValues={condition.selectedValues.map((entry) => entry.value)}
+                      onSelect={handleValueSelect}
+                      onUnselect={handleValueUnselect}
+                    />
+                  ) : (
+                    <Input
+                      className="w-48 bg-card"
+                      placeholder="Value"
+                      value={condition.textValue}
+                      onChange={(e) => change('textValue', e.target.value)}
+                    />
+                  )}
+                </div>
+                {condition.selectedValues.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {condition.selectedValues.map((entry) => (
+                      <Badge key={entry.value} variant="outline" className="gap-1.5 pr-1 bg-white border-border shadow-sm">
+                        {entry.label}
+                        <button
+                          onClick={() => handleValueUnselect(entry.value)}
+                          className="rounded-full hover:bg-black/10 dark:hover:bg-white/10"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+        }
         default: return null;
     }
   };
 
   const handleConditionTypeChange = (groupId: string, conditionId: string, newType: string) => {
-    const isProperty = segmentCriteria.properties.some(p => p.value === newType);
+    const isProperty = segmentCriteria.properties.some(p => p.value === newType) || newType === 'Custom attribute';
     const newOperator = isProperty ? 'is' : 'has';
     const newDateOperator = newType === 'Subscribed' ? 'in the last' : 'at any time';
     
@@ -658,7 +778,15 @@ export default function NewSegmentPage() {
                 ...group,
                 conditions: group.conditions.map(c => {
                     if (c.id === conditionId) {
-                        return { ...c, type: newType, operator: newOperator, dateOperator: newDateOperator, selectedValues: [] };
+                        return {
+                          ...c,
+                          type: newType,
+                          operator: newOperator,
+                          dateOperator: newDateOperator,
+                          selectedValues: [],
+                          attributeName: newType === 'Custom attribute' ? customAttributes[0]?.name ?? '' : undefined,
+                          textValue: '',
+                        };
                     }
                     return c;
                 })
@@ -723,6 +851,13 @@ export default function NewSegmentPage() {
                                             <Separator className="my-1" />
                                             <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Properties</div>
                                             {segmentCriteria.properties.map(prop => <SelectItem key={prop.value} value={prop.value}>{prop.label}</SelectItem>)}
+                                            {customAttributes.length > 0 ? (
+                                              <>
+                                                <Separator className="my-1" />
+                                                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Custom attributes</div>
+                                                <SelectItem value="Custom attribute">Custom attribute</SelectItem>
+                                              </>
+                                            ) : null}
                                         </SelectContent>
                                     </Select>
                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => removeCondition(group.id, condition.id)}>

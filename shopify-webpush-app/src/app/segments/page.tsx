@@ -2,9 +2,14 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useSegments } from '@/hooks/queries/use-app-queries';
+import { useSegmentCustomAttributes, useSegments } from '@/hooks/queries/use-app-queries';
 import { PageLoadingShell } from '@/components/ui/loading-ui';
 import { queryKeys } from '@/lib/client/query-keys';
+import {
+  formatSegmentAttributeType,
+  type SegmentCustomAttribute,
+  type SegmentCustomAttributeType,
+} from '@/lib/types/segment-custom-attributes';
 import {
   clearSegmentDeleted,
   deleteSegmentInBackground,
@@ -45,34 +50,26 @@ type SegmentApiRow = {
 
 const initialSegments: SegmentRow[] = [];
 
-const initialCustomAttributes = [
-  { name: 'LASTNAME', type: 'text' },
-  { name: 'FIRSTNAME', type: 'text' },
-  { name: 'CONTACT_TIMEZONE', type: 'text' },
-  { name: 'NOTE', type: 'text' },
-  { name: 'COMPANY', type: 'text' },
-  { name: 'PURCHASE_COUNT', type: 'number' },
-  { name: 'LAST_PURCHASE_DATE', type: 'date' },
-  { name: 'COUNTRY', type: 'text' },
-  { name: 'PROVINCE', type: 'text' },
-  { name: 'COUNTRY_CODE', type: 'text' },
-  { name: 'PROVINCE_CODE', type: 'text' },
-  { name: 'CITY', type: 'text' },
-  { name: 'ZIP', type: 'text' },
-];
-
 const ITEMS_PER_PAGE = 5;
+
+type AttributeInput = {
+  name: string;
+  type: SegmentCustomAttributeType;
+  options?: string[];
+};
 
 const AddAttributeDialog = ({ 
     open, 
     onOpenChange,
     onAddAttribute,
     existingAttributes,
+    isSaving,
 }: { 
     open: boolean, 
     onOpenChange: (open: boolean) => void,
-    onAddAttribute: (name: string, type: string) => void,
-    existingAttributes: { name: string, type: string }[],
+    onAddAttribute: (attribute: AttributeInput) => void,
+    existingAttributes: SegmentCustomAttribute[],
+    isSaving?: boolean,
 }) => {
     const [attributeName, setAttributeName] = useState('');
     const [attributeType, setAttributeType] = useState('text');
@@ -126,8 +123,35 @@ const AddAttributeDialog = ({
     }
 
     const handleSubmit = () => {
+        const normalizedOptions =
+            attributeType === 'category'
+                ? categories.map((entry) => entry.trim()).filter(Boolean)
+                : attributeType === 'multiple-choice'
+                  ? options.map((entry) => entry.trim()).filter(Boolean)
+                  : undefined;
+
+        if (
+            attributeType === 'category' &&
+            (!normalizedOptions || normalizedOptions.length === 0)
+        ) {
+            setErrors((current) => ({ ...current, categories: 'Add at least one category' }));
+            return;
+        }
+
+        if (
+            attributeType === 'multiple-choice' &&
+            (!normalizedOptions || normalizedOptions.length === 0)
+        ) {
+            setErrors((current) => ({ ...current, options: 'Add at least one option' }));
+            return;
+        }
+
         if (validate(attributeName, categories, options, attributeType) && attributeName.trim()) {
-            onAddAttribute(attributeName.trim().toUpperCase().replace(/\s/g, '_'), attributeType);
+            onAddAttribute({
+                name: attributeName.trim().toUpperCase().replace(/\s/g, '_'),
+                type: attributeType as SegmentCustomAttributeType,
+                options: normalizedOptions,
+            });
             resetState();
             onOpenChange(false);
         }
@@ -267,7 +291,9 @@ const AddAttributeDialog = ({
                 </div>
                 <DialogFooter>
                     <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-                    <Button type="submit" onClick={handleSubmit} disabled={isSubmitDisabled}>Add attribute</Button>
+                    <Button type="submit" onClick={handleSubmit} disabled={isSubmitDisabled || isSaving}>
+                        {isSaving ? 'Adding…' : 'Add attribute'}
+                    </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
@@ -280,11 +306,26 @@ export default function SegmentsPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { data: segmentsData, isLoading, isFetching } = useSegments();
+  const {
+    data: customAttributesData,
+    isLoading: customAttributesLoading,
+    isFetching: customAttributesFetching,
+  } = useSegmentCustomAttributes();
   const [resolvedShopDomain, setResolvedShopDomain] = useState('');
-  const [customAttributes, setCustomAttributes] = useState(initialCustomAttributes);
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const totalPages = Math.ceil(customAttributes.length / ITEMS_PER_PAGE);
+  const [isSavingAttribute, setIsSavingAttribute] = useState(false);
+  const [deletingAttribute, setDeletingAttribute] = useState<string | null>(null);
+
+  const customAttributes = useMemo(() => {
+    const rows = customAttributesData?.attributes;
+    if (!Array.isArray(rows)) {
+      return [] as SegmentCustomAttribute[];
+    }
+    return rows as SegmentCustomAttribute[];
+  }, [customAttributesData]);
+
+  const totalPages = Math.max(1, Math.ceil(customAttributes.length / ITEMS_PER_PAGE));
 
   useEffect(() => {
     const fromContext = (shopDomain || '').trim().toLowerCase();
@@ -309,6 +350,10 @@ export default function SegmentsPage() {
     }));
   }, [segmentsData]);
 
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
   const paginatedAttributes = customAttributes.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
@@ -322,13 +367,107 @@ export default function SegmentsPage() {
     setCurrentPage((prev) => Math.max(prev - 1, 1));
   };
   
-  const handleAddAttribute = (name: string, type: string) => {
-    const newAttribute = { name, type };
-    setCustomAttributes(prev => [newAttribute, ...prev]);
-  }
+  const handleAddAttribute = async (attribute: AttributeInput) => {
+    if (!resolvedShopDomain) {
+      return;
+    }
 
-  const handleRemoveAttribute = (name: string) => {
-    setCustomAttributes(prev => prev.filter(attr => attr.name !== name));
+    const cacheKey = queryKeys.segmentCustomAttributes(resolvedShopDomain);
+    const previous = queryClient.getQueryData<{ attributes?: SegmentCustomAttribute[] }>(cacheKey);
+    const optimistic: SegmentCustomAttribute = {
+      name: attribute.name,
+      type: attribute.type,
+      options: attribute.options,
+      isSystem: false,
+    };
+
+    queryClient.setQueryData(cacheKey, (current: { attributes?: SegmentCustomAttribute[] } | undefined) => ({
+      ok: true,
+      attributes: [optimistic, ...(current?.attributes ?? previous?.attributes ?? customAttributes)],
+    }));
+
+    setIsSavingAttribute(true);
+    try {
+      const response = await fetch(
+        `/api/segments/custom-attributes?shop=${encodeURIComponent(resolvedShopDomain)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shopDomain: resolvedShopDomain,
+            name: attribute.name,
+            type: attribute.type,
+            options: attribute.options,
+          }),
+        },
+      );
+      const json = await response.json();
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error ?? 'Failed to add attribute.');
+      }
+
+      await queryClient.invalidateQueries({ queryKey: cacheKey });
+      toast({
+        title: 'Attribute added',
+        description: `${attribute.name} is ready for segmentation.`,
+      });
+    } catch (error) {
+      if (previous) {
+        queryClient.setQueryData(cacheKey, previous);
+      }
+      toast({
+        title: 'Unable to add attribute',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSavingAttribute(false);
+    }
+  };
+
+  const handleRemoveAttribute = async (name: string) => {
+    if (!resolvedShopDomain) {
+      return;
+    }
+
+    const cacheKey = queryKeys.segmentCustomAttributes(resolvedShopDomain);
+    const previous = queryClient.getQueryData<{ attributes?: SegmentCustomAttribute[] }>(cacheKey);
+
+    queryClient.setQueryData(cacheKey, (current: { attributes?: SegmentCustomAttribute[] } | undefined) => ({
+      ok: true,
+      attributes: (current?.attributes ?? previous?.attributes ?? customAttributes).filter(
+        (attribute) => attribute.name !== name,
+      ),
+    }));
+
+    setDeletingAttribute(name);
+    try {
+      const response = await fetch(
+        `/api/segments/custom-attributes?shop=${encodeURIComponent(resolvedShopDomain)}&name=${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      );
+      const json = await response.json();
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error ?? 'Failed to delete attribute.');
+      }
+
+      await queryClient.invalidateQueries({ queryKey: cacheKey });
+      toast({
+        title: 'Attribute removed',
+        description: `${name} was deleted.`,
+      });
+    } catch (error) {
+      if (previous) {
+        queryClient.setQueryData(cacheKey, previous);
+      }
+      toast({
+        title: 'Unable to delete attribute',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setDeletingAttribute(null);
+    }
   };
 
   const handleDeleteSegment = (segmentId: string, segmentName: string) => {
@@ -374,8 +513,15 @@ export default function SegmentsPage() {
   const cachedSegments = resolvedShopDomain
     ? queryClient.getQueryData<{ segments?: SegmentApiRow[] }>(queryKeys.segments(resolvedShopDomain))
     : undefined;
+  const cachedCustomAttributes = resolvedShopDomain
+    ? queryClient.getQueryData<{ attributes?: SegmentCustomAttribute[] }>(
+        queryKeys.segmentCustomAttributes(resolvedShopDomain),
+      )
+    : undefined;
   const effectiveSegmentsData = segmentsData ?? cachedSegments;
+  const effectiveCustomAttributesData = customAttributesData ?? cachedCustomAttributes;
   const showInitialLoad = isLoading && !effectiveSegmentsData;
+  const showAttributesInitialLoad = customAttributesLoading && !effectiveCustomAttributesData;
 
   return (
     <PageLoadingShell
@@ -486,44 +632,81 @@ export default function SegmentsPage() {
       
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Custom attributes</CardTitle>
+            <div>
+              <CardTitle>Custom attributes</CardTitle>
+              <CardDescription>
+                Built-in subscriber properties and your own fields for advanced segmentation.
+              </CardDescription>
+            </div>
             <Button onClick={() => setIsDialogOpen(true)}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Add custom attribute
             </Button>
         </CardHeader>
         <CardContent>
+          {showAttributesInitialLoad ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading custom attributes…</p>
+          ) : (
              <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Attribute name</TableHead>
                     <TableHead>Attribute type</TableHead>
+                    <TableHead>Source</TableHead>
                     <TableHead>Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {paginatedAttributes.map((attribute) => (
+                  {paginatedAttributes.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                        No custom attributes yet.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                  paginatedAttributes.map((attribute) => (
                     <TableRow key={attribute.name}>
                       <TableCell className="font-medium text-muted-foreground py-2">{attribute.name}</TableCell>
-                      <TableCell className="text-muted-foreground py-2">{attribute.type}</TableCell>
+                      <TableCell className="text-muted-foreground py-2">
+                        {formatSegmentAttributeType(attribute.type)}
+                        {attribute.options && attribute.options.length > 0 ? (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            ({attribute.options.length} options)
+                          </span>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="py-2">
-                          <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive h-8 w-8" onClick={() => handleRemoveAttribute(attribute.name)}>
+                        <Badge variant={attribute.isSystem ? 'secondary' : 'outline'}>
+                          {attribute.isSystem ? 'Built-in' : 'Custom'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="py-2">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-muted-foreground hover:text-destructive h-8 w-8"
+                            onClick={() => void handleRemoveAttribute(attribute.name)}
+                            disabled={attribute.isSystem || deletingAttribute === attribute.name}
+                            title={attribute.isSystem ? 'Built-in attributes cannot be removed' : 'Delete attribute'}
+                          >
                               <Trash2 className="h-4 w-4" />
                           </Button>
                       </TableCell>
                     </TableRow>
-                  ))}
+                  )))}
                 </TableBody>
               </Table>
+          )}
         </CardContent>
         <CardFooter className="flex justify-end items-center gap-2">
-            <Button variant="outline" size="icon" onClick={handlePrevPage} disabled={currentPage === 1}>
+            <Button variant="outline" size="icon" onClick={handlePrevPage} disabled={currentPage === 1 || showAttributesInitialLoad}>
                 <ChevronLeft className="h-4 w-4" />
             </Button>
             <span className="text-sm text-muted-foreground">
                 {currentPage} / {totalPages}
+                {customAttributesFetching ? ' · syncing…' : ''}
             </span>
-             <Button variant="outline" size="icon" onClick={handleNextPage} disabled={currentPage === totalPages}>
+             <Button variant="outline" size="icon" onClick={handleNextPage} disabled={currentPage === totalPages || showAttributesInitialLoad}>
                 <ChevronRight className="h-4 w-4" />
             </Button>
         </CardFooter>
@@ -532,8 +715,9 @@ export default function SegmentsPage() {
       <AddAttributeDialog 
         open={isDialogOpen} 
         onOpenChange={setIsDialogOpen}
-        onAddAttribute={handleAddAttribute}
+        onAddAttribute={(attribute) => void handleAddAttribute(attribute)}
         existingAttributes={customAttributes}
+        isSaving={isSavingAttribute}
       />
 
     </div>

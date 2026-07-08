@@ -392,7 +392,18 @@ type SegmentConditionSelectedValue = {
 
 type SegmentCondition = {
   id?: string;
-  type: 'Clicked' | 'Purchased' | 'Purchased a product' | 'Purchased from collection' | 'Subscribed' | 'Location' | 'Country' | 'City' | 'Region' | 'Customer tag';
+  type:
+    | 'Clicked'
+    | 'Purchased'
+    | 'Purchased a product'
+    | 'Purchased from collection'
+    | 'Subscribed'
+    | 'Location'
+    | 'Country'
+    | 'City'
+    | 'Region'
+    | 'Customer tag'
+    | 'Custom attribute';
   operator?: 'is' | 'is not' | 'has' | 'has not';
   countOperator?: 'at least once' | 'more than' | 'less than' | 'exactly';
   countValue?: number;
@@ -400,6 +411,7 @@ type SegmentCondition = {
   dateValue?: { from?: string | Date; to?: string | Date };
   textValue?: string;
   daysValue?: number;
+  attributeName?: string;
   selectedValues?: SegmentConditionSelectedValue[];
 };
 
@@ -6197,7 +6209,9 @@ const buildCriteriaSummary = (conditionGroups: SegmentConditionGroup[]) => {
   }
 
   const parts: string[] = [first.type];
-  if (first.textValue) {
+  if (first.type === 'Custom attribute' && first.attributeName) {
+    parts.push(String(first.attributeName));
+  } else if (first.textValue) {
     parts.push(String(first.textValue));
   }
 
@@ -6584,9 +6598,17 @@ const queryConditionSubscriberIds = async (shopDomain: string, condition: Segmen
         }
       }
     }
+  } else if (condition.type === 'Custom attribute') {
+    const { queryCustomAttributeSubscriberIds } = await import('@/lib/server/segment-custom-attributes');
+    matched = await queryCustomAttributeSubscriberIds(shopDomain, {
+      operator: condition.operator === 'is not' ? 'is not' : 'is',
+      attributeName: condition.attributeName,
+      textValue: condition.textValue,
+      selectedValues: condition.selectedValues,
+    });
   }
 
-  const operator = condition.operator ?? (['Location', 'Country', 'City', 'Region', 'Customer tag'].includes(condition.type) ? 'is' : 'has');
+  const operator = condition.operator ?? (['Location', 'Country', 'City', 'Region', 'Customer tag', 'Custom attribute'].includes(condition.type) ? 'is' : 'has');
   if (operator === 'has not' || operator === 'is not') {
     const complement = new Set<number>();
     for (const id of allIds) {
