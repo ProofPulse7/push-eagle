@@ -1,10 +1,11 @@
-
 'use client';
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import TextareaAutosize from 'react-textarea-autosize';
 import { useAutomationState } from '@/context/automation-context';
+import { useSettings } from '@/context/settings-context';
+import { formatStoreDisplayName, resolveMerchantWebsiteUrl } from '@/lib/client/merchant-website-url';
 
 import { IOSPreview } from '../composer/previews/ios-preview';
 import { AndroidPreview } from '../composer/previews/android-preview';
@@ -16,9 +17,10 @@ import { Button } from '../ui/button';
 import { Label } from '../ui/label';
 import { Input } from '../ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
-import { ArrowLeft, Lightbulb, Save, Smile } from 'lucide-react';
+import { ArrowLeft, Check, Lightbulb, Loader2, Smile } from 'lucide-react';
 import { LogoUploaderEditor } from '../composer/editor-parts/logo-uploader-editor';
 import { ImageEditorSheet } from '../composer/editor-parts/image-editor-sheet';
+import { AutomationComposerActions } from './automation-composer-actions';
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
 
@@ -29,12 +31,23 @@ const InfoBox = ({ children }: { children: React.ReactNode }) => (
     </div>
 );
 
+const resolveCartPageDisplayUrl = (storeUrl: string, targetUrl: string) => {
+    const cartPath = targetUrl.startsWith('/') ? targetUrl : '/cart';
+    const merchantUrl = resolveMerchantWebsiteUrl({ storeUrl });
+    if (merchantUrl) {
+        return `${merchantUrl.replace(/\/$/, '')}${cartPath}`;
+    }
 
-const AbandonedCartEditorPanel = ({ handleImageUpload, setEditingState }: {
+    const host = formatStoreDisplayName(storeUrl);
+    return host ? `${host}${cartPath}` : cartPath;
+};
+
+const AbandonedCartEditorPanel = ({ cartPageUrl, handleImageUpload, setEditingState }: {
+    cartPageUrl: string;
     handleImageUpload: (file: File | undefined, imageType: 'windows' | 'mac' | 'android' | 'logo') => void;
     setEditingState: (state: { url: string; aspect: number; type: string } | null) => void;
 }) => {
-    const { title, setTitle, message, setMessage, primaryLink, actionButtons, setActionButtons, logo, setLogo } = useAutomationState();
+    const { title, setTitle, message, setMessage, actionButtons, setActionButtons, logo, setLogo } = useAutomationState();
     const handleTitleEmojiSelect = (emoji: { emoji: string }) => setTitle(`${title}${emoji.emoji}`);
     const handleMessageEmojiSelect = (emoji: { emoji: string }) => setMessage(`${message}${emoji.emoji}`);
     const MESSAGE_LIMIT = 100;
@@ -101,7 +114,7 @@ const AbandonedCartEditorPanel = ({ handleImageUpload, setEditingState }: {
 
             <div className="space-y-1.5">
                 <Label htmlFor="primaryLink">Primary link</Label>
-                <Input id="primaryLink" value={primaryLink} disabled />
+                <Input id="primaryLink" value={cartPageUrl} disabled />
                 <InfoBox>By default, PushEagle will use your cart page for the redirect link.</InfoBox>
             </div>
 
@@ -119,7 +132,7 @@ const AbandonedCartEditorPanel = ({ handleImageUpload, setEditingState }: {
                     </div>
                     <div className="space-y-1.5">
                         <Label htmlFor="btn-1-link" className="text-muted-foreground">Link</Label>
-                        <Input id="btn-1-link" value={primaryLink} disabled />
+                        <Input id="btn-1-link" value={cartPageUrl} disabled />
                          <InfoBox>By default, PushEagle will use your cart page for button 1 link.</InfoBox>
                     </div>
                 </div>
@@ -152,10 +165,18 @@ const AbandonedCartEditorPanel = ({ handleImageUpload, setEditingState }: {
 
 export function AbandonedCartComposer({ reminderTitle }: { reminderTitle: string }) {
     const { 
-        title, message, primaryLink, logo, actionButtons, setLogo
+        title, message, primaryLink, logo, actionButtons, setLogo,
+        windowsHero, macHero, androidHero,
     } = useAutomationState();
+    const { storeUrl } = useSettings();
     
     const [editingState, setEditingState] = useState<{ url: string; aspect: number; type: string } | null>(null);
+    const [saveStatus, setSaveStatus] = useState<'Unsaved' | 'Saving...' | 'Changes saved'>('Unsaved');
+
+    const cartPageUrl = useMemo(
+        () => resolveCartPageDisplayUrl(storeUrl, primaryLink || '/cart'),
+        [storeUrl, primaryLink],
+    );
 
     const generatedHero = "data:image/svg+xml,%3csvg width='728' height='360' viewBox='0 0 728 360' fill='none' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='728' height='360' fill='%23E2E8F0'/%3e%3ctext fill='%2364748B' font-family='Arial' font-size='24' x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle'%3ePRODUCT IMAGE IS GENERATED AUTOMATICALLY%3c/text%3e%3c/svg%3e";
 
@@ -173,26 +194,71 @@ export function AbandonedCartComposer({ reminderTitle }: { reminderTitle: string
         }
     };
 
+    useEffect(() => {
+        const hasContent = title || message || logo.file || actionButtons.length > 0;
+        if (!hasContent) {
+            setSaveStatus('Unsaved');
+            return;
+        }
+
+        setSaveStatus('Saving...');
+        const handler = setTimeout(() => {
+            setSaveStatus('Changes saved');
+        }, 1500);
+
+        return () => clearTimeout(handler);
+    }, [title, message, logo, actionButtons]);
+
+    const getAutomationData = () => ({
+        title,
+        message,
+        primaryLink: primaryLink || '/cart',
+        logo,
+        windowsHero,
+        macHero,
+        androidHero,
+        actionButtons,
+    });
+
     return (
         <div className="h-screen w-full grid grid-cols-1 lg:grid-cols-[minmax(0,_480px)_1fr]">
-            {/* Left Panel: Creator */}
             <div className="bg-card border-r flex flex-col h-screen">
-                {/* Header (fixed) */}
-                <div className="p-4 border-b flex items-center gap-4 shrink-0">
-                    <Button variant="outline" size="icon" asChild>
-                        <Link href="/automations/abandoned-cart-recovery">
-                            <ArrowLeft className="h-4 w-4" />
-                        </Link>
-                    </Button>
-                    <h2 className="text-lg font-semibold">Abandoned cart recovery - {reminderTitle}</h2>
+                <div className="p-4 border-b flex items-center justify-between shrink-0 gap-4">
+                    <div className="flex items-center gap-4 min-w-0">
+                        <Button variant="outline" size="icon" asChild className="shrink-0">
+                            <Link href="/automations/abandoned-cart-recovery">
+                                <ArrowLeft className="h-4 w-4" />
+                            </Link>
+                        </Button>
+                        <h2 className="text-lg font-semibold truncate">Abandoned cart recovery - {reminderTitle}</h2>
+                    </div>
+                    {saveStatus === 'Saving...' ? (
+                        <p className="text-sm text-muted-foreground flex items-center gap-2 shrink-0">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <span>Saving...</span>
+                        </p>
+                    ) : saveStatus === 'Changes saved' ? (
+                        <p className="text-sm text-green-600 flex items-center gap-2 shrink-0">
+                            <Check className="h-4 w-4" />
+                            <span>Changes saved</span>
+                        </p>
+                    ) : (
+                        <p className="text-sm text-muted-foreground flex items-center gap-2 shrink-0">
+                            <Check className="h-4 w-4 opacity-0" />
+                            <span>Unsaved changes</span>
+                        </p>
+                    )}
                 </div>
 
                 <ScrollArea type="always" className="flex-grow campaign-creator-scroll-area">
-                   <AbandonedCartEditorPanel handleImageUpload={handleImageUpload} setEditingState={setEditingState} />
+                   <AbandonedCartEditorPanel
+                        cartPageUrl={cartPageUrl}
+                        handleImageUpload={handleImageUpload}
+                        setEditingState={setEditingState}
+                   />
                 </ScrollArea>
             </div>
 
-            {/* Right Panel: Previews */}
             <div className="h-screen bg-background flex flex-col">
                 <div className="flex-grow overflow-y-auto">
                     <div className="grid min-h-full grid-cols-1 lg:grid-cols-2 lg:grid-rows-2 gap-px bg-slate-300/80 dark:bg-slate-700">
@@ -200,7 +266,7 @@ export function AbandonedCartComposer({ reminderTitle }: { reminderTitle: string
                             <AndroidPreview
                                 title={title}
                                 message={message}
-                                link={primaryLink}
+                                link={cartPageUrl}
                                 icon={logo.preview}
                                 hero={generatedHero}
                                 actionButtons={actionButtons}
@@ -210,7 +276,7 @@ export function AbandonedCartComposer({ reminderTitle }: { reminderTitle: string
                             <WindowsPreview
                                 title={title}
                                 message={message}
-                                link={primaryLink}
+                                link={cartPageUrl}
                                 hero={generatedHero}
                                 actionButtons={actionButtons}
                             />
@@ -219,7 +285,7 @@ export function AbandonedCartComposer({ reminderTitle }: { reminderTitle: string
                            <MacOSPreview
                                 title={title}
                                 message={message}
-                                link={primaryLink}
+                                link={cartPageUrl}
                                 icon={logo.preview}
                                 hero={generatedHero}
                                 actionButtons={actionButtons}
@@ -229,16 +295,19 @@ export function AbandonedCartComposer({ reminderTitle }: { reminderTitle: string
                             <IOSPreview
                                 title={title}
                                 message={message}
-                                link={primaryLink}
+                                link={cartPageUrl}
                                 icon={logo.preview}
                             />
                         </div>
                     </div>
                 </div>
-                <div className="shrink-0 p-4 border-t bg-card flex justify-end items-center gap-2">
-                    <Button variant="ghost">Discard</Button>
-                    <Button variant="outline">See live preview</Button>
-                    <Button><Save className="mr-2 h-4 w-4" /> Save</Button>
+                <div className="shrink-0 p-4 border-t bg-card flex justify-end items-center">
+                    <AutomationComposerActions
+                        setSaveStatus={setSaveStatus}
+                        getAutomationData={getAutomationData}
+                        automationPath="/automations/abandoned-cart-recovery"
+                        automationRuleKey="cart_abandonment_30m"
+                    />
                 </div>
             </div>
 

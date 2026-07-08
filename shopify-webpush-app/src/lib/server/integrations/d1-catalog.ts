@@ -223,6 +223,32 @@ export type D1VariantByInventory = {
  * Looks up every variant tied to an inventory item (mirrors the Neon read in
  * processInventoryLevelUpdate) so back-in-stock transitions can be detected.
  */
+export const d1GetProductImageUrl = async (shopDomain: string, productId: string): Promise<string | null> => {
+  await ensureD1CatalogSchema();
+
+  const normalizedProductId = String(productId ?? '').trim();
+  if (!shopDomain || !normalizedProductId) {
+    return null;
+  }
+
+  const rows = await runD1Query(
+    `
+      SELECT image_url
+      FROM shopify_product_variants
+      WHERE shop_domain = ?
+        AND product_id = ?
+        AND image_url IS NOT NULL
+        AND image_url <> ''
+      ORDER BY updated_at DESC, last_seen_at DESC
+      LIMIT 1
+    `,
+    [shopDomain, normalizedProductId],
+  );
+
+  const imageUrl = (rows as Array<Record<string, unknown>>)[0]?.image_url;
+  return imageUrl == null ? null : String(imageUrl).trim() || null;
+};
+
 export const d1GetVariantsByInventoryItem = async (
   shopDomain: string,
   inventoryItemId: string,

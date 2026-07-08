@@ -5161,6 +5161,29 @@ export const processAutomationJob = async (jobId: string) => {
         },
       };
 
+      const { resolveCartReminderProductImage } = await import('@/lib/server/automation/cart-abandonment-products');
+      const cartProductIds = Array.isArray(payload.metadata?.cartProductIds)
+        ? (payload.metadata.cartProductIds as string[]).map((value) => String(value).trim()).filter(Boolean)
+        : [];
+      const cartProductImage = await resolveCartReminderProductImage({
+        shopDomain: claim.shop_domain,
+        stepKey: payloadStepKey as CartStepKey,
+        cartProductIds,
+        cartToken: payloadCartToken || null,
+        externalId: payloadExternalId || null,
+        fallbackProductId: payload.productId == null ? null : String(payload.productId),
+      });
+
+      if (cartProductImage) {
+        payload = {
+          ...payload,
+          imageUrl: cartProductImage,
+          windowsImageUrl: cartProductImage,
+          macosImageUrl: cartProductImage,
+          androidImageUrl: cartProductImage,
+        };
+      }
+
       const checkoutCompletedRows = payloadExternalId && payloadCartToken
         ? await sql`
           SELECT id
@@ -5880,6 +5903,16 @@ export const recordSubscriberActivity = async (input: {
         await persistRawEvent();
       }
 
+      const { listCartProductsInAddOrder } = await import('@/lib/server/automation/cart-abandonment-products');
+      const cartProductIds = targets.length > 0
+        ? await listCartProductsInAddOrder({
+            shopDomain: input.shopDomain,
+            cartToken: input.cartToken,
+            externalId: input.externalId,
+            currentProductId: input.productId,
+          })
+        : [];
+
       for (const stepKey of Object.keys(cartConfig.steps) as CartStepKey[]) {
         const step = cartConfig.steps[stepKey];
         if (!step.enabled || targets.length === 0) {
@@ -5906,6 +5939,7 @@ export const recordSubscriberActivity = async (input: {
             metadata: {
               stepKey,
               actionButtons: step.actionButtons ?? [],
+              cartProductIds,
             },
             externalId: input.externalId,
             productId: input.productId ?? null,

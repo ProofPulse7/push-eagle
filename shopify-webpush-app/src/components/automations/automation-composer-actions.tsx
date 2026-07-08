@@ -174,23 +174,40 @@ export const AutomationComposerActions = ({
         setIsSaving(true);
         setSaveStatus('Saving...');
         try {
-            const [logoUrl, windowsHeroUrl, macHeroUrl, androidHeroUrl] = await Promise.all([
-                resolveAutomationMediaUrl(logo.preview, shopDomain),
-                resolveAutomationMediaUrl(windowsHero.preview, shopDomain),
-                resolveAutomationMediaUrl(macHero.preview, shopDomain),
-                resolveAutomationMediaUrl(androidHero.preview, shopDomain),
-            ]);
+            const cartTargetUrl = normalizeAutomationLink(primaryLink) || '/cart';
+            const normalizedButtons = (actionButtons ?? []).map((button: { title: string; link: string }, index: number) => {
+                if (index === 0) {
+                    return {
+                        ...button,
+                        link: cartTargetUrl,
+                    };
+                }
+                return {
+                    ...button,
+                    link: normalizeAutomationLink(button.link),
+                };
+            });
+
+            const isCartAbandonment = automationRuleKey === 'cart_abandonment_30m';
+            const logoUrl = await resolveAutomationMediaUrl(logo.preview, shopDomain);
+            const [windowsHeroUrl, macHeroUrl, androidHeroUrl] = isCartAbandonment
+                ? [null, null, null]
+                : await Promise.all([
+                    resolveAutomationMediaUrl(windowsHero.preview, shopDomain),
+                    resolveAutomationMediaUrl(macHero.preview, shopDomain),
+                    resolveAutomationMediaUrl(androidHero.preview, shopDomain),
+                ]);
 
             const stepPatch = {
                 title,
                 body: message,
-                targetUrl: normalizeAutomationLink(primaryLink),
+                targetUrl: cartTargetUrl,
                 iconUrl: logoUrl,
-                imageUrl: macHeroUrl,
-                windowsImageUrl: windowsHeroUrl,
-                macosImageUrl: macHeroUrl,
-                androidImageUrl: androidHeroUrl,
-                actionButtons,
+                imageUrl: isCartAbandonment ? null : macHeroUrl,
+                windowsImageUrl: isCartAbandonment ? null : windowsHeroUrl,
+                macosImageUrl: isCartAbandonment ? null : macHeroUrl,
+                androidImageUrl: isCartAbandonment ? null : androidHeroUrl,
+                actionButtons: normalizedButtons,
             };
 
             const saveResponse = await fetch('/api/automations/rules', {
