@@ -1894,6 +1894,90 @@
     safeSessionStorageSet(getStorageKey(shopDomain, 'browser_prompt_shown'), '1');
   }
 
+  var browserPermissionInteractionHandler = null;
+
+  function disarmBrowserPermissionListener() {
+    if (!browserPermissionInteractionHandler) {
+      return;
+    }
+
+    var events = ['pointerdown', 'click', 'keydown', 'touchstart'];
+    for (var i = 0; i < events.length; i += 1) {
+      document.removeEventListener(events[i], browserPermissionInteractionHandler, true);
+    }
+    browserPermissionInteractionHandler = null;
+  }
+
+  async function requestBrowserNativePermissionOnce(config, boot, clientProfile, root) {
+    if (root) {
+      closePrompt(root);
+    }
+
+    if (!canShowBrowserPromptThisSession(config.shopDomain)) {
+      return { ok: false, skipped: true };
+    }
+
+    if (hasReachedBrowserPromptLimit(config.shopDomain)) {
+      return { ok: false, skipped: true };
+    }
+
+    refreshClientProfile(clientProfile);
+
+    if (clientProfile.permissionState === 'granted') {
+      return registerToken(config, boot, { silent: true }, clientProfile);
+    }
+
+    if (clientProfile.permissionState === 'denied') {
+      markBrowserPromptShownThisSession(config.shopDomain);
+      return { ok: false, skipped: true };
+    }
+
+    markBrowserPromptShownThisSession(config.shopDomain);
+    incrementSessionDisplayCount(config.shopDomain);
+    recordPromptAttempt(config.shopDomain);
+    void sendOptInEvent(boot, 'browser', 'view');
+    void sendOptInEvent(boot, 'browser', 'click');
+
+    var permission = await beginPermissionFromUserGesture();
+    if (clientProfile) {
+      clientProfile.permissionState = permission;
+    }
+
+    if (permission !== 'granted') {
+      return { ok: false, reason: permission === 'denied' ? 'permission-denied' : 'permission-default' };
+    }
+
+    return registerToken(config, boot, {
+      silent: false,
+      optInPromptType: 'browser',
+      skipPermissionRequest: true
+    }, clientProfile);
+  }
+
+  function armBrowserPermissionOnFirstInteraction(config, boot, clientProfile, root) {
+    if (browserPermissionInteractionHandler) {
+      return;
+    }
+
+    if (!canShowBrowserPromptThisSession(config.shopDomain)) {
+      return;
+    }
+
+    if (hasReachedBrowserPromptLimit(config.shopDomain)) {
+      return;
+    }
+
+    browserPermissionInteractionHandler = function () {
+      disarmBrowserPermissionListener();
+      void requestBrowserNativePermissionOnce(config, boot, clientProfile, root);
+    };
+
+    var events = ['pointerdown', 'click', 'keydown', 'touchstart'];
+    for (var i = 0; i < events.length; i += 1) {
+      document.addEventListener(events[i], browserPermissionInteractionHandler, true);
+    }
+  }
+
   function dismissPrompt(shopDomain, remindAfterDays) {
     var days = Number(remindAfterDays || 7);
     var safeDays = isNaN(days) ? 7 : Math.max(1, days);
@@ -1985,6 +2069,7 @@
       clearSessionDisplayCount(shopDomain);
       // Allow browser prompt again after merchant changes opt-in settings.
       safeSessionStorageRemove(getStorageKey(shopDomain, 'browser_prompt_shown'));
+      disarmBrowserPermissionListener();
     }
   }
 
@@ -2527,21 +2612,26 @@
 
   async function runBrowserNativePermissionFlow(root, config, boot, clientProfile, options) {
     var flowOptions = options || {};
-    var primaryButton = root.querySelector('[data-push-eagle-action]');
-    var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
+
+    // Browser mode never shows the custom branded card — native dialog only.
+    closePrompt(root);
 
     if (!canShowBrowserPromptThisSession(config.shopDomain)) {
-      closePrompt(root);
       return;
     }
 
     if (hasReachedBrowserPromptLimit(config.shopDomain)) {
-      closePrompt(root);
       return;
     }
 
-    if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
-      closePrompt(root);
+    refreshClientProfile(clientProfile);
+
+    if (clientProfile.permissionState === 'granted') {
+      await registerToken(config, boot, { silent: true }, clientProfile);
+      return;
+    }
+
+    if (clientProfile.permissionState === 'denied') {
       return;
     }
 
@@ -2554,17 +2644,10 @@
     }
 
     if (!canShowBrowserPromptThisSession(config.shopDomain)) {
-      closePrompt(root);
       return;
     }
 
     if (hasReachedBrowserPromptLimit(config.shopDomain)) {
-      closePrompt(root);
-      return;
-    }
-
-    if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
-      closePrompt(root);
       return;
     }
 
@@ -2572,70 +2655,21 @@
 
     if (clientProfile.permissionState === 'granted') {
       await registerToken(config, boot, { silent: true }, clientProfile);
-      closePrompt(root);
       return;
     }
 
     if (clientProfile.permissionState === 'denied') {
-      markBrowserPromptShownThisSession(config.shopDomain);
-      closePrompt(root);
       return;
     }
 
-    markBrowserPromptShownThisSession(config.shopDomain);
-    incrementSessionDisplayCount(config.shopDomain);
-    void sendOptInEvent(boot, 'browser', 'view');
-    openPrompt(root);
-
-    if (secondaryButton) {
-      secondaryButton.onclick = function () {
-        closePrompt(root);
-      };
-    }
-
-    if (!primaryButton) {
+    // Manual trigger click is already a user gesture — request native permission immediately.
+    if (flowOptions.skipTimingWait) {
+      await requestBrowserNativePermissionOnce(config, boot, clientProfile, root);
       return;
     }
 
-    primaryButton.disabled = false;
-    primaryButton.removeAttribute('aria-busy');
-
-    primaryButton.onclick = function () {
-      refreshClientProfile(clientProfile);
-
-      primaryButton.disabled = true;
-      primaryButton.setAttribute('aria-busy', 'true');
-      recordPromptAttempt(config.shopDomain);
-      void sendOptInEvent(boot, 'browser', 'click');
-
-      var permissionPromise = beginPermissionFromUserGesture();
-      closePrompt(root);
-
-      permissionPromise.then(async function (permission) {
-        if (clientProfile) {
-          clientProfile.permissionState = permission;
-        }
-
-        if (permission !== 'granted') {
-          // Keep closed — once per session. Do not reopen on deny/dismiss.
-          closePrompt(root);
-          return;
-        }
-
-        var result = await registerToken(config, boot, {
-          silent: false,
-          optInPromptType: 'browser',
-          skipPermissionRequest: true
-        }, clientProfile);
-
-        closePrompt(root);
-        if (result && (result.ok || result.queued)) {
-          return;
-        }
-      }).catch(function () {
-        closePrompt(root);
-      });
-    };
+    // Auto mode: after delay, wait for the visitor's first interaction then show native dialog.
+    armBrowserPermissionOnFirstInteraction(config, boot, clientProfile, root);
   }
 
   async function requestNotificationPermission() {
@@ -3209,14 +3243,13 @@
       }
 
       if (effectiveMode === 'browser') {
+        closePrompt(root);
         if (isMarkedSubscribed(config.shopDomain)) {
           await registerToken(config, boot, { silent: true }, clientProfile);
-          closePrompt(root);
           return;
         }
 
         if (!canShowBrowserPromptThisSession(config.shopDomain)) {
-          closePrompt(root);
           return;
         }
       }
@@ -3375,7 +3408,7 @@
         return;
       }
 
-      var standardDelayMs = getRemainingDelayMs(config.startedAt, config.delayMs);
+      // Custom mode only below — show branded opt-in card.
       if (standardDelayMs > 0) {
         await delay(standardDelayMs);
       }
