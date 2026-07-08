@@ -117,16 +117,7 @@ export default function OptInsPage() {
       : 'custom';
   const iosWidgetEnabled = mergedSettings?.iosWidgetEnabled !== false;
   const promptStats = useMemo(() => parseOptInStats(optInData), [optInData]);
-  const activeStats = livePromptType === 'browser'
-    ? promptStats.browser
-    : livePromptType === 'custom'
-      ? promptStats.custom
-      : emptyTypeStats;
-  const livePromptLabel = livePromptType === 'browser'
-    ? 'Browser'
-    : livePromptType === 'off'
-      ? 'Off'
-      : 'Custom';
+  const combinedStats = promptStats.totals;
 
   useEffect(() => {
     if (mergedSettings) {
@@ -222,15 +213,15 @@ export default function OptInsPage() {
 
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold tracking-tight">Stats ({livePromptLabel} prompt — live)</h2>
+            <h2 className="text-xl font-semibold tracking-tight">Stats (browser + custom prompts)</h2>
         </div>
         <Card>
             <CardContent className="p-0">
                 <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x">
-                    <TopStat label="Total views" value={activeStats.views} tooltipText={`Impressions for the live ${livePromptLabel.toLowerCase()} opt-in prompt.`} />
-                    <TopStat label="Total clicks" value={activeStats.clicks} tooltipText={`Allow/subscribe clicks for the live ${livePromptLabel.toLowerCase()} opt-in prompt.`} />
-                    <TopStat label="Total subscribers" value={activeStats.conversions} tooltipText={`Successful subscriptions from the live ${livePromptLabel.toLowerCase()} opt-in prompt.`} />
-                    <TopStat label="Overall conversion" value={formatPercent(activeStats.conversionPercent)} tooltipText="Subscribers divided by views for the live prompt." />
+                    <TopStat label="Total views" value={combinedStats.views} tooltipText="Combined impressions across browser and custom opt-in prompts." />
+                    <TopStat label="Total clicks" value={combinedStats.clicks} tooltipText="Combined allow/subscribe clicks across browser and custom opt-in prompts." />
+                    <TopStat label="Total subscribers" value={combinedStats.conversions} tooltipText="Combined successful subscriptions from browser and custom opt-in prompts." />
+                    <TopStat label="Overall conversion" value={formatPercent(combinedStats.conversionPercent)} tooltipText="Combined subscribers divided by combined views across both prompt types." />
                 </div>
             </CardContent>
         </Card>

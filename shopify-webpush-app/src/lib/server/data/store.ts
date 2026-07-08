@@ -8539,24 +8539,22 @@ export const getOptInPromptStats = async (
 
   const browser = buildOptInTypeStats(browserNormalized.views, browserNormalized.clicks, browserNormalized.conversions);
   const custom = buildOptInTypeStats(customNormalized.views, customNormalized.clicks, customNormalized.conversions);
-
-  if (activePromptType === 'off') {
-    const empty = buildOptInTypeStats(0, 0, 0);
-    return { browser, custom, totals: { ...empty, avgConversionPercent: 0, avgClickConversionPercent: 0 } };
-  }
-
-  const active = activePromptType === 'browser' ? browser : custom;
+  const combined = buildOptInTypeStats(
+    browser.views + custom.views,
+    browser.clicks + custom.clicks,
+    browser.conversions + custom.conversions,
+  );
 
   return {
     browser,
     custom,
     totals: {
-      views: active.views,
-      clicks: active.clicks,
-      conversions: active.conversions,
-      conversionPercent: active.conversionPercent,
-      avgConversionPercent: active.conversionPercent,
-      avgClickConversionPercent: active.clickConversionPercent,
+      views: combined.views,
+      clicks: combined.clicks,
+      conversions: combined.conversions,
+      conversionPercent: combined.conversionPercent,
+      avgConversionPercent: combined.conversionPercent,
+      avgClickConversionPercent: combined.clickConversionPercent,
     },
   };
 };

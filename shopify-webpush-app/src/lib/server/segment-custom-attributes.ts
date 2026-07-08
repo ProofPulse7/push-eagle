@@ -1,4 +1,5 @@
 import {
+  RETIRED_SYSTEM_SEGMENT_CUSTOM_ATTRIBUTES,
   SYSTEM_SEGMENT_CUSTOM_ATTRIBUTES,
   type SegmentCustomAttribute,
   type SegmentCustomAttributeType,
@@ -84,6 +85,20 @@ export const seedSystemSegmentCustomAttributes = async (shopDomain: string) => {
         NOW()
       )
       ON CONFLICT (shop_domain, name) DO NOTHING
+    `;
+  }
+
+  for (const retiredName of RETIRED_SYSTEM_SEGMENT_CUSTOM_ATTRIBUTES) {
+    await sql`
+      DELETE FROM subscriber_custom_attribute_values
+      WHERE shop_domain = ${shopDomain}
+        AND attribute_name = ${retiredName}
+    `;
+    await sql`
+      DELETE FROM segment_custom_attributes
+      WHERE shop_domain = ${shopDomain}
+        AND name = ${retiredName}
+        AND is_system = TRUE
     `;
   }
 };
