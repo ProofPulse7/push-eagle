@@ -15,6 +15,7 @@ import { QueryProvider } from '@/components/providers/query-provider';
 import { SettingsCacheSync } from '@/components/providers/settings-cache-sync';
 import { LiveShopSync } from '@/components/providers/live-shop-sync';
 import { CrispChatWidget } from '@/components/support/crisp-chat-widget';
+import { CrispChatRouteVisibility } from '@/components/support/crisp-chat-route-visibility';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -71,6 +72,7 @@ export default function RootLayout({
                     <AppLayout>{children}</AppLayout>
                   </Suspense>
                   <Toaster />
+                  <CrispChatRouteVisibility />
                 </AppBootstrapLoader>
               </AppSetupGate>
             </SettingsProvider>
