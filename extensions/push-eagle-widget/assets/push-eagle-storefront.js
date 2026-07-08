@@ -605,6 +605,14 @@
     }
   }
 
+  function safeSessionStorageRemove(key) {
+    try {
+      window.sessionStorage.removeItem(key);
+    } catch (_error) {
+      // ignore storage failures
+    }
+  }
+
   function getStorageKey(shopDomain, suffix) {
     return 'push_eagle_' + suffix + '_' + shopDomain;
   }
@@ -1878,6 +1886,14 @@
     return getRecentPromptAttempts(shopDomain).length >= BROWSER_PROMPT_MAX_ATTEMPTS;
   }
 
+  function canShowBrowserPromptThisSession(shopDomain) {
+    return safeSessionStorageGet(getStorageKey(shopDomain, 'browser_prompt_shown')) !== '1';
+  }
+
+  function markBrowserPromptShownThisSession(shopDomain) {
+    safeSessionStorageSet(getStorageKey(shopDomain, 'browser_prompt_shown'), '1');
+  }
+
   function dismissPrompt(shopDomain, remindAfterDays) {
     var days = Number(remindAfterDays || 7);
     var safeDays = isNaN(days) ? 7 : Math.max(1, days);
@@ -1967,6 +1983,8 @@
       safeLocalStorageSet(key, next);
       clearPromptDismissal(shopDomain);
       clearSessionDisplayCount(shopDomain);
+      // Allow browser prompt again after merchant changes opt-in settings.
+      safeSessionStorageRemove(getStorageKey(shopDomain, 'browser_prompt_shown'));
     }
   }
 
@@ -2512,11 +2530,18 @@
     var primaryButton = root.querySelector('[data-push-eagle-action]');
     var secondaryButton = root.querySelector('[data-push-eagle-dismiss]');
 
+    if (!canShowBrowserPromptThisSession(config.shopDomain)) {
+      closePrompt(root);
+      return;
+    }
+
     if (hasReachedBrowserPromptLimit(config.shopDomain)) {
+      closePrompt(root);
       return;
     }
 
     if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
+      closePrompt(root);
       return;
     }
 
@@ -2528,11 +2553,18 @@
       }
     }
 
+    if (!canShowBrowserPromptThisSession(config.shopDomain)) {
+      closePrompt(root);
+      return;
+    }
+
     if (hasReachedBrowserPromptLimit(config.shopDomain)) {
+      closePrompt(root);
       return;
     }
 
     if (!canShowPromptForSession(config.shopDomain, config.maxDisplaysPerSession)) {
+      closePrompt(root);
       return;
     }
 
@@ -2545,11 +2577,12 @@
     }
 
     if (clientProfile.permissionState === 'denied') {
-      openPrompt(root);
-      explainUnsupported(root, 'permission-denied');
+      markBrowserPromptShownThisSession(config.shopDomain);
+      closePrompt(root);
       return;
     }
 
+    markBrowserPromptShownThisSession(config.shopDomain);
     incrementSessionDisplayCount(config.shopDomain);
     void sendOptInEvent(boot, 'browser', 'view');
     openPrompt(root);
@@ -2584,10 +2617,8 @@
         }
 
         if (permission !== 'granted') {
-          openPrompt(root);
-          explainUnsupported(root, permission === 'denied' ? 'permission-denied' : 'unsupported');
-          primaryButton.disabled = false;
-          primaryButton.removeAttribute('aria-busy');
+          // Keep closed — once per session. Do not reopen on deny/dismiss.
+          closePrompt(root);
           return;
         }
 
@@ -2597,29 +2628,12 @@
           skipPermissionRequest: true
         }, clientProfile);
 
+        closePrompt(root);
         if (result && (result.ok || result.queued)) {
-          closePrompt(root);
           return;
         }
-
-        openPrompt(root);
-        if (result && result.reason === 'permission-denied') {
-          explainUnsupported(root, 'permission-denied');
-        } else if (result && result.reason === 'sw-script-missing') {
-          showStatus(root, 'Push setup is incomplete for this store. App proxy URL is not reachable. Update Proxy base path in app block settings.', 'error');
-        } else if (result && result.reason === 'sw-not-active') {
-          showStatus(root, 'Push service worker is still activating. Please retry in a few seconds.', 'error');
-        } else {
-          showStatus(root, 'Setup failed. Please try again. (' + (result && (result.message || result.reason) ? (result.message || result.reason) : 'unknown') + ')', 'error');
-        }
-
-        primaryButton.disabled = false;
-        primaryButton.removeAttribute('aria-busy');
       }).catch(function () {
-        openPrompt(root);
-        showStatus(root, 'Setup failed. Please try again.', 'error');
-        primaryButton.disabled = false;
-        primaryButton.removeAttribute('aria-busy');
+        closePrompt(root);
       });
     };
   }
@@ -2878,9 +2892,9 @@
           city: resolvedCity,
           region: resolvedRegion
         }),
-        optInPromptType: settings.optInPromptType && settings.optInPromptType !== 'off'
+        optInPromptType: settings.optInPromptType === 'browser' || settings.optInPromptType === 'custom'
           ? settings.optInPromptType
-          : (runtimeConfig.mode && runtimeConfig.mode !== 'off' ? runtimeConfig.mode : null)
+          : null
       };
 
       // Queue first, then save — if save fails, background flush retries forever until success.
@@ -3189,14 +3203,19 @@
       }
 
       if (clientProfile.permissionState === 'denied') {
-        openPrompt(root);
-        explainUnsupported(root, 'permission-denied');
+        // Already permanently denied by browser — don't resurface prompts.
+        closePrompt(root);
         return;
       }
 
       if (effectiveMode === 'browser') {
         if (isMarkedSubscribed(config.shopDomain)) {
           await registerToken(config, boot, { silent: true }, clientProfile);
+          closePrompt(root);
+          return;
+        }
+
+        if (!canShowBrowserPromptThisSession(config.shopDomain)) {
           closePrompt(root);
           return;
         }
