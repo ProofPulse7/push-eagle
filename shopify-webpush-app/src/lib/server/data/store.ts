@@ -464,7 +464,7 @@ const parseScopes = (value?: string | null) =>
     .map((scope) => scope.trim())
     .filter(Boolean);
 
-const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v5';
+const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v6';
 const SCHEMA_READY_TTL_SECONDS = 24 * 60 * 60;
 
 const ensureSchema = async () => {
@@ -714,12 +714,14 @@ const ensureSchema = async () => {
       }
 
       if (!legacySkip.deliveries) {
+      // Standalone FKs to merchants/campaigns only — do not re-create Neon audience FKs
+      // after D1 audience cutover (subscribers/subscriber_tokens may be dropped).
       await sql`CREATE TABLE IF NOT EXISTS campaign_deliveries (
         id BIGSERIAL PRIMARY KEY,
         campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
-        subscriber_id BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
-        token_id BIGINT NOT NULL REFERENCES subscriber_tokens(id) ON DELETE CASCADE,
+        subscriber_id BIGINT NOT NULL,
+        token_id BIGINT NOT NULL,
         fcm_message_id TEXT,
         delivered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         clicked_at TIMESTAMPTZ,
@@ -736,7 +738,7 @@ const ensureSchema = async () => {
         id BIGSERIAL PRIMARY KEY,
         campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
-        subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
+        subscriber_id BIGINT,
         target_url TEXT NOT NULL,
         clicked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         user_agent TEXT,
@@ -754,8 +756,8 @@ const ensureSchema = async () => {
         automation_job_id TEXT,
         rule_key TEXT NOT NULL,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
-        subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
-        token_id BIGINT REFERENCES subscriber_tokens(id) ON DELETE SET NULL,
+        subscriber_id BIGINT,
+        token_id BIGINT,
         external_id TEXT,
         target_url TEXT,
         fcm_message_id TEXT,
@@ -774,7 +776,7 @@ const ensureSchema = async () => {
         id BIGSERIAL PRIMARY KEY,
         rule_key TEXT NOT NULL,
         shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
-        subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
+        subscriber_id BIGINT,
         external_id TEXT,
         target_url TEXT NOT NULL,
         clicked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -3575,7 +3577,7 @@ export const pruneAutomationData = async () => {
   const now = Date.now();
   const webhookCutoff = new Date(now - readRetentionDays('PE_RETENTION_WEBHOOK_EVENT_DAYS', 5) * DAY_MS);
   const activityCutoff = new Date(now - readRetentionDays('PE_RETENTION_ACTIVITY_DAYS', 45) * DAY_MS);
-  const jobCutoff = new Date(now - readRetentionDays('PE_RETENTION_AUTOMATION_JOB_DAYS', 60) * DAY_MS);
+  const jobCutoff = new Date(now - readRetentionDays('PE_RETENTION_AUTOMATION_JOB_DAYS', 14) * DAY_MS);
 
   if (await neonTableExists('webhook_events')) {
     await sql`

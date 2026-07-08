@@ -55,6 +55,7 @@ if (!databaseUrl) {
 
 const sql = neon(databaseUrl);
 const confirm = process.argv.includes('--confirm');
+const forcePurge = process.argv.includes('--force');
 const inventoryOnly = process.argv.includes('--inventory-only');
 const productionCutover = useProduction && (confirm || inventoryOnly);
 
@@ -97,6 +98,11 @@ const GROUPS = [
     enabled: () => kvOn(),
     tables: ['webhook_events'],
   },
+  {
+    key: 'audience',
+    enabled: () => String(process.env.D1_AUDIENCE_MODE ?? '').toLowerCase() === 'd1_only',
+    tables: ['subscriber_tokens', 'subscribers'],
+  },
 ];
 
 const tableExists = async (table) => {
@@ -132,6 +138,10 @@ const countRows = async (table) => {
       );
     case 'webhook_events':
       return Number((await sql`SELECT COUNT(*)::BIGINT AS count FROM webhook_events`)[0]?.count ?? 0);
+    case 'subscriber_tokens':
+      return Number((await sql`SELECT COUNT(*)::BIGINT AS count FROM subscriber_tokens`)[0]?.count ?? 0);
+    case 'subscribers':
+      return Number((await sql`SELECT COUNT(*)::BIGINT AS count FROM subscribers`)[0]?.count ?? 0);
     default:
       throw new Error(`Unknown table: ${table}`);
   }
@@ -175,20 +185,28 @@ const dropTable = async (table) => {
     case 'webhook_events':
       await sql`DROP TABLE IF EXISTS webhook_events CASCADE`;
       return;
+    case 'subscriber_tokens':
+      await sql`DROP TABLE IF EXISTS subscriber_tokens CASCADE`;
+      return;
+    case 'subscribers':
+      await sql`DROP TABLE IF EXISTS subscribers CASCADE`;
+      return;
     default:
       throw new Error(`Unknown table: ${table}`);
   }
 };
 
 const main = async () => {
-  console.log(confirm ? 'DROP mode (--confirm)' : 'DRY RUN (pass --confirm to drop)');
+  console.log(confirm ? (forcePurge ? 'FORCE DROP mode' : 'DROP mode (--confirm)') : 'DRY RUN (pass --confirm to drop)');
   console.log('Flags:', {
+    D1_AUDIENCE_MODE: String(process.env.D1_AUDIENCE_MODE ?? ''),
     D1_DELIVERIES_ENABLED: flagOn('D1_DELIVERIES_ENABLED'),
     D1_COMMERCE_ENABLED: flagOn('D1_COMMERCE_ENABLED'),
     D1_CUSTOMERS_ENABLED: flagOn('D1_CUSTOMERS_ENABLED'),
     D1_CATALOG_ENABLED: flagOn('D1_CATALOG_ENABLED'),
     D1_EVENTS_ENABLED: flagOn('D1_EVENTS_ENABLED'),
     KV: kvOn(),
+    forcePurge,
   });
 
   const dropped = [];
@@ -231,12 +249,15 @@ const main = async () => {
         rowsRemaining = 0;
       }
 
-      if (rowsRemaining > 0) {
+      if (rowsRemaining > 0 && !(forcePurge && group.enabled())) {
         skipped.push({ table, reason: `still has ${rowsRemaining} rows` });
         continue;
       }
 
       if (confirm) {
+        if (rowsRemaining > 0 && forcePurge) {
+          console.log(`Force-purging ${rowsRemaining} rows from ${table} (D1/KV is source of truth)...`);
+        }
         await dropTable(table);
       }
       dropped.push(table);

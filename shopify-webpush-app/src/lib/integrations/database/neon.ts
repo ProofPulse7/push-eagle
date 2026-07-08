@@ -3,6 +3,9 @@ import { neon } from '@neondatabase/serverless';
 import { env } from '@/lib/config/env';
 import { isValidPostgresConnectionString, sanitizePostgresConnectionString } from '@/lib/config/sanitize-connection-string';
 
+// Neon serverless HTTP driver already caches fetch connections by default.
+// Keep a process-level sql handle so warm Vercel isolates reuse one client.
+
 let cachedSql: ReturnType<typeof neon> | null = null;
 let cachedConnectionString: string | null = null;
 

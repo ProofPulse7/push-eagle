@@ -93,17 +93,36 @@ D1_AUDIENCE_MODE=d1_only
 - Neon audience tables stop updating (stale but harmless)
 - `ensureSchema` skips audience DDL + expensive dedup scans on Neon
 
-### 7. Reclaim Neon storage (optional)
+### 7. Reclaim Neon storage (required after cutover)
 
-After parity and stable `d1_only`:
+After D1 parity (`D1` counts ≥ Neon) and stable `d1_only`:
 
 ```bash
+# Inventory
+curl ".../api/admin/neon/drop-legacy-tables" -H "X-Cron-Secret: $CRON_SECRET"
+
+# Empty migrated tables
 curl -X POST ".../api/admin/neon/drop-legacy-tables" \
   -H "X-Cron-Secret: $CRON_SECRET" \
-  -d '{"dryRun": true}'
+  -H "Content-Type: application/json" \
+  -d '{"action":"drop"}'
+
+# Audience tables with stale Neon rows after confirmed D1 has more data:
+curl -X POST ".../api/admin/neon/drop-legacy-tables" \
+  -H "X-Cron-Secret: $CRON_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"force-drop"}'
 ```
 
-Then `dryRun: false` when `eligibleToDrop` for audience tables.
+Or locally (with env flags set):
+
+```bash
+node scripts/drop-neon-legacy-tables.mjs --confirm
+node scripts/drop-neon-legacy-tables.mjs --confirm --force   # audience only after D1 parity
+```
+
+`ensureSchema()` skips creating these tables when the matching D1/KV flag is on
+(`pe:schema:ready:v6`), so dropped tables do **not** come back.
 
 ## Full production env (cost-optimized)
 

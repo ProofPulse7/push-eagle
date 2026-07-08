@@ -30,11 +30,7 @@ export type NeonLegacyTableGroup = {
 };
 
 export const NEON_LEGACY_TABLE_GROUPS: NeonLegacyTableGroup[] = [
-  {
-    key: 'audience',
-    label: 'Subscribers + tokens (D1 audience)',
-    tables: ['subscriber_tokens', 'subscribers'],
-  },
+  // Drop dependent tables before audience (FK from deliveries → subscribers).
   {
     key: 'deliveries',
     label: 'Delivery / click detail (D1 deliveries)',
@@ -69,6 +65,11 @@ export const NEON_LEGACY_TABLE_GROUPS: NeonLegacyTableGroup[] = [
     key: 'webhooks',
     label: 'Webhook dedup log (Cloudflare KV)',
     tables: ['webhook_events'],
+  },
+  {
+    key: 'audience',
+    label: 'Subscribers + tokens (D1 audience)',
+    tables: ['subscriber_tokens', 'subscribers'],
   },
 ];
 
@@ -279,14 +280,18 @@ export type DropNeonLegacyTablesResult = {
 
 /**
  * DROP empty legacy Neon tables after D1/KV cutover. Refuses to drop any table
- * that still has rows or whose feature flag is off.
+ * that still has rows (unless forcePurge) or whose feature flag is off.
  */
 export const dropNeonLegacyTablesAfterD1Cutover = async (options?: {
   dryRun?: boolean;
+  /** When true, TRUNCATE then DROP enabled migrated tables even if they still have rows. */
+  forcePurge?: boolean;
 }): Promise<DropNeonLegacyTablesResult> => {
   const dryRun = options?.dryRun === true;
+  const forcePurge = options?.forcePurge === true;
   const dropped: string[] = [];
   const skipped: Array<{ table: string; reason: string }> = [];
+  const sql = getNeonSql();
 
   for (const group of NEON_LEGACY_TABLE_GROUPS) {
     if (!skipFlagForGroup(group.key)) {
@@ -307,12 +312,61 @@ export const dropNeonLegacyTablesAfterD1Cutover = async (options?: {
       }
 
       const count = await countLegacyTableRows(table);
-      if (count > 0) {
+      if (count > 0 && !forcePurge) {
         skipped.push({ table, reason: `still has ${count} rows` });
         continue;
       }
 
       if (!dryRun) {
+        if (count > 0 && forcePurge) {
+          // Data already lives on D1/KV; reclaim Neon storage + stop transfer on scans.
+          switch (table) {
+            case 'campaign_deliveries':
+              await sql`TRUNCATE TABLE campaign_deliveries`;
+              break;
+            case 'campaign_clicks':
+              await sql`TRUNCATE TABLE campaign_clicks`;
+              break;
+            case 'automation_deliveries':
+              await sql`TRUNCATE TABLE automation_deliveries`;
+              break;
+            case 'automation_clicks':
+              await sql`TRUNCATE TABLE automation_clicks`;
+              break;
+            case 'shopify_order_items':
+              await sql`TRUNCATE TABLE shopify_order_items CASCADE`;
+              break;
+            case 'shopify_orders':
+              await sql`TRUNCATE TABLE shopify_orders CASCADE`;
+              break;
+            case 'shopify_fulfillments':
+              await sql`TRUNCATE TABLE shopify_fulfillments CASCADE`;
+              break;
+            case 'shopify_customers':
+              await sql`TRUNCATE TABLE shopify_customers CASCADE`;
+              break;
+            case 'shopify_product_variants':
+              await sql`TRUNCATE TABLE shopify_product_variants CASCADE`;
+              break;
+            case 'pixel_events':
+              await sql`TRUNCATE TABLE pixel_events`;
+              break;
+            case 'subscriber_activity_events':
+              await sql`TRUNCATE TABLE subscriber_activity_events`;
+              break;
+            case 'webhook_events':
+              await sql`TRUNCATE TABLE webhook_events`;
+              break;
+            case 'subscriber_tokens':
+              await sql`TRUNCATE TABLE subscriber_tokens CASCADE`;
+              break;
+            case 'subscribers':
+              await sql`TRUNCATE TABLE subscribers CASCADE`;
+              break;
+            default:
+              break;
+          }
+        }
         await dropLegacyTable(table);
       }
       dropped.push(table);
