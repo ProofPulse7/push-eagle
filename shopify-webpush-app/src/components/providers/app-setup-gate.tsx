@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { hasWarmShopCache } from '@/lib/client/app-cache-ready';
 import { readShopDomainSync } from '@/lib/client/read-shop-domain';
-import { AppSetupScreen } from '@/components/ui/loading-ui';
+import { AppSetupScreen, PageLoadingView } from '@/components/ui/loading-ui';
 import { usePersistRestored } from '@/components/providers/query-provider';
 import { useAppBootstrap } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
@@ -91,7 +91,14 @@ export function AppSetupGate({ children }: { children: React.ReactNode }) {
   );
 
   if (!canRenderApp) {
-    return <AppSetupScreen progress={18} stepLabel="Restoring your workspace…" />;
+    // Keep the shell shape while session cache restores — never a blank frame.
+    return (
+      <PageLoadingView
+        title="Push Eagle"
+        description="Restoring your workspace…"
+        pathname={pathname}
+      />
+    );
   }
 
   return (

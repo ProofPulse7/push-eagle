@@ -14,8 +14,6 @@ type OutgoingLayer = {
 };
 
 const MIN_INCOMING_HEIGHT = 96;
-const WARM_MIN_HOLD_MS = 36;
-const WARM_MAX_HOLD_MS = 160;
 const COLD_MIN_HOLD_MS = 72;
 const COLD_MAX_HOLD_MS = 360;
 
@@ -67,8 +65,18 @@ export function MainRouteContent({ children }: { children: React.ReactNode }) {
 
     const previous = lastSnapshot.current;
     const warm = hasRouteWarmCache(queryClient, shop, pathname);
-    const minHold = warm ? WARM_MIN_HOLD_MS : COLD_MIN_HOLD_MS;
-    const maxHold = warm ? WARM_MAX_HOLD_MS : COLD_MAX_HOLD_MS;
+
+    // Warm cache: swap instantly — no fade/hold overlay (avoids blink).
+    if (warm) {
+      setOutgoing(null);
+      setOutgoingVisible(false);
+      setDisplayNode(children);
+      lastSnapshot.current = { path: pathname, node: children };
+      return clearTimers;
+    }
+
+    const minHold = COLD_MIN_HOLD_MS;
+    const maxHold = COLD_MAX_HOLD_MS;
     const startedAt = performance.now();
 
     setDisplayNode(children);
@@ -80,7 +88,7 @@ export function MainRouteContent({ children }: { children: React.ReactNode }) {
       setOutgoingVisible(false);
       finishTimer.current = window.setTimeout(() => {
         setOutgoing(null);
-      }, warm ? 110 : 150);
+      }, 150);
     };
 
     const pollReady = () => {

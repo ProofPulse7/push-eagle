@@ -14,6 +14,7 @@ import { AppSetupGate } from '@/components/providers/app-setup-gate';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { SettingsCacheSync } from '@/components/providers/settings-cache-sync';
 import { LiveShopSync } from '@/components/providers/live-shop-sync';
+import { TawkChatWidget } from '@/components/support/tawk-chat-widget';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -67,6 +68,7 @@ export default function RootLayout({
                     <AppLayout>{children}</AppLayout>
                   </Suspense>
                   <Toaster />
+                  <TawkChatWidget />
                 </AppBootstrapLoader>
               </AppSetupGate>
             </SettingsProvider>

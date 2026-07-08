@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,13 +14,15 @@ import { Settings, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { PageLoadingShell } from '@/components/ui/loading-ui';
 import {
   useOptInSettings,
   useSaveOptInSettings,
 } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
-import { mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
+import { queryKeys } from '@/lib/client/query-keys';
+import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 import type { OptInPromptStatsBundle, OptInPromptTypeStats } from '@/lib/types/opt-in-stats';
 
 const StatBlock = ({ label, value }: { label: string, value: string | number }) => (
@@ -87,9 +90,17 @@ const parseOptInStats = (data: Record<string, unknown> | null | undefined): OptI
 export default function OptInsPage() {
   const shopDomain = useShopDomain();
   const { toast } = useToast();
-  const { data: optInData } = useOptInSettings({ refreshStats: true });
+  const queryClient = useQueryClient();
+  const cachedOptIn = shopDomain
+    ? queryClient.getQueryData<Record<string, unknown>>(queryKeys.optIn(shopDomain))
+    : undefined;
+  const { data: optInQueryData, isLoading, isFetching } = useOptInSettings({ refreshStats: true });
+  const optInData = (optInQueryData ?? cachedOptIn) as Record<string, unknown> | undefined;
   const saveOptInMutation = useSaveOptInSettings();
   const [selectedPromptType, setSelectedPromptType] = useState<'browser' | 'custom' | 'off'>('custom');
+  const hasCachedOrLiveData =
+    Boolean(optInData) || Boolean(shopDomain && hasPendingSettings(shopDomain, 'optIn'));
+  const showInitialLoad = !hasCachedOrLiveData && (isLoading || !shopDomain);
 
   const mergedSettings = useMemo(() => {
     if (!shopDomain) {
@@ -194,6 +205,13 @@ export default function OptInsPage() {
   }, [settingsSummary]);
 
   return (
+    <PageLoadingShell
+      title="Opt-ins"
+      isLoading={showInitialLoad}
+      hasData={hasCachedOrLiveData}
+      isFetching={isFetching && hasCachedOrLiveData}
+      pathname="/opt-ins"
+    >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight md:text-3xl flex items-center gap-2">
@@ -377,5 +395,6 @@ export default function OptInsPage() {
         </Card>
       </div>
     </div>
+    </PageLoadingShell>
   );
 }

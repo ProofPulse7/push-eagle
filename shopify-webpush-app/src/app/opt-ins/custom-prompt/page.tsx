@@ -16,12 +16,14 @@ import { cn } from '@/lib/utils';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import dynamic from 'next/dynamic';
 import { ImageEditorSheet } from '@/components/composer/editor-parts/image-editor-sheet';
-import { PageLoadingView } from '@/components/ui/loading-ui';
+import { PageLoadingShell, PageLoadingView } from '@/components/ui/loading-ui';
+import { useQueryClient } from '@tanstack/react-query';
 import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
 import { useOptInSettings, useSaveOptInSettings } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useInstantSaveFeedback } from '@/hooks/use-instant-save-feedback';
+import { queryKeys } from '@/lib/client/query-keys';
 import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
@@ -200,12 +202,20 @@ export default function CustomPromptPage() {
     const [offsetY, setOffsetY] = useState('0');
     const [hydrated, setHydrated] = useState(false);
     const shopDomain = useShopDomain();
+    const queryClient = useQueryClient();
     const { logo, setLogo } = useSettings();
     const { toast } = useToast();
-    const { data: optInData, isLoading: optInLoading } = useOptInSettings();
+    const cachedOptIn = shopDomain
+        ? queryClient.getQueryData<Record<string, unknown>>(queryKeys.optIn(shopDomain))
+        : undefined;
+    const { data: optInQueryData, isLoading: optInLoading, isFetching } = useOptInSettings();
+    const optInData = (optInQueryData ?? cachedOptIn) as Record<string, unknown> | undefined;
     const saveOptInMutation = useSaveOptInSettings();
     const { saved, markSaved, markIdle } = useInstantSaveFeedback();
     const logoInputRef = useRef<HTMLInputElement | null>(null);
+    const hasCachedOrLiveData =
+        Boolean(optInData) || Boolean(shopDomain && hasPendingSettings(shopDomain, 'optIn'));
+    const showInitialLoad = Boolean(shopDomain) && optInLoading && !hasCachedOrLiveData && !hydrated;
 
     const [editingState, setEditingState] = useState<{ url: string; aspect: number, type: string } | null>(null);
 
@@ -326,21 +336,18 @@ export default function CustomPromptPage() {
     
     if (!shopDomain) {
         return (
-            <div className="min-h-screen">
-                <PageLoadingView title="Custom prompt" description="Waiting for shop context…" />
-            </div>
-        );
-    }
-
-    if (!hydrated && optInLoading) {
-        return (
-            <div className="min-h-screen">
-                <PageLoadingView title="Custom prompt" />
-            </div>
+            <PageLoadingView title="Custom prompt" description="Waiting for shop context…" pathname="/opt-ins" />
         );
     }
 
     return (
+        <PageLoadingShell
+            title="Custom prompt"
+            isLoading={showInitialLoad}
+            hasData={hasCachedOrLiveData || hydrated}
+            isFetching={isFetching && (hasCachedOrLiveData || hydrated)}
+            pathname="/opt-ins"
+        >
         <div className="flex flex-col min-h-screen">
             <div className="bg-card p-4 sm:p-6 md:p-8">
                 <div className="flex items-center gap-4">
@@ -644,5 +651,6 @@ export default function CustomPromptPage() {
                 onSave={handleSaveCrop}
             />
         </div>
+        </PageLoadingShell>
     );
 }

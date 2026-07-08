@@ -12,6 +12,9 @@ import { useBillingStatus, useConfirmBilling, useSubscribePlan } from '@/hooks/q
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useToast } from '@/hooks/use-toast';
 import { ImpressionUsageBar } from '@/components/billing/impression-usage-bar';
+import { PageLoadingShell } from '@/components/ui/loading-ui';
+import { queryKeys } from '@/lib/client/query-keys';
+import { useQueryClient } from '@tanstack/react-query';
 
 const BUSINESS_FEATURES = [
   'Everything in Basic',
@@ -131,11 +134,21 @@ export function PlansPageContent() {
   const shop = useShopDomain();
   const { toast } = useToast();
   const searchParams = useSearchParams();
-  const { data, isFetching } = useBillingStatus({ refetchOnMount: false, reconcile: false });
+  const queryClient = useQueryClient();
+  const cachedBilling = shop
+    ? queryClient.getQueryData<{ billing?: Record<string, unknown> }>(queryKeys.billingStatus(shop))
+    : undefined;
+  const { data: billingQueryData, isLoading, isFetching } = useBillingStatus({
+    refetchOnMount: false,
+    reconcile: false,
+  });
+  const data = billingQueryData ?? cachedBilling;
   const confirmBilling = useConfirmBilling();
   const subscribePlan = useSubscribePlan();
   const [tierIndex, setTierIndex] = useState(0);
   const [pendingPlan, setPendingPlan] = useState<PendingPlanKey | null>(null);
+  const hasCachedOrLiveData = Boolean(data?.billing);
+  const showInitialLoad = !hasCachedOrLiveData && (isLoading || !shop);
 
   const host = searchParams.get('host');
   const embedded = searchParams.get('embedded');
@@ -309,6 +322,13 @@ export function PlansPageContent() {
   );
 
   return (
+    <PageLoadingShell
+      title="Plans"
+      isLoading={showInitialLoad}
+      hasData={hasCachedOrLiveData}
+      isFetching={isFetching && hasCachedOrLiveData}
+      pathname="/plans"
+    >
     <div className="mx-auto flex min-h-0 flex-1 flex-col gap-5 px-4 py-5 sm:px-6 lg:max-w-6xl lg:px-8">
       <div className="shrink-0">
         <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Plans</h1>
@@ -406,5 +426,6 @@ export function PlansPageContent() {
         </PlanCard>
       </div>
     </div>
+    </PageLoadingShell>
   );
 }

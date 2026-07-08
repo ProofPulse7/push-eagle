@@ -31,6 +31,7 @@ const patchBillingCache = (
 
 export function useBillingStatus(options?: { refetchOnMount?: boolean; reconcile?: boolean }) {
   const shop = useShopDomain();
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: queryKeys.billingStatus(shop),
     queryFn: () =>
@@ -41,7 +42,11 @@ export function useBillingStatus(options?: { refetchOnMount?: boolean; reconcile
     enabled: Boolean(shop),
     staleTime: 30 * 60 * 1000,
     refetchOnMount: options?.refetchOnMount ? 'always' : false,
-    placeholderData: (previous) => previous,
+    placeholderData: (previous) =>
+      previous ??
+      (shop
+        ? queryClient.getQueryData<{ billing: Record<string, unknown> }>(queryKeys.billingStatus(shop))
+        : undefined),
   });
 }
 

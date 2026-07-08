@@ -50,5 +50,9 @@ export const hasRouteWarmCache = (
     return Boolean(queryClient.getQueryData(queryKeys.optIn(resolvedShop)));
   }
 
+  if (pathname.startsWith('/automations/') && pathname !== '/automations') {
+    return Boolean(queryClient.getQueryData(queryKeys.automationsOverview(resolvedShop)));
+  }
+
   return hasWarmShopCache(queryClient, resolvedShop);
 };

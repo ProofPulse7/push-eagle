@@ -3,16 +3,18 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { PageLoadingView } from '@/components/ui/loading-ui';
+import { PageLoadingShell, PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ArrowLeft, Bell, Check } from 'lucide-react';
 import { Label } from '@/components/ui/label';
+import { useQueryClient } from '@tanstack/react-query';
 import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
 import { useOptInSettings, useSaveOptInSettings } from '@/hooks/queries/use-app-queries';
 import { useInstantSaveFeedback } from '@/hooks/use-instant-save-feedback';
+import { queryKeys } from '@/lib/client/query-keys';
 import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 import { cn } from '@/lib/utils';
 
@@ -59,13 +61,21 @@ const BrowserPromptPreview = () => {
 export default function BrowserPromptPage() {
     const { shopDomain, storeUrl } = useSettings();
     const { toast } = useToast();
+    const queryClient = useQueryClient();
     const delayOptions = [3, 5, 10, ...Array.from({ length: 11 }, (_, i) => 15 + i * 5)];
     const [desktopDelaySeconds, setDesktopDelaySeconds] = useState('5');
     const [mobileDelaySeconds, setMobileDelaySeconds] = useState('10');
     const [hydrated, setHydrated] = useState(false);
-    const { data: optInData, isLoading: optInLoading } = useOptInSettings();
+    const cachedOptIn = shopDomain
+        ? queryClient.getQueryData<Record<string, unknown>>(queryKeys.optIn(shopDomain))
+        : undefined;
+    const { data: optInQueryData, isLoading: optInLoading, isFetching } = useOptInSettings();
+    const optInData = (optInQueryData ?? cachedOptIn) as Record<string, unknown> | undefined;
     const saveOptInMutation = useSaveOptInSettings();
     const { saved, markSaved, markIdle } = useInstantSaveFeedback();
+    const hasCachedOrLiveData =
+        Boolean(optInData) || Boolean(shopDomain && hasPendingSettings(shopDomain, 'optIn'));
+    const showInitialLoad = Boolean(shopDomain) && optInLoading && !hasCachedOrLiveData && !hydrated;
 
     useEffect(() => {
         if (!shopDomain) {
@@ -124,21 +134,18 @@ export default function BrowserPromptPage() {
 
     if (!shopDomain) {
         return (
-            <div className="min-h-screen">
-                <PageLoadingView title="Browser prompt" description="Waiting for shop context…" />
-            </div>
-        );
-    }
-
-    if (!hydrated && optInLoading) {
-        return (
-            <div className="min-h-screen">
-                <PageLoadingView title="Browser prompt" />
-            </div>
+            <PageLoadingView title="Browser prompt" description="Waiting for shop context…" pathname="/opt-ins" />
         );
     }
 
     return (
+        <PageLoadingShell
+            title="Browser prompt"
+            isLoading={showInitialLoad}
+            hasData={hasCachedOrLiveData || hydrated}
+            isFetching={isFetching && (hasCachedOrLiveData || hydrated)}
+            pathname="/opt-ins"
+        >
         <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8">
             <div className="bg-card p-6 rounded-lg relative overflow-hidden border">
                 <div className="flex items-center gap-4">
@@ -242,5 +249,6 @@ export default function BrowserPromptPage() {
                 </Button>
             </div>
         </div>
+        </PageLoadingShell>
     );
 }

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { ArrowLeft, Book, ChevronLeft, ChevronRight, Check, RefreshCw, Share, Smile, Square, X } from 'lucide-react';
 
-import { PageLoadingView } from '@/components/ui/loading-ui';
+import { PageLoadingShell, PageLoadingView } from '@/components/ui/loading-ui';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -14,11 +14,13 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { useQueryClient } from '@tanstack/react-query';
 import { useSettings } from '@/context/settings-context';
 import { useToast } from '@/hooks/use-toast';
 import { useOptInSettings, useSaveOptInSettings } from '@/hooks/queries/use-app-queries';
 import { useShopDomain } from '@/hooks/use-shop-domain';
 import { useInstantSaveFeedback } from '@/hooks/use-instant-save-feedback';
+import { queryKeys } from '@/lib/client/query-keys';
 import { hasPendingSettings, mergePendingSettings, writePendingSettings } from '@/lib/client/pending-settings';
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false });
@@ -99,9 +101,14 @@ const IOSWidgetPreview = ({ enabled, title, message, storeUrl }: { enabled: bool
 
 export default function IOSWidgetPage() {
   const shopDomain = useShopDomain();
+  const queryClient = useQueryClient();
   const { storeUrl } = useSettings();
   const { toast } = useToast();
-  const { data: optInData, isLoading: optInLoading } = useOptInSettings();
+  const cachedOptIn = shopDomain
+    ? queryClient.getQueryData<Record<string, unknown>>(queryKeys.optIn(shopDomain))
+    : undefined;
+  const { data: optInQueryData, isLoading: optInLoading, isFetching } = useOptInSettings();
+  const optInData = (optInQueryData ?? cachedOptIn) as Record<string, unknown> | undefined;
   const saveOptInMutation = useSaveOptInSettings();
   const { saved, markSaved, markIdle } = useInstantSaveFeedback();
 
@@ -109,6 +116,9 @@ export default function IOSWidgetPage() {
   const [title, setTitle] = useState('Get notifications on your iPhone or iPad');
   const [message, setMessage] = useState("Add this store to your Home Screen. Then open it from there and we'll ask for notification permission using your saved opt-in settings. Tap {{share icon}} and choose 'Add to Home Screen'.");
   const [hydrated, setHydrated] = useState(false);
+  const hasCachedOrLiveData =
+    Boolean(optInData) || Boolean(shopDomain && hasPendingSettings(shopDomain, 'optIn'));
+  const showInitialLoad = Boolean(shopDomain) && optInLoading && !hasCachedOrLiveData && !hydrated;
 
   useEffect(() => {
     if (!shopDomain) {
@@ -172,21 +182,18 @@ export default function IOSWidgetPage() {
 
   if (!shopDomain) {
     return (
-      <div className="min-h-screen">
-        <PageLoadingView title="iOS widget" description="Waiting for shop context…" />
-      </div>
-    );
-  }
-
-  if (!hydrated && optInLoading) {
-    return (
-      <div className="min-h-screen">
-        <PageLoadingView title="iOS widget" />
-      </div>
+      <PageLoadingView title="iOS widget" description="Waiting for shop context…" pathname="/opt-ins" />
     );
   }
 
   return (
+    <PageLoadingShell
+      title="iOS widget"
+      isLoading={showInitialLoad}
+      hasData={hasCachedOrLiveData || hydrated}
+      isFetching={isFetching && (hasCachedOrLiveData || hydrated)}
+      pathname="/opt-ins"
+    >
     <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-8 min-h-screen">
       <div className="flex items-center gap-4">
         <Button variant="outline" size="icon" asChild>
@@ -281,5 +288,6 @@ export default function IOSWidgetPage() {
         </Button>
       </div>
     </div>
+    </PageLoadingShell>
   );
 }

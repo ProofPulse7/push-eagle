@@ -356,9 +356,7 @@ export default function BrowseAbandonmentPage() {
 
   if (flowConfigLoading) {
     return (
-      <div className="min-h-screen bg-muted/40">
-        <PageLoadingView title="Browse abandonment" />
-      </div>
+      <PageLoadingView title="Browse abandonment" pathname="/automations" />
     );
   }
 

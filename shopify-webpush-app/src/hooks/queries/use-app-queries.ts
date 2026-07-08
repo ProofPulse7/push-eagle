@@ -385,7 +385,8 @@ export function useOptInSettings(options?: { refreshStats?: boolean }) {
     queryFn: () => fetchJsonWithShop<Record<string, unknown>>('/api/settings/opt-in', shop),
     enabled: Boolean(shop),
     staleTime: refreshStats ? OPT_IN_STATS_STALE_MS : SETTINGS_STALE_MS,
-    refetchOnMount: refreshStats ? 'always' : true,
+    // Prefer cached UI on navigate; stats refresh via interval when requested.
+    refetchOnMount: false,
     refetchOnWindowFocus: refreshStats,
     refetchInterval: refreshStats ? OPT_IN_STATS_POLL_MS : false,
     placeholderData: (previous) =>
@@ -699,6 +700,18 @@ export async function prefetchAppPages(queryClient: QueryClient, shop: string) {
     () =>
       prefetchIfMissing(queryClient, queryKeys.billingStatus(shop), () =>
         fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=0', shop),
+      ),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.optIn(shop), () =>
+        fetchJsonWithShop<Record<string, unknown>>('/api/settings/opt-in', shop),
+      ),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.privacy(shop), () =>
+        fetchJsonWithShop<Record<string, unknown>>('/api/settings/privacy', shop),
+      ),
+    () =>
+      prefetchIfMissing(queryClient, queryKeys.branding(shop), () =>
+        fetchJsonWithShop<Record<string, unknown>>('/api/settings/branding', shop),
       ),
   ];
 
