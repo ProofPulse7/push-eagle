@@ -3409,6 +3409,7 @@
       }
 
       // Custom mode only below — show branded opt-in card.
+      var standardDelayMs = getRemainingDelayMs(config.startedAt, config.delayMs);
       if (standardDelayMs > 0) {
         await delay(standardDelayMs);
       }
