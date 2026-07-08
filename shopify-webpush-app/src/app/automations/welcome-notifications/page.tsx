@@ -24,8 +24,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { useCachedJson } from '@/hooks/use-cached-json';
 import { useFlowStepsHydration } from '@/hooks/use-flow-steps-hydration';
-import { useAutomationFlowOverview } from '@/hooks/use-automation-flow-overview';
 import { useSettings } from '@/context/settings-context';
 import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
 
@@ -209,7 +209,20 @@ export default function WelcomeNotificationsPage() {
     mergeSteps: mergeWelcomeSteps,
   });
 
-  const { rule: welcomeRule } = useAutomationFlowOverview(shopDomain, 'welcome_subscriber');
+  const overviewUrl = shopDomain ? '/api/automations/overview?shop=' + encodeURIComponent(shopDomain) : '';
+  const rulesUrl = shopDomain ? '/api/automations/rules?shop=' + encodeURIComponent(shopDomain) : '';
+
+  const { data: overviewPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; impressions?: number; clicks?: number; revenueCents?: number; enabled?: boolean }> }>({
+    cacheKey: `welcome-overview:${shopDomain}`,
+    url: overviewUrl,
+    enabled: Boolean(shopDomain),
+  });
+
+  const { data: rulesPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; enabled?: boolean; config?: { steps?: Record<string, WelcomeRuleStepConfig> } }> }>({
+    cacheKey: `welcome-rules:${shopDomain}`,
+    url: rulesUrl,
+    enabled: Boolean(shopDomain),
+  });
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
@@ -232,31 +245,37 @@ export default function WelcomeNotificationsPage() {
   }, [displaySiteName]);
 
   useEffect(() => {
-    if (!welcomeRule) return;
-    setRuleStats({
-      impressions: welcomeRule.impressions ?? 0,
-      clicks: welcomeRule.clicks ?? 0,
-      revenueCents: welcomeRule.revenueCents ?? 0,
-    });
-  }, [welcomeRule]);
+    if (!overviewPayload?.ok) return;
+    const rule = (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber');
+    if (!rule) return;
+    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+  }, [overviewPayload]);
 
   useEffect(() => {
     if (!shopDomain) return;
+    const apiRule = rulesPayload?.ok
+      ? (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber')
+      : undefined;
+    const apiOverviewRule = overviewPayload?.ok
+      ? (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber')
+      : undefined;
     setRuleEnabled(
       resolveAutomationRuleEnabled(
         shopDomain,
         'welcome_subscriber',
         queryClient,
-        welcomeRule?.enabled,
+        apiRule?.enabled ?? apiOverviewRule?.enabled,
       ),
     );
-  }, [queryClient, shopDomain, welcomeRule?.enabled]);
+  }, [overviewPayload, queryClient, rulesPayload, shopDomain]);
 
   useEffect(() => {
-    const steps = welcomeRule?.config?.steps;
+    if (!rulesPayload?.ok) return;
+    const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'welcome_subscriber');
+    const steps = rule?.config?.steps;
     if (!steps) return;
     applyServerSteps(steps);
-  }, [applyServerSteps, welcomeRule?.config?.steps]);
+  }, [applyServerSteps, rulesPayload]);
 
   const saveWelcomeConfig = useMemo(
     () =>

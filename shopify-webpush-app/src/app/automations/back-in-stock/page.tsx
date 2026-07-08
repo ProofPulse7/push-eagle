@@ -19,7 +19,6 @@ import { InlineNotificationPreview } from '@/components/automations/inline-notif
 import { formatCurrency } from '@/lib/utils';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
-import { useAutomationFlowOverview } from '@/hooks/use-automation-flow-overview';
 
 const flowData = {
     title: "Back in Stock",
@@ -38,49 +37,44 @@ export default function BackInStockPage() {
     const [saving, setSaving] = useState(false);
     const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
 
-    const { rule: backInStockRule } = useAutomationFlowOverview(shopDomain, 'back_in_stock');
-
     useEffect(() => {
         setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
     }, []);
 
     useEffect(() => {
-        if (!backInStockRule) return;
-        setRuleStats({
-            impressions: backInStockRule.impressions ?? 0,
-            clicks: backInStockRule.clicks ?? 0,
-            revenueCents: backInStockRule.revenueCents ?? 0,
-        });
-        setRuleEnabled(backInStockRule.enabled ?? false);
-        const step = backInStockRule.config?.steps?.['stock-1'] as {
-            title?: string;
-            body?: string;
-            iconUrl?: string | null;
-            imageUrl?: string | null;
-            windowsImageUrl?: string | null;
-            macosImageUrl?: string | null;
-            androidImageUrl?: string | null;
-            actionButtons?: Array<{ title: string; link: string }>;
-        } | undefined;
-        if (!step) return;
-        setNotifications([
-            {
-                id: 'stock-1',
-                title: 'Restock Notification',
-                notification: {
-                    title: step.title ?? "It's Back!",
-                    message: step.body ?? 'The item you wanted is back in stock. Grab it now before it\'s gone again!',
-                    iconUrl: step.iconUrl ?? '',
-                    heroUrl: step.imageUrl ?? null,
-                    windowsImageUrl: step.windowsImageUrl ?? null,
-                    macosImageUrl: step.macosImageUrl ?? null,
-                    androidImageUrl: step.androidImageUrl ?? null,
-                    siteName: '',
-                    actionButtons: step.actionButtons ?? [{ title: 'Shop Now', link: '/' }],
-                },
-            },
-        ]);
-    }, [backInStockRule]);
+        if (!shopDomain) return;
+        fetch('/api/automations/overview?shop=' + encodeURIComponent(shopDomain))
+            .then(res => res.json())
+            .then(payload => {
+                if (!payload?.ok) return;
+                const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'back_in_stock');
+                if (rule) {
+                    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+                    setRuleEnabled(rule.enabled ?? false);
+                    const step = rule.config?.steps?.['stock-1'];
+                    if (step) {
+                        setNotifications([
+                            {
+                                id: 'stock-1',
+                                title: 'Restock Notification',
+                                notification: {
+                                    title: step.title ?? "It's Back!",
+                                    message: step.body ?? 'The item you wanted is back in stock. Grab it now before it\'s gone again!',
+                                    iconUrl: step.iconUrl ?? '',
+                                    heroUrl: step.imageUrl ?? null,
+                                    windowsImageUrl: step.windowsImageUrl ?? null,
+                                    macosImageUrl: step.macosImageUrl ?? null,
+                                    androidImageUrl: step.androidImageUrl ?? null,
+                                    siteName: '',
+                                    actionButtons: step.actionButtons ?? [{ title: 'Shop Now', link: '/' }],
+                                },
+                            },
+                        ]);
+                    }
+                }
+            })
+            .catch(() => undefined);
+    }, [shopDomain]);
 
     const handleToggleFlow = async () => {
         if (!shopDomain) return;

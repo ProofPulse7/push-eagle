@@ -1,7 +1,7 @@
+
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
@@ -43,7 +43,6 @@ export const FlowNotificationCard = ({
     automationName: string,
     shopDomain?: string,
 }) => {
-    const router = useRouter();
     const editHref = shopDomain
       ? `/automations/${automationName}/${step.id}/edit?shop=${encodeURIComponent(shopDomain)}`
       : `/automations/${automationName}/${step.id}/edit`;
@@ -72,11 +71,7 @@ export const FlowNotificationCard = ({
             </CardContent>
             <CardFooter className="p-2">
                  <Button variant="default" size="sm" className="w-full" asChild>
-                          <Link
-                        href={editHref}
-                        onMouseEnter={() => router.prefetch(editHref)}
-                        onFocus={() => router.prefetch(editHref)}
-                    >
+                          <Link href={editHref}>
                         Edit automation
                     </Link>
                  </Button>

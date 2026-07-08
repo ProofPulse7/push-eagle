@@ -19,7 +19,6 @@ import { InlineNotificationPreview } from '@/components/automations/inline-notif
 import { formatCurrency } from '@/lib/utils';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
-import { useAutomationFlowOverview } from '@/hooks/use-automation-flow-overview';
 
 const flowData = {
     title: "Price Drop",
@@ -38,49 +37,44 @@ export default function PriceDropPage() {
     const [notifications, setNotifications] = useState([{ id: 'price-1', title: 'Price Drop Alert', notification: { title: 'Price Drop Alert!', message: 'Good news! The price of an item you liked has just dropped. Check it out now!', iconUrl: '', heroUrl: null, windowsImageUrl: null, macosImageUrl: null, androidImageUrl: null, siteName: '', actionButtons: [{ title: 'View Item', link: '/' }] } }]);
     const deviceName = previewDevice.charAt(0).toUpperCase() + previewDevice.slice(1);
 
-    const { rule: priceDropRule } = useAutomationFlowOverview(shopDomain, 'price_drop');
-
     useEffect(() => {
         setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
     }, []);
 
     useEffect(() => {
-        if (!priceDropRule) return;
-        setRuleStats({
-            impressions: priceDropRule.impressions ?? 0,
-            clicks: priceDropRule.clicks ?? 0,
-            revenueCents: priceDropRule.revenueCents ?? 0,
-        });
-        setRuleEnabled(priceDropRule.enabled ?? false);
-        const step = priceDropRule.config?.steps?.['price-1'] as {
-            title?: string;
-            body?: string;
-            iconUrl?: string | null;
-            imageUrl?: string | null;
-            windowsImageUrl?: string | null;
-            macosImageUrl?: string | null;
-            androidImageUrl?: string | null;
-            actionButtons?: Array<{ title: string; link: string }>;
-        } | undefined;
-        if (!step) return;
-        setNotifications([
-            {
-                id: 'price-1',
-                title: 'Price Drop Alert',
-                notification: {
-                    title: step.title ?? 'Price Drop Alert!',
-                    message: step.body ?? 'Good news! The price of an item you liked has just dropped. Check it out now!',
-                    iconUrl: step.iconUrl ?? '',
-                    heroUrl: step.imageUrl ?? null,
-                    windowsImageUrl: step.windowsImageUrl ?? null,
-                    macosImageUrl: step.macosImageUrl ?? null,
-                    androidImageUrl: step.androidImageUrl ?? null,
-                    siteName: '',
-                    actionButtons: step.actionButtons ?? [{ title: 'View Item', link: '/' }],
-                },
-            },
-        ]);
-    }, [priceDropRule]);
+        if (!shopDomain) return;
+        fetch('/api/automations/overview?shop=' + encodeURIComponent(shopDomain))
+            .then(res => res.json())
+            .then(payload => {
+                if (!payload?.ok) return;
+                const rule = (payload.rules ?? []).find((r: { ruleKey: string }) => r.ruleKey === 'price_drop');
+                if (rule) {
+                    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+                    setRuleEnabled(rule.enabled ?? false);
+                    const step = rule.config?.steps?.['price-1'];
+                    if (step) {
+                        setNotifications([
+                            {
+                                id: 'price-1',
+                                title: 'Price Drop Alert',
+                                notification: {
+                                    title: step.title ?? 'Price Drop Alert!',
+                                    message: step.body ?? 'Good news! The price of an item you liked has just dropped. Check it out now!',
+                                    iconUrl: step.iconUrl ?? '',
+                                    heroUrl: step.imageUrl ?? null,
+                                    windowsImageUrl: step.windowsImageUrl ?? null,
+                                    macosImageUrl: step.macosImageUrl ?? null,
+                                    androidImageUrl: step.androidImageUrl ?? null,
+                                    siteName: '',
+                                    actionButtons: step.actionButtons ?? [{ title: 'View Item', link: '/' }],
+                                },
+                            },
+                        ]);
+                    }
+                }
+            })
+            .catch(() => undefined);
+    }, [shopDomain]);
 
     const handleToggleFlow = async () => {
         if (!shopDomain) return;

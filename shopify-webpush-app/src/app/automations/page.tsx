@@ -194,10 +194,7 @@ export default function AutomationsPage() {
             return;
         }
 
-        for (const ruleKey of visibleRuleKeys) {
-            if (isComingSoonAutomation(ruleKey)) {
-                continue;
-            }
+        for (const ruleKey of ['welcome_subscriber', 'cart_abandonment_30m'] as const) {
             const href = `${automationDefinitions[ruleKey].href}?shop=${encodeURIComponent(activeShopDomain)}`;
             router.prefetch(href);
         }

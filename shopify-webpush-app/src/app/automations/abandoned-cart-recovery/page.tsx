@@ -18,8 +18,8 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
 import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
+import { useCachedJson } from '@/hooks/use-cached-json';
 import { useFlowStepsHydration } from '@/hooks/use-flow-steps-hydration';
-import { useAutomationFlowOverview } from '@/hooks/use-automation-flow-overview';
 import {
   createDebouncedAutomationStepsSaver,
   stepEnabledFromConfig,
@@ -277,7 +277,20 @@ export default function AbandonedCartPage() {
     mergeSteps: mergeCartSteps,
   });
 
-  const { rule: cartRule } = useAutomationFlowOverview(shopDomain, 'cart_abandonment_30m');
+  const overviewUrl = shopDomain ? `/api/automations/overview?shop=${encodeURIComponent(shopDomain)}` : '';
+  const rulesUrl = shopDomain ? `/api/automations/rules?shop=${encodeURIComponent(shopDomain)}` : '';
+
+  const { data: overviewPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; impressions?: number; clicks?: number; revenueCents?: number; enabled?: boolean }> }>({
+    cacheKey: `cart-overview:${shopDomain}`,
+    url: overviewUrl,
+    enabled: Boolean(shopDomain),
+  });
+
+  const { data: rulesPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; enabled?: boolean; config?: { steps?: Record<string, CartRuleStepConfig> } }> }>({
+    cacheKey: `cart-rules:${shopDomain}`,
+    url: rulesUrl,
+    enabled: Boolean(shopDomain),
+  });
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
@@ -300,31 +313,37 @@ export default function AbandonedCartPage() {
   }, [displaySiteName]);
 
   useEffect(() => {
-    if (!cartRule) return;
-    setRuleStats({
-      impressions: cartRule.impressions ?? 0,
-      clicks: cartRule.clicks ?? 0,
-      revenueCents: cartRule.revenueCents ?? 0,
-    });
-  }, [cartRule]);
+    if (!overviewPayload?.ok) return;
+    const rule = (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
+    if (!rule) return;
+    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+  }, [overviewPayload]);
 
   useEffect(() => {
     if (!shopDomain) return;
+    const apiRule = rulesPayload?.ok
+      ? (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m')
+      : undefined;
+    const apiOverviewRule = overviewPayload?.ok
+      ? (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m')
+      : undefined;
     setRuleEnabled(
       resolveAutomationRuleEnabled(
         shopDomain,
         'cart_abandonment_30m',
         queryClient,
-        cartRule?.enabled,
+        apiRule?.enabled ?? apiOverviewRule?.enabled,
       ),
     );
-  }, [cartRule?.enabled, queryClient, shopDomain]);
+  }, [overviewPayload, queryClient, rulesPayload, shopDomain]);
 
   useEffect(() => {
-    const steps = cartRule?.config?.steps;
+    if (!rulesPayload?.ok) return;
+    const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'cart_abandonment_30m');
+    const steps = rule?.config?.steps;
     if (!steps) return;
     applyServerSteps(steps);
-  }, [applyServerSteps, cartRule?.config?.steps]);
+  }, [applyServerSteps, rulesPayload]);
 
   const saveCartConfig = useMemo(
     () =>

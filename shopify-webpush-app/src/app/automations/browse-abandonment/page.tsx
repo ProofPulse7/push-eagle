@@ -16,8 +16,8 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useSettings } from '@/context/settings-context';
 import { useMerchantDisplaySiteName } from '@/hooks/use-merchant-display-site';
+import { useCachedJson } from '@/hooks/use-cached-json';
 import { useFlowStepsHydration } from '@/hooks/use-flow-steps-hydration';
-import { useAutomationFlowOverview } from '@/hooks/use-automation-flow-overview';
 import {
   createDebouncedAutomationStepsSaver,
   stepEnabledFromConfig,
@@ -272,7 +272,20 @@ export default function BrowseAbandonmentPage() {
     mergeSteps: mergeBrowseSteps,
   });
 
-  const { rule: browseRule } = useAutomationFlowOverview(shopDomain, 'browse_abandonment_15m');
+  const overviewUrl = shopDomain ? '/api/automations/overview?shop=' + encodeURIComponent(shopDomain) : '';
+  const rulesUrl = shopDomain ? '/api/automations/rules?shop=' + encodeURIComponent(shopDomain) : '';
+
+  const { data: overviewPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; impressions?: number; clicks?: number; revenueCents?: number; enabled?: boolean }> }>({
+    cacheKey: `browse-overview:${shopDomain}`,
+    url: overviewUrl,
+    enabled: Boolean(shopDomain),
+  });
+
+  const { data: rulesPayload } = useCachedJson<{ ok?: boolean; rules?: Array<{ ruleKey: string; enabled?: boolean; config?: { steps?: Record<string, BrowseRuleStepConfig> } }> }>({
+    cacheKey: `browse-rules:${shopDomain}`,
+    url: rulesUrl,
+    enabled: Boolean(shopDomain),
+  });
 
   useEffect(() => {
     setQueryShop(new URLSearchParams(window.location.search).get('shop') || '');
@@ -295,20 +308,24 @@ export default function BrowseAbandonmentPage() {
   }, [displaySiteName]);
 
   useEffect(() => {
-    if (!browseRule) return;
-    setRuleStats({
-      impressions: browseRule.impressions ?? 0,
-      clicks: browseRule.clicks ?? 0,
-      revenueCents: browseRule.revenueCents ?? 0,
-    });
-    setRuleEnabled(Boolean(browseRule.enabled));
-  }, [browseRule]);
+    if (!overviewPayload?.ok) return;
+    const rule = (overviewPayload.rules ?? []).find((r) => r.ruleKey === 'browse_abandonment_15m');
+    if (!rule) return;
+    setRuleStats({ impressions: rule.impressions ?? 0, clicks: rule.clicks ?? 0, revenueCents: rule.revenueCents ?? 0 });
+  }, [overviewPayload]);
 
   useEffect(() => {
-    const steps = browseRule?.config?.steps;
+    if (!rulesPayload?.ok) return;
+    const rule = (rulesPayload.rules ?? []).find((r) => r.ruleKey === 'browse_abandonment_15m');
+    if (!rule) return;
+
+    setRuleEnabled(Boolean(rule.enabled));
+
+    const steps = rule.config?.steps;
     if (!steps) return;
+
     applyServerSteps(steps);
-  }, [applyServerSteps, browseRule?.config?.steps]);
+  }, [applyServerSteps, rulesPayload]);
 
   const saveBrowseConfig = useMemo(
     () =>
