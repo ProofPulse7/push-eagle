@@ -1,0 +1,15 @@
+/**
+ * Compact Crisp chat widget. Crisp injects a stable #crisp-chatbox root element.
+ * Scale keeps layout proportional (launcher + open panel) without fragile inner selectors.
+ */
+#crisp-chatbox {
+  transform: scale(0.72);
+  transform-origin: bottom right;
+}
+
+@media (max-width: 640px) {
+  #crisp-chatbox {
+    transform: scale(0.82);
+    transform-origin: bottom right;
+  }
+}
