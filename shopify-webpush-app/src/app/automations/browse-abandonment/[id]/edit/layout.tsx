@@ -1,6 +1,16 @@
 'use client';
-import { ReactNode } from 'react';
+
+import { ReactNode, Suspense } from 'react';
+
+import { AutomationComposerSkeleton } from '@/components/automations/automation-composer-skeleton';
 import { AutomationStateProvider } from '@/context/automation-context';
+
 export default function EditAutomationStepLayout({ children }: { children: ReactNode }) {
-    return <AutomationStateProvider>{children}</AutomationStateProvider>;
+  return (
+    <AutomationStateProvider>
+      <Suspense fallback={<AutomationComposerSkeleton />}>
+        {children}
+      </Suspense>
+    </AutomationStateProvider>
+  );
 }

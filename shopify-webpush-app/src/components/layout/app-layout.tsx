@@ -1,6 +1,8 @@
 'use client';
 
+import { Suspense } from 'react';
 import { usePathname } from 'next/navigation';
+import { AutomationComposerSkeleton } from '@/components/automations/automation-composer-skeleton';
 import { AppLegalFooter } from './app-legal-footer';
 import { GlobalLoadingProvider } from '@/components/providers/global-loading-provider';
 import { MainRouteContent } from './main-route-content';
@@ -18,7 +20,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const isAutomationEditor = /^\/automations\/[a-zA-Z0-9-]+\/[^/]+\/edit$/.test(pathname);
 
   if (isMarketingPage || isCampaignComposerFullscreen || isAutomationEditor || isLoginPage) {
-    return <main className="flex-grow bg-background">{children}</main>;
+    return (
+      <main className="flex-grow bg-background">
+        {isAutomationEditor ? (
+          <Suspense fallback={<AutomationComposerSkeleton />}>{children}</Suspense>
+        ) : (
+          children
+        )}
+      </main>
+    );
   }
 
   return (

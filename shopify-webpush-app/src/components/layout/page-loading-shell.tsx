@@ -61,6 +61,9 @@ export function resolvePageSkeletonVariant(pathname: string): PageSkeletonVarian
   if (pathname.startsWith('/campaigns/new')) {
     return 'composer';
   }
+  if (/^\/automations\/[^/]+\/[^/]+\/edit$/.test(pathname)) {
+    return 'composer';
+  }
   if (pathname.startsWith('/campaigns')) {
     return 'campaigns';
   }
