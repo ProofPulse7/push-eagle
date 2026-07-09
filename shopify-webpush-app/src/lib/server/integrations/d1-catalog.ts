@@ -249,6 +249,58 @@ export const d1GetProductImageUrl = async (shopDomain: string, productId: string
   return imageUrl == null ? null : String(imageUrl).trim() || null;
 };
 
+export const d1GetProductImageUrlByHandle = async (shopDomain: string, handle: string): Promise<string | null> => {
+  await ensureD1CatalogSchema();
+
+  const normalizedHandle = String(handle ?? '').trim().toLowerCase();
+  if (!shopDomain || !normalizedHandle) {
+    return null;
+  }
+
+  const rows = await runD1Query(
+    `
+      SELECT image_url
+      FROM shopify_product_variants
+      WHERE shop_domain = ?
+        AND LOWER(handle) = ?
+        AND image_url IS NOT NULL
+        AND image_url <> ''
+      ORDER BY updated_at DESC, last_seen_at DESC
+      LIMIT 1
+    `,
+    [shopDomain, normalizedHandle],
+  );
+
+  const imageUrl = (rows as Array<Record<string, unknown>>)[0]?.image_url;
+  return imageUrl == null ? null : String(imageUrl).trim() || null;
+};
+
+export const d1GetProductImageUrlByVariant = async (shopDomain: string, variantId: string): Promise<string | null> => {
+  await ensureD1CatalogSchema();
+
+  const normalizedVariantId = String(variantId ?? '').trim();
+  if (!shopDomain || !normalizedVariantId) {
+    return null;
+  }
+
+  const rows = await runD1Query(
+    `
+      SELECT image_url
+      FROM shopify_product_variants
+      WHERE shop_domain = ?
+        AND variant_id = ?
+        AND image_url IS NOT NULL
+        AND image_url <> ''
+      ORDER BY updated_at DESC, last_seen_at DESC
+      LIMIT 1
+    `,
+    [shopDomain, normalizedVariantId],
+  );
+
+  const imageUrl = (rows as Array<Record<string, unknown>>)[0]?.image_url;
+  return imageUrl == null ? null : String(imageUrl).trim() || null;
+};
+
 export const d1GetVariantsByInventoryItem = async (
   shopDomain: string,
   inventoryItemId: string,

@@ -5340,6 +5340,9 @@ export const processAutomationJob = async (jobId: string) => {
         cartToken: payloadCartToken || null,
         externalId: payloadExternalId || null,
         fallbackProductId: payload.productId == null ? null : String(payload.productId),
+        fallbackVariantId: payload.metadata?.variantId == null
+          ? null
+          : String(payload.metadata.variantId),
       });
 
       if (cartProductImage) {
@@ -6091,6 +6094,7 @@ export const recordSubscriberActivity = async (input: {
               stepKey,
               actionButtons: step.actionButtons ?? [],
               cartProductIds,
+              variantId: input.metadata?.variantId == null ? null : String(input.metadata.variantId),
             },
             externalId: input.externalId,
             productId: input.productId ?? null,
@@ -8194,6 +8198,109 @@ const enqueueAudienceOutbox = async (input: UpsertTokenInput) => {
 };
 
 /**
+ * Re-enqueue cart abandonment reminders after a subscriber token is saved.
+ * Fixes the subscribe→add-to-cart race where add_to_cart arrived before the
+ * server had an active token to target.
+ */
+export const replayCartAbandonmentEnqueueForSubscriber = async (input: {
+  shopDomain: string;
+  externalId: string;
+}) => {
+  const rule = await getRuleConfig(input.shopDomain, 'cart_abandonment_30m');
+  if (!rule.enabled) {
+    return { enqueued: false, reason: 'automation_inactive' as const };
+  }
+
+  const targets = await listAutomationTargets({
+    shopDomain: input.shopDomain,
+    externalId: input.externalId,
+  });
+  if (targets.length === 0) {
+    return { enqueued: false, reason: 'no_targets' as const };
+  }
+
+  const sql = getNeonSql();
+  const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  let latestEvent: {
+    pageUrl: string | null;
+    productId: string | null;
+    cartToken: string | null;
+    metadata: Record<string, unknown> | null;
+    createdAt: string;
+  } | null = null;
+
+  const neonRows = await sql`
+    SELECT page_url, product_id, cart_token, metadata, created_at
+    FROM subscriber_activity_events
+    WHERE shop_domain = ${input.shopDomain}
+      AND external_id = ${input.externalId}
+      AND event_type = 'add_to_cart'
+      AND created_at >= ${windowStart}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+
+  if (neonRows[0]) {
+    latestEvent = {
+      pageUrl: neonRows[0].page_url ? String(neonRows[0].page_url) : null,
+      productId: neonRows[0].product_id ? String(neonRows[0].product_id) : null,
+      cartToken: neonRows[0].cart_token ? String(neonRows[0].cart_token) : null,
+      metadata: (neonRows[0].metadata as Record<string, unknown> | null) ?? null,
+      createdAt: new Date(neonRows[0].created_at).toISOString(),
+    };
+  }
+
+  const { isD1EventsEnabled, runD1Query } = await import('@/lib/server/integrations/d1-events');
+  if (isD1EventsEnabled()) {
+    const d1Rows = await runD1Query(
+      `
+        SELECT page_url, product_id, cart_token, metadata, created_at
+        FROM subscriber_activity_events
+        WHERE shop_domain = ?
+          AND external_id = ?
+          AND event_type = 'add_to_cart'
+          AND created_at >= ?
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [input.shopDomain, input.externalId, windowStart.toISOString()],
+    ) as Array<Record<string, unknown>>;
+
+    if (d1Rows[0]) {
+      const createdAt = String(d1Rows[0].created_at ?? '');
+      if (!latestEvent || createdAt > latestEvent.createdAt) {
+        latestEvent = {
+          pageUrl: d1Rows[0].page_url == null ? null : String(d1Rows[0].page_url),
+          productId: d1Rows[0].product_id == null ? null : String(d1Rows[0].product_id),
+          cartToken: d1Rows[0].cart_token == null ? null : String(d1Rows[0].cart_token),
+          metadata: d1Rows[0].metadata
+            ? (JSON.parse(String(d1Rows[0].metadata)) as Record<string, unknown>)
+            : null,
+          createdAt,
+        };
+      }
+    }
+  }
+
+  if (!latestEvent) {
+    return { enqueued: false, reason: 'no_recent_cart_event' as const };
+  }
+
+  await recordSubscriberActivity({
+    shopDomain: input.shopDomain,
+    externalId: input.externalId,
+    eventType: 'add_to_cart',
+    pageUrl: latestEvent.pageUrl,
+    productId: latestEvent.productId,
+    cartToken: latestEvent.cartToken,
+    metadata: latestEvent.metadata,
+    skipActivityPersist: true,
+  });
+
+  return { enqueued: true };
+};
+
+/**
  * Enqueue the welcome automation for a genuinely new token. Extracted so both the
  * live token write and the outbox reconciler trigger it identically. The existing
  * job/delivery dedupe below makes it safe to call more than once for the same
@@ -8372,6 +8479,12 @@ export const reconcileAudienceOutbox = async (limit = 500) => {
         tokenId: result.tokenId,
         tokenWasInserted: result.tokenWasInserted,
       });
+      if (result.tokenId > 0) {
+        await replayCartAbandonmentEnqueueForSubscriber({
+          shopDomain: input.shopDomain,
+          externalId: input.externalId,
+        });
+      }
       await sql`DELETE FROM d1_audience_outbox WHERE id = ${row.id}`;
       processed += 1;
     } catch (error) {
@@ -8583,6 +8696,20 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
       '[audience] welcome automation enqueue failed; token saved',
       welcomeError instanceof Error ? welcomeError.message : welcomeError,
     );
+  }
+
+  if (tokenId > 0) {
+    try {
+      await replayCartAbandonmentEnqueueForSubscriber({
+        shopDomain: input.shopDomain,
+        externalId: input.externalId,
+      });
+    } catch (cartReplayError) {
+      console.error(
+        '[audience] cart abandonment replay enqueue failed; token saved',
+        cartReplayError instanceof Error ? cartReplayError.message : cartReplayError,
+      );
+    }
   }
 
   if (tokenWasInserted && optInPromptType) {

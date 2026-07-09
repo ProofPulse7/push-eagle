@@ -173,37 +173,128 @@ export const listCartProductsInAddOrder = async (input: {
   return dedupeProductIdsInOrder(mergedRows.map((row) => row.productId));
 };
 
+const isNumericProductId = (value: string) => /^\d+$/.test(value);
+
+const lookupNeonProductImage = async (input: {
+  shopDomain: string;
+  productId?: string | null;
+  handle?: string | null;
+  variantId?: string | null;
+}) => {
+  const sql = getNeonSql();
+
+  if (input.variantId) {
+    const variantRows = await sql`
+      SELECT image_url
+      FROM shopify_product_variants
+      WHERE shop_domain = ${input.shopDomain}
+        AND variant_id = ${input.variantId}
+        AND image_url IS NOT NULL
+        AND image_url <> ''
+      ORDER BY updated_at DESC NULLS LAST, last_seen_at DESC NULLS LAST
+      LIMIT 1
+    `;
+    const variantImage = variantRows[0]?.image_url ? String(variantRows[0].image_url).trim() : '';
+    if (variantImage) {
+      return variantImage;
+    }
+  }
+
+  const productId = input.productId ? String(input.productId).trim() : '';
+  if (productId && isNumericProductId(productId)) {
+    const productRows = await sql`
+      SELECT image_url
+      FROM shopify_product_variants
+      WHERE shop_domain = ${input.shopDomain}
+        AND product_id = ${productId}
+        AND image_url IS NOT NULL
+        AND image_url <> ''
+      ORDER BY updated_at DESC NULLS LAST, last_seen_at DESC NULLS LAST
+      LIMIT 1
+    `;
+    const productImage = productRows[0]?.image_url ? String(productRows[0].image_url).trim() : '';
+    if (productImage) {
+      return productImage;
+    }
+  }
+
+  const handle = input.handle ? String(input.handle).trim().toLowerCase() : '';
+  if (handle) {
+    const handleRows = await sql`
+      SELECT image_url
+      FROM shopify_product_variants
+      WHERE shop_domain = ${input.shopDomain}
+        AND LOWER(handle) = ${handle}
+        AND image_url IS NOT NULL
+        AND image_url <> ''
+      ORDER BY updated_at DESC NULLS LAST, last_seen_at DESC NULLS LAST
+      LIMIT 1
+    `;
+    const handleImage = handleRows[0]?.image_url ? String(handleRows[0].image_url).trim() : '';
+    if (handleImage) {
+      return handleImage;
+    }
+  }
+
+  if (productId && !isNumericProductId(productId)) {
+    const slugRows = await sql`
+      SELECT image_url
+      FROM shopify_product_variants
+      WHERE shop_domain = ${input.shopDomain}
+        AND LOWER(handle) = ${productId.toLowerCase()}
+        AND image_url IS NOT NULL
+        AND image_url <> ''
+      ORDER BY updated_at DESC NULLS LAST, last_seen_at DESC NULLS LAST
+      LIMIT 1
+    `;
+    const slugImage = slugRows[0]?.image_url ? String(slugRows[0].image_url).trim() : '';
+    if (slugImage) {
+      return slugImage;
+    }
+  }
+
+  return null;
+};
+
 export const resolveShopifyProductImageUrl = async (
   shopDomain: string,
   productId: string,
+  variantId?: string | null,
 ): Promise<string | null> => {
   const normalizedProductId = String(productId ?? '').trim();
-  if (!shopDomain || !normalizedProductId) {
+  const normalizedVariantId = variantId ? String(variantId).trim() : '';
+  if (!shopDomain || (!normalizedProductId && !normalizedVariantId)) {
     return null;
   }
 
   if (isD1CatalogEnabled()) {
-    const { d1GetProductImageUrl } = await import('@/lib/server/integrations/d1-catalog');
-    const d1Image = await d1GetProductImageUrl(shopDomain, normalizedProductId);
-    if (d1Image) {
-      return d1Image;
+    const { d1GetProductImageUrl, d1GetProductImageUrlByHandle, d1GetProductImageUrlByVariant } = await import('@/lib/server/integrations/d1-catalog');
+    if (normalizedVariantId) {
+      const variantImage = await d1GetProductImageUrlByVariant(shopDomain, normalizedVariantId);
+      if (variantImage) {
+        return variantImage;
+      }
+    }
+    if (normalizedProductId && isNumericProductId(normalizedProductId)) {
+      const d1Image = await d1GetProductImageUrl(shopDomain, normalizedProductId);
+      if (d1Image) {
+        return d1Image;
+      }
+    }
+    if (normalizedProductId) {
+      const handleImage = await d1GetProductImageUrlByHandle(shopDomain, normalizedProductId);
+      if (handleImage) {
+        return handleImage;
+      }
     }
   }
 
-  const sql = getNeonSql();
-  const rows = await sql`
-    SELECT image_url
-    FROM shopify_product_variants
-    WHERE shop_domain = ${shopDomain}
-      AND product_id = ${normalizedProductId}
-      AND image_url IS NOT NULL
-      AND image_url <> ''
-    ORDER BY updated_at DESC NULLS LAST, last_seen_at DESC NULLS LAST
-    LIMIT 1
-  `;
-
-  const imageUrl = rows[0]?.image_url ? String(rows[0].image_url).trim() : '';
-  return imageUrl || null;
+  return lookupNeonProductImage({
+    shopDomain,
+    productId: normalizedProductId,
+    handle: normalizedProductId && !isNumericProductId(normalizedProductId) ? normalizedProductId : null,
+    variantId: normalizedVariantId,
+  });
 };
 
 export const resolveCartReminderProductImage = async (input: {
@@ -213,6 +304,7 @@ export const resolveCartReminderProductImage = async (input: {
   cartToken?: string | null;
   externalId?: string | null;
   fallbackProductId?: string | null;
+  fallbackVariantId?: string | null;
 }) => {
   let productIds = Array.isArray(input.cartProductIds)
     ? input.cartProductIds.map((value) => String(value).trim()).filter(Boolean)
@@ -234,5 +326,5 @@ export const resolveCartReminderProductImage = async (input: {
     return null;
   }
 
-  return resolveShopifyProductImageUrl(input.shopDomain, productId);
+  return resolveShopifyProductImageUrl(input.shopDomain, productId, input.fallbackVariantId);
 };

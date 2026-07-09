@@ -220,7 +220,7 @@ export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick'
         mode: 'queue',
         queuePromotion,
         safetyNet: runAutomationSafetyNet
-          ? await reconcileMissedAutomationJobs(config.maxAutomationJobs)
+          ? await reconcileMissedAutomationJobs(Math.max(config.maxAutomationJobs, 250))
           : { skipped: true },
       });
     } else if (runAutomationSafetyNet && (hasImmediateWork || probe.dueAutomationJobs > 0)) {

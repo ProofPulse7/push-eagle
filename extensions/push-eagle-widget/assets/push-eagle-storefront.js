@@ -755,6 +755,22 @@
     }
   }
 
+  function extractProductIdFromCartAddResponse(responseBody) {
+    try {
+      var parsed = typeof responseBody === 'string' ? JSON.parse(responseBody) : responseBody;
+      if (!parsed || typeof parsed !== 'object') {
+        return null;
+      }
+      if (parsed.product_id != null) {
+        return String(parsed.product_id);
+      }
+      if (Array.isArray(parsed.items) && parsed.items[0] && parsed.items[0].product_id != null) {
+        return String(parsed.items[0].product_id);
+      }
+    } catch (_parseCartResponseError) {}
+    return null;
+  }
+
   function buildActivityPayload(boot, eventType, metadata) {
     var url = window.location.href;
     var productMatch = window.location.pathname.match(/\/products\/([^/?#]+)/i);
@@ -768,16 +784,44 @@
         || productIdNode.getAttribute('data-product');
     }
 
-    if (!detectedProductId && metadata && metadata.productId) {
-      detectedProductId = metadata.productId;
+    function resolveNumericProductId() {
+      var candidates = [];
+      if (metadata && metadata.productId) {
+        candidates.push(metadata.productId);
+      }
+      if (detectedProductId) {
+        candidates.push(detectedProductId);
+      }
+      if (window.ShopifyAnalytics && window.ShopifyAnalytics.meta && window.ShopifyAnalytics.meta.product && window.ShopifyAnalytics.meta.product.id) {
+        candidates.push(window.ShopifyAnalytics.meta.product.id);
+      }
+      if (window.meta && window.meta.product && window.meta.product.id) {
+        candidates.push(window.meta.product.id);
+      }
+      if (window.Shopify && window.Shopify.product && window.Shopify.product.id) {
+        candidates.push(window.Shopify.product.id);
+      }
+      var hiddenProductInput = document.querySelector('input[name="product-id"], input[name="product_id"]');
+      if (hiddenProductInput && hiddenProductInput.value) {
+        candidates.push(hiddenProductInput.value);
+      }
+
+      for (var candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+        var candidate = String(candidates[candidateIndex] || '').trim();
+        if (/^\d+$/.test(candidate)) {
+          return candidate;
+        }
+      }
+      return null;
     }
 
+    var numericProductId = resolveNumericProductId();
     var payload = {
       shopDomain: boot.shopDomain,
       externalId: boot.externalId,
       eventType: eventType,
       pageUrl: url,
-      productId: detectedProductId || (productMatch ? productMatch[1] : null),
+      productId: numericProductId || (metadata && metadata.productId) || (productMatch ? productMatch[1] : null),
       cartToken: (metadata && metadata.cartToken) || null,
       metadata: metadata || {}
     };
@@ -1142,11 +1186,20 @@
 
         return originalFetch(input, init).then(function (response) {
           if (response && response.ok && isCartAddUrl(requestUrl)) {
-            reportAddToCart({
-              productId: null,
-              variantId: parsedBody.variantId,
-              quantity: parsedBody.quantity,
-            }, 'fetch_cart_add');
+            response.clone().json().then(function (body) {
+              var responseProductId = extractProductIdFromCartAddResponse(body);
+              reportAddToCart({
+                productId: responseProductId,
+                variantId: parsedBody.variantId || (body && body.variant_id != null ? String(body.variant_id) : null),
+                quantity: parsedBody.quantity,
+              }, 'fetch_cart_add');
+            }).catch(function () {
+              reportAddToCart({
+                productId: null,
+                variantId: parsedBody.variantId,
+                quantity: parsedBody.quantity,
+              }, 'fetch_cart_add');
+            });
           }
           return response;
         });
@@ -1170,9 +1223,18 @@
         function onLoad() {
           try {
             if (xhr && xhr.status >= 200 && xhr.status < 300 && isCartAddUrl(xhr.__pushEagleUrl)) {
+              var responseProductId = null;
+              var responseVariantId = parsedBody.variantId;
+              try {
+                var responseBody = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+                responseProductId = extractProductIdFromCartAddResponse(responseBody);
+                if (!responseVariantId && responseBody && responseBody.variant_id != null) {
+                  responseVariantId = String(responseBody.variant_id);
+                }
+              } catch (_xhrParseError) {}
               reportAddToCart({
-                productId: null,
-                variantId: parsedBody.variantId,
+                productId: responseProductId,
+                variantId: responseVariantId,
                 quantity: parsedBody.quantity,
               }, 'xhr_cart_add');
             }
