@@ -361,6 +361,128 @@ export const queryD1TrackingRowsForAutomation = async (input: {
     .slice(0, 100);
 };
 
+export const hasD1RecentSubscriberActivity = async (input: {
+  shopDomain: string;
+  externalId: string;
+  sinceIso: string;
+  eventTypes: string[];
+  productId?: string | null;
+  cartToken?: string | null;
+}) => {
+  if (!isD1EventsEnabled() || !input.externalId || input.eventTypes.length === 0) {
+    return false;
+  }
+
+  await ensureD1EventsSchema();
+
+  const eventPlaceholders = input.eventTypes.map(() => '?').join(', ');
+  const params: unknown[] = [
+    input.shopDomain,
+    input.externalId,
+    input.sinceIso,
+    ...input.eventTypes,
+  ];
+
+  let identityClause = '';
+  if (input.productId) {
+    identityClause = 'AND product_id = ?';
+    params.push(input.productId);
+  } else if (input.cartToken) {
+    identityClause = 'AND cart_token = ?';
+    params.push(input.cartToken);
+  }
+
+  const rows = await runD1Query(
+    `
+      SELECT id
+      FROM subscriber_activity_events
+      WHERE shop_domain = ?
+        AND external_id = ?
+        AND created_at > ?
+        AND event_type IN (${eventPlaceholders})
+        ${identityClause}
+      LIMIT 1
+    `,
+    params,
+  );
+
+  return (rows as unknown[]).length > 0;
+};
+
+export const hasD1CheckoutCompleteSince = async (input: {
+  shopDomain: string;
+  externalId?: string | null;
+  cartToken?: string | null;
+  sinceIso?: string | null;
+}) => {
+  if (!isD1EventsEnabled()) {
+    return false;
+  }
+
+  const externalId = input.externalId?.trim() || null;
+  const cartToken = input.cartToken?.trim() || null;
+  if (!externalId && !cartToken) {
+    return false;
+  }
+
+  await ensureD1EventsSchema();
+
+  const sinceClause = input.sinceIso ? 'AND created_at >= ?' : '';
+  const params: unknown[] = [input.shopDomain];
+  if (input.sinceIso) {
+    params.push(input.sinceIso);
+  }
+
+  if (externalId && cartToken) {
+    params.push(externalId, cartToken);
+    const rows = await runD1Query(
+      `
+        SELECT id
+        FROM subscriber_activity_events
+        WHERE shop_domain = ?
+          AND event_type = 'checkout_complete'
+          ${sinceClause}
+          AND (external_id = ? OR cart_token = ?)
+        LIMIT 1
+      `,
+      params,
+    );
+    return (rows as unknown[]).length > 0;
+  }
+
+  if (externalId) {
+    params.push(externalId);
+    const rows = await runD1Query(
+      `
+        SELECT id
+        FROM subscriber_activity_events
+        WHERE shop_domain = ?
+          AND event_type = 'checkout_complete'
+          ${sinceClause}
+          AND external_id = ?
+        LIMIT 1
+      `,
+      params,
+    );
+    return (rows as unknown[]).length > 0;
+  }
+
+  params.push(cartToken);
+  const rows = await runD1Query(
+    `
+      SELECT id
+      FROM subscriber_activity_events
+      WHERE shop_domain = ?
+        AND event_type = 'checkout_complete'
+        ${sinceClause}
+        AND cart_token = ?
+      LIMIT 1
+    `,
+    params,
+  );
+  return (rows as unknown[]).length > 0;
+};
+
 export const pruneD1TrackingEvents = async (hotRetentionDays?: number, batchSize = 2000) => {
   if (!isD1EventsEnabled()) {
     return { pixelDeleted: 0, activityDeleted: 0 };

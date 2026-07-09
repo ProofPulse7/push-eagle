@@ -3403,6 +3403,22 @@ const hasRecentActivity = async (input: {
     return false;
   }
 
+  const sinceIso = new Date(input.since).toISOString();
+  const { isD1EventsEnabled, hasD1RecentSubscriberActivity } = await import('@/lib/server/integrations/d1-events');
+  if (isD1EventsEnabled()) {
+    const d1Hit = await hasD1RecentSubscriberActivity({
+      shopDomain: input.shopDomain,
+      externalId: input.externalId,
+      sinceIso,
+      eventTypes: input.eventTypes,
+      productId: input.productId,
+      cartToken: input.cartToken,
+    }).catch(() => false);
+    if (d1Hit) {
+      return true;
+    }
+  }
+
   const sql = getNeonSql();
 
   let identityFilter = sql``;
@@ -3424,6 +3440,131 @@ const hasRecentActivity = async (input: {
   `;
 
   return rows.length > 0;
+};
+
+const hasCheckoutCompleteSince = async (input: {
+  shopDomain: string;
+  externalId?: string | null;
+  cartToken?: string | null;
+  since?: Date | null;
+}) => {
+  const payloadExternalId = input.externalId?.trim() || null;
+  const payloadCartToken = input.cartToken?.trim() || null;
+  if (!payloadExternalId && !payloadCartToken) {
+    return false;
+  }
+
+  const sinceIso = input.since ? input.since.toISOString() : null;
+  const { isD1EventsEnabled, hasD1CheckoutCompleteSince } = await import('@/lib/server/integrations/d1-events');
+  if (isD1EventsEnabled()) {
+    const d1Hit = await hasD1CheckoutCompleteSince({
+      shopDomain: input.shopDomain,
+      externalId: payloadExternalId,
+      cartToken: payloadCartToken,
+      sinceIso,
+    }).catch(() => false);
+    if (d1Hit) {
+      return true;
+    }
+  }
+
+  const sql = getNeonSql();
+  const payloadTriggeredAt = input.since ?? null;
+
+  const checkoutCompletedRows = payloadExternalId && payloadCartToken
+    ? await sql`
+      SELECT id
+      FROM subscriber_activity_events
+      WHERE shop_domain = ${input.shopDomain}
+        AND event_type = 'checkout_complete'
+        AND (external_id = ${payloadExternalId} OR cart_token = ${payloadCartToken})
+        ${payloadTriggeredAt ? sql`AND created_at >= ${payloadTriggeredAt}` : sql``}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `
+    : payloadExternalId
+      ? await sql`
+        SELECT id
+        FROM subscriber_activity_events
+        WHERE shop_domain = ${input.shopDomain}
+          AND event_type = 'checkout_complete'
+          AND external_id = ${payloadExternalId}
+          ${payloadTriggeredAt ? sql`AND created_at >= ${payloadTriggeredAt}` : sql``}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `
+      : payloadCartToken
+        ? await sql`
+          SELECT id
+          FROM subscriber_activity_events
+          WHERE shop_domain = ${input.shopDomain}
+            AND event_type = 'checkout_complete'
+            AND cart_token = ${payloadCartToken}
+            ${payloadTriggeredAt ? sql`AND created_at >= ${payloadTriggeredAt}` : sql``}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `
+        : [];
+
+  return Boolean(checkoutCompletedRows[0]?.id);
+};
+
+const cancelPendingCartReminderJobs = async (input: {
+  shopDomain: string;
+  externalId?: string | null;
+  cartToken?: string | null;
+}) => {
+  const externalId = input.externalId?.trim() || null;
+  const cartToken = input.cartToken?.trim() || null;
+  if (!externalId && !cartToken) {
+    return;
+  }
+
+  const sql = getNeonSql();
+  if (externalId && cartToken) {
+    await sql`
+      UPDATE automation_jobs
+      SET status = 'skipped',
+          error_message = 'Cart recovered before reminder send.',
+          updated_at = NOW(),
+          queue_enqueued_at = NULL
+      WHERE shop_domain = ${input.shopDomain}
+        AND rule_key = 'cart_abandonment_30m'
+        AND status = 'pending'
+        AND (
+          payload ->> 'externalId' = ${externalId}
+          OR payload ->> 'cartToken' = ${cartToken}
+        )
+    `;
+    return;
+  }
+
+  if (externalId) {
+    await sql`
+      UPDATE automation_jobs
+      SET status = 'skipped',
+          error_message = 'Cart recovered before reminder send.',
+          updated_at = NOW(),
+          queue_enqueued_at = NULL
+      WHERE shop_domain = ${input.shopDomain}
+        AND rule_key = 'cart_abandonment_30m'
+        AND status = 'pending'
+        AND payload ->> 'externalId' = ${externalId}
+    `;
+    return;
+  }
+
+  await sql`
+    UPDATE automation_jobs
+    SET status = 'skipped',
+        error_message = 'Cart recovered before reminder send.',
+        updated_at = NOW(),
+        queue_enqueued_at = NULL
+    WHERE shop_domain = ${input.shopDomain}
+      AND rule_key = 'cart_abandonment_30m'
+      AND status = 'pending'
+      AND payload ->> 'cartToken' = ${cartToken}
+  `;
 };
 
 const hasRecentOrder = async (input: {
@@ -4074,6 +4215,30 @@ export const enqueueAutomationJob = async (input: {
         AND dedupe_key = ${input.dedupeKey}
         AND status IN ('failed', 'skipped')
     `;
+
+    const refreshedRows = await sql`
+      UPDATE automation_jobs
+      SET
+        due_at = ${dueAt},
+        payload = ${JSON.stringify(input.payload)}::jsonb,
+        status = 'pending',
+        error_message = NULL,
+        queue_enqueued_at = NULL,
+        updated_at = NOW()
+      WHERE shop_domain = ${input.shopDomain}
+        AND dedupe_key = ${input.dedupeKey}
+        AND status = 'pending'
+      RETURNING id
+    `;
+
+    const refreshedId = refreshedRows[0] ? String(refreshedRows[0].id) : null;
+    if (refreshedId) {
+      const { queueAutomationJobAfterInsert } = await import('@/lib/server/automation/queue-scheduler');
+      queueAutomationJobAfterInsert(refreshedId, dueAt);
+      const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+      void bumpCronWakeNow();
+      return refreshedId;
+    }
   }
 
   const rows = await sql`
@@ -4291,7 +4456,7 @@ export const ingestStorefrontPixelEventDirect = async (payload: PixelIngestionPa
       clientId: payload.clientId ?? null,
       pixelEventId,
     },
-    skipActivityPersist: true,
+    skipActivityPersist: payload.eventType !== 'checkout_complete' && payload.eventType !== 'checkout_start',
   });
 
   if (payload.eventType === 'checkout_complete') {
@@ -4811,7 +4976,8 @@ export const processAutomationJob = async (jobId: string) => {
   }
 
   if (!token || tokenStatus !== 'active') {
-    const maxMissingTokenRetries = 8;
+    const isCartReminder = claim.rule_key === 'cart_abandonment_30m';
+    const maxMissingTokenRetries = isCartReminder ? 12 : 8;
     const attempts = Number(claim.attempts ?? 0);
     const shouldFail = attempts >= maxMissingTokenRetries;
     const errorMessage = shouldFail
@@ -4820,7 +4986,9 @@ export const processAutomationJob = async (jobId: string) => {
     const isWelcome = claim.rule_key === 'welcome_subscriber';
     const deferMs = isWelcome
       ? (attempts <= 3 ? 5_000 : 15_000)
-      : 60_000;
+      : isCartReminder
+        ? 30_000
+        : 60_000;
 
     if (shouldFail) {
       await sql`
@@ -5184,42 +5352,14 @@ export const processAutomationJob = async (jobId: string) => {
         };
       }
 
-      const checkoutCompletedRows = payloadExternalId && payloadCartToken
-        ? await sql`
-          SELECT id
-          FROM subscriber_activity_events
-          WHERE shop_domain = ${claim.shop_domain}
-            AND event_type = 'checkout_complete'
-            AND (external_id = ${payloadExternalId} OR cart_token = ${payloadCartToken})
-            ${payloadTriggeredAt ? sql`AND created_at >= ${payloadTriggeredAt}` : sql``}
-          ORDER BY created_at DESC
-          LIMIT 1
-        `
-        : payloadExternalId
-          ? await sql`
-            SELECT id
-            FROM subscriber_activity_events
-            WHERE shop_domain = ${claim.shop_domain}
-              AND event_type = 'checkout_complete'
-              AND external_id = ${payloadExternalId}
-              ${payloadTriggeredAt ? sql`AND created_at >= ${payloadTriggeredAt}` : sql``}
-            ORDER BY created_at DESC
-            LIMIT 1
-          `
-          : payloadCartToken
-            ? await sql`
-              SELECT id
-              FROM subscriber_activity_events
-              WHERE shop_domain = ${claim.shop_domain}
-                AND event_type = 'checkout_complete'
-                AND cart_token = ${payloadCartToken}
-                ${payloadTriggeredAt ? sql`AND created_at >= ${payloadTriggeredAt}` : sql``}
-              ORDER BY created_at DESC
-              LIMIT 1
-            `
-            : [];
+      const checkoutAlreadyComplete = await hasCheckoutCompleteSince({
+        shopDomain: claim.shop_domain,
+        externalId: payloadExternalId || null,
+        cartToken: payloadCartToken || null,
+        since: payloadTriggeredAt,
+      });
 
-      if (checkoutCompletedRows[0]?.id) {
+      if (checkoutAlreadyComplete) {
         await sql`
           UPDATE automation_jobs
           SET status = 'skipped', error_message = 'Cart recovered before reminder send.', updated_at = NOW()
@@ -5360,14 +5500,21 @@ export const processAutomationJob = async (jobId: string) => {
             return { processed: false, error: waitMessage };
           }
 
-          if (previousStepStatus === 'skipped' || previousStepStatus === 'failed') {
-            const skipMessage = `Skipping ${payloadStepKey} because previous cart reminder step (${previousStepKey}) did not deliver.`;
-            await sql`
-              UPDATE automation_jobs
-              SET status = 'skipped', error_message = ${skipMessage}, updated_at = NOW()
-              WHERE id = ${jobId}
-            `;
-            return { processed: false, error: skipMessage };
+          if (previousStepStatus === 'skipped') {
+            const intentionalSkip =
+              previousStepError.includes('Cart recovered')
+              || previousStepError.includes('checkout')
+              || previousStepError.includes('disabled')
+              || previousStepError.includes('already delivered');
+            if (intentionalSkip) {
+              const skipMessage = `Skipping ${payloadStepKey} because previous cart reminder step (${previousStepKey}) was intentionally skipped.`;
+              await sql`
+                UPDATE automation_jobs
+                SET status = 'skipped', error_message = ${skipMessage}, updated_at = NOW()
+                WHERE id = ${jobId}
+              `;
+              return { processed: false, error: skipMessage };
+            }
           }
         }
       }
@@ -5690,15 +5837,20 @@ export const processAutomationJob = async (jobId: string) => {
       return { processed: false, error: message };
     }
 
-    const retryMinutes = claim.rule_key === 'welcome_subscriber' ? 0.25 : 5;
-    const shouldFail = Number(claim.attempts ?? 0) >= 5;
+    const retryMinutes = claim.rule_key === 'welcome_subscriber'
+      ? 0.25
+      : claim.rule_key === 'cart_abandonment_30m'
+        ? 2
+        : 5;
+    const maxSendAttempts = claim.rule_key === 'cart_abandonment_30m' ? 8 : 5;
+    const shouldFail = Number(claim.attempts ?? 0) >= maxSendAttempts;
     const deferredDueAt = shouldFail ? null : new Date(Date.now() + retryMinutes * 60_000);
 
     await sql`
       UPDATE automation_jobs
-      SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
+      SET status = CASE WHEN attempts >= ${maxSendAttempts} THEN 'failed' ELSE 'pending' END,
           error_message = ${message},
-          due_at = CASE WHEN attempts >= 5 THEN due_at ELSE ${deferredDueAt} END,
+          due_at = CASE WHEN attempts >= ${maxSendAttempts} THEN due_at ELSE ${deferredDueAt} END,
           queue_enqueued_at = NULL,
           updated_at = NOW()
       WHERE id = ${jobId}
@@ -5880,6 +6032,11 @@ export const recordSubscriberActivity = async (input: {
     if (rule.enabled) {
       const cartConfig = parseCartRuleConfig(rule.config);
       const clientId = normalizeClientId(input.metadata);
+
+      // Always persist add_to_cart while cart recovery is active so product-order
+      // tracking and identity stitching never miss a cart signal.
+      await persistRawEvent();
+
       let targets = await listAutomationTargets({ shopDomain: input.shopDomain, externalId: input.externalId });
 
       if (targets.length === 0) {
@@ -5899,19 +6056,13 @@ export const recordSubscriberActivity = async (input: {
         targets = await listAutomationTargetsByClientId(input.shopDomain, clientId);
       }
 
-      if (targets.length > 0) {
-        await persistRawEvent();
-      }
-
       const { listCartProductsInAddOrder } = await import('@/lib/server/automation/cart-abandonment-products');
-      const cartProductIds = targets.length > 0
-        ? await listCartProductsInAddOrder({
-            shopDomain: input.shopDomain,
-            cartToken: input.cartToken,
-            externalId: input.externalId,
-            currentProductId: input.productId,
-          })
-        : [];
+      const cartProductIds = await listCartProductsInAddOrder({
+        shopDomain: input.shopDomain,
+        cartToken: input.cartToken,
+        externalId: input.externalId,
+        currentProductId: input.productId,
+      });
 
       for (const stepKey of Object.keys(cartConfig.steps) as CartStepKey[]) {
         const step = cartConfig.steps[stepKey];
@@ -5952,6 +6103,7 @@ export const recordSubscriberActivity = async (input: {
   }
 
   if (input.eventType === 'checkout_start') {
+    await persistRawEvent();
     await queueRule(
       'checkout_abandonment_30m',
       30,
@@ -5963,6 +6115,15 @@ export const recordSubscriberActivity = async (input: {
         campaignLabel: 'checkout_abandonment_30m',
       },
     );
+  }
+
+  if (input.eventType === 'checkout_complete') {
+    await persistRawEvent();
+    await cancelPendingCartReminderJobs({
+      shopDomain: input.shopDomain,
+      externalId: input.externalId,
+      cartToken: input.cartToken,
+    });
   }
 
   return { eventId };

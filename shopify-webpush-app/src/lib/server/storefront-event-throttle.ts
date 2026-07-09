@@ -24,6 +24,11 @@ export const shouldThrottleStorefrontEvent = async (input: {
   pageUrl?: string | null;
   windowSeconds: number;
 }) => {
+  // Never throttle add_to_cart — each cart add must enqueue/refresh reminders.
+  if (input.eventType === 'add_to_cart') {
+    return false;
+  }
+
   const windowMs = Math.max(5, input.windowSeconds) * 1000;
   const fingerprint = createHash('sha256')
     .update(

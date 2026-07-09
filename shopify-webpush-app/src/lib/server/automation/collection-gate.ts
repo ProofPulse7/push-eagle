@@ -125,13 +125,22 @@ export const shouldCollectEventType = async (
     return false;
   }
 
-  const flag = EVENT_TYPE_TO_FLAG[eventType];
-  if (!flag) {
-    // Not a gated abandonment trigger (e.g. checkout_complete) — always allow.
+  if (eventType === 'checkout_complete') {
     return true;
   }
 
   const flags = await getCollectionFlags(shopDomainRaw);
+
+  if (eventType === 'checkout_start') {
+    // Needed both for checkout abandonment and to stop cart reminders once checkout begins.
+    return flags.checkout || flags.cart;
+  }
+
+  const flag = EVENT_TYPE_TO_FLAG[eventType];
+  if (!flag) {
+    return true;
+  }
+
   return flags[flag];
 };
 

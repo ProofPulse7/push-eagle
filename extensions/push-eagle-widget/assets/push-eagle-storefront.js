@@ -931,6 +931,7 @@
     // Clear up front so a mid-flush error can't cause an infinite replay/growth loop.
     writePendingActivity(boot.shopDomain, []);
 
+    var failed = [];
     for (var i = 0; i < pending.length; i += 1) {
       var item = pending[i];
       if (!item || !item.payload) {
@@ -946,8 +947,12 @@
       try {
         await postActivityPayload(boot, item.payload);
       } catch (_flushError) {
-        // best effort; already cleared to avoid retry storms
+        failed.push(item);
       }
+    }
+
+    if (failed.length) {
+      writePendingActivity(boot.shopDomain, failed);
     }
   }
 
@@ -3171,6 +3176,13 @@
       boot && boot.clientId ? boot.clientId : getOrCreateStableClientId(config.shopDomain),
       getShopifyAnalyticsClientId()
     );
+    setTimeout(function () {
+      syncExternalIdToCart(
+        boot && boot.externalId ? boot.externalId : null,
+        boot && boot.clientId ? boot.clientId : getOrCreateStableClientId(config.shopDomain),
+        getShopifyAnalyticsClientId()
+      );
+    }, 1500);
     bindCommerceActivityTracking(boot);
     if (window.location.pathname.indexOf('/products/') === 0) {
       sendActivityEvent(boot, 'product_view', {

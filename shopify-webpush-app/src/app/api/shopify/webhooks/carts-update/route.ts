@@ -69,15 +69,33 @@ const resolveIdentityFromCartSignals = async (shopDomain: string, token?: string
     };
   }
 
-  // When raw events live on Cloudflare D1, the Neon pixel/activity tables this
-  // stitch query scans are empty, so it would burn Neon compute for a guaranteed
-  // empty result. Consented carts carry the identity on the cart attribute
-  // (_push_eagle_external_id, set client-side), and anonymous carts intentionally
-  // resolve to nothing so they are not collected.
+  // When raw events live on Cloudflare D1, stitch identity from D1 tracking rows
+  // instead of the legacy Neon pixel/activity tables.
   if (isD1EventsEnabled()) {
+    const { queryD1TrackingRowsForAutomation } = await import('@/lib/server/integrations/d1-events');
+    const windowStartIso = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    const rows = await queryD1TrackingRowsForAutomation({
+      shopDomain,
+      cartToken: normalizedToken,
+      windowStartIso,
+    });
+
+    if (rows.length === 0) {
+      return {
+        externalId: null as string | null,
+        clientId: null as string | null,
+      };
+    }
+
+    const sorted = [...rows].sort((left, right) => right.created_at.localeCompare(left.created_at));
+    const preferred = sorted.find((row) => {
+      const externalId = String(row.external_id ?? '').trim();
+      return externalId.length > 0 && !externalId.startsWith(`cart:${shopDomain}:`);
+    }) ?? sorted[0];
+
     return {
-      externalId: null as string | null,
-      clientId: null as string | null,
+      externalId: preferred?.external_id ? String(preferred.external_id).trim() : null,
+      clientId: preferred?.client_id ? String(preferred.client_id).trim() : null,
     };
   }
 

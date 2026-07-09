@@ -242,6 +242,7 @@ register(({ analytics, settings, init }) => {
 
   subscribeSafely(analytics, 'page_viewed', (event) => send('page_viewed', event));
   subscribeSafely(analytics, 'product_viewed', (event) => send('product_viewed', event));
+  subscribeSafely(analytics, 'product_added_to_cart', (event) => send('product_added_to_cart', event));
   subscribeSafely(analytics, 'checkout_started', (event) => send('checkout_started', event));
   subscribeSafely(analytics, 'checkout_completed', (event) => send('checkout_completed', event));
 });
