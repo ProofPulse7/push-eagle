@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { getOptInSettings, recordOptInPromptEvent } from '@/lib/server/data/store';
+import { getStorefrontConfigCached } from '@/lib/server/cache/storefront-config-cache';
+import { recordOptInPromptEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { verifyStorefrontRequest } from '@/lib/server/storefront-request-auth';
 
@@ -41,7 +42,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const settings = await getOptInSettings(shopDomain);
+    // KV-cached — avoids a Neon merchant_settings read on every prompt view/click.
+    const { optIn: settings } = await getStorefrontConfigCached(shopDomain);
     if (settings.promptType === 'off') {
       return NextResponse.json({ ok: true, ignored: true }, { headers: buildCorsHeaders(origin) });
     }

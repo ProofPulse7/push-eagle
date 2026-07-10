@@ -39,6 +39,11 @@ Code now **stops reading/writing Neon** for data that already lives on D1:
 | Welcome path uses cached rule; skips Neon job existence scan | Opt-ins stop double-reading rules/jobs |
 | Attribution settings **6h KV** cache | Order attribution skips Neon settings wake |
 | Storefront config TTL **6h** (invalidated on edit) | Fewer Neon opt-in/capability reads per page view |
+| Opt-in event uses **storefront config cache** | Prompt view/click skips Neon settings read |
+| Opt-in view beacons skip dashboard KV invalidation | Stops thrashing bootstrap caches on every page view |
+| Catalog/inventory/fulfillment skip Neon when D1 owns data | Product/inventory/shipping webhooks avoid schema wakes |
+| `processAutomationJob` uses **cached `getRuleConfig`** | No per-job `automation_rules` SELECT |
+| Activity path skips `ensureSchema` when D1 events on | Cart/browse events avoid DDL probe before D1 write |
 | Cron probe uses **EXISTS** not COUNT; skips ingestion when D1 | Smaller probe queries |
 | `neonTableExists` **24h** cache | Retention stops re-probing regclass every run |
 | Collection flags TTL 2m / KV 10m | Fewer rule-enabled Neon reads |

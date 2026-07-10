@@ -1,28 +1,31 @@
 # Neon database — Vercel environment variables
 
-Both Vercel projects must use the **same** Neon Postgres database (production branch, pooler endpoint).
+Both Vercel projects must use the **same** Neon Postgres database (production branch, pooler endpoint). Neon runs **PostgreSQL 18**.
 
 | Neon detail | Value |
 |-------------|--------|
-| Host (pooler) | `ep-weathered-wind-aogxzw4p-pooler.c-2.ap-southeast-1.aws.neon.tech` |
+| Host (pooler) | `ep-crimson-glitter-aodrbrnd-pooler.c-2.ap-southeast-1.aws.neon.tech` |
 | Database | `neondb` |
 | Role | `neondb_owner` |
-| Branch | production (default) |
+| Branch | Production |
+
+**Retired hosts (do not use):** `ep-weathered-wind-…`, `ep-winter-fire-…`
 
 ## Vercel — `push-eagle` (Remix)
 
 | Variable | Value |
 |----------|--------|
-| `DATABASE_URL` | `postgresql://neondb_owner:YOUR_PASSWORD@ep-weathered-wind-aogxzw4p-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require` |
+| `DATABASE_URL` | `postgresql://neondb_owner:YOUR_PASSWORD@ep-crimson-glitter-aodrbrnd-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require` |
+| `NEON_DATABASE_URL` | Same connection string (keep in sync with `DATABASE_URL`) |
 
-Deploy once after saving — build runs `prisma db push` and creates `public."Session"`.
+Deploy once after saving — build runs `prisma db push` and creates `shopify_sessions."Session"` (or `public."Session"` depending on schema config).
 
 ## Vercel — `push-eagle-dashboard` (Next.js)
 
 | Variable | Value |
 |----------|--------|
-| `NEON_DATABASE_URL` | Same connection string as `DATABASE_URL` above |
-| `SHOPIFY_SESSION_DATABASE_URL` | Same connection string (optional; auto-derived if omitted) |
+| `NEON_DATABASE_URL` | Same connection string as above |
+| `SHOPIFY_SESSION_DATABASE_URL` | Same host + `&schema=shopify_sessions` |
 | `DATABASE_URL` | Same connection string (optional backup) |
 
 Business tables are created automatically on first use via `ensureSchema()`. To pre-init:
@@ -41,4 +44,4 @@ NEON_DATABASE_URL="..." npm run db:init-schema
 
 ## Fresh database vs data migration
 
-Updating env vars alone starts with an **empty** database. Merchants must open the app from Shopify Admin again to OAuth. To move existing data, use `pg_dump` / `pg_restore` from the old Neon project before cutover.
+Updating env vars alone starts with an **empty** database. Merchants must open the app from Shopify Admin again to OAuth. To move existing data, use a Node/`pg` migrator (or `pg_dump`/`pg_restore` matching the server major version) from the old Neon project before cutover.

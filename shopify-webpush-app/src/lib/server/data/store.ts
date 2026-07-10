@@ -5228,15 +5228,10 @@ export const processAutomationJob = async (jobId: string) => {
       subscriberBrowser = pb?.browser ?? null;
     }
 
-    const ruleRows = await sql`
-      SELECT enabled, config
-      FROM automation_rules
-      WHERE shop_domain = ${claim.shop_domain}
-        AND rule_key = ${claim.rule_key}
-      LIMIT 1
-    `;
+    // KV/memory cached — avoids a Neon automation_rules round-trip on every job.
+    const rule = await getRuleConfig(claim.shop_domain, claim.rule_key as AutomationRuleKey);
 
-    if (!Boolean(ruleRows[0]?.enabled)) {
+    if (!rule.enabled) {
       await sql`
         UPDATE automation_jobs
         SET status = 'skipped', error_message = 'Automation rule is disabled.', updated_at = NOW()
@@ -5245,13 +5240,14 @@ export const processAutomationJob = async (jobId: string) => {
       return { processed: false, error: 'Automation rule is disabled.' };
     }
 
+    const ruleConfig = rule.config;
     const payloadMetadata = (payload.metadata ?? {}) as Record<string, unknown>;
     const payloadStepKey = payloadMetadata.stepKey == null ? '' : String(payloadMetadata.stepKey);
 
     if (claim.rule_key === 'welcome_subscriber' && payloadStepKey) {
       const { findAutomationDeliveryJobIdJoined, findAutomationDeliveryIdForPreviousStep } =
         await import('@/lib/server/integrations/deliveries-data');
-      const welcomeConfig = parseWelcomeRuleConfig(ruleRows[0]?.config ?? null);
+      const welcomeConfig = parseWelcomeRuleConfig(ruleConfig);
       const step = welcomeConfig.steps[payloadStepKey as WelcomeStepKey];
       const welcomeStepOrder: WelcomeStepKey[] = ['reminder-1', 'reminder-2', 'reminder-3'];
 
@@ -5453,7 +5449,7 @@ export const processAutomationJob = async (jobId: string) => {
       const { findAutomationDeliveryJobIdJoined } = await import(
         '@/lib/server/integrations/deliveries-data'
       );
-      const cartConfig = parseCartRuleConfig(ruleRows[0]?.config ?? null);
+      const cartConfig = parseCartRuleConfig(ruleConfig);
       const step = cartConfig.steps[payloadStepKey as CartStepKey];
       const cartStepOrder: CartStepKey[] = ['cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3'];
       const payloadExternalId = payload.externalId == null ? '' : String(payload.externalId);
@@ -5702,7 +5698,7 @@ export const processAutomationJob = async (jobId: string) => {
     }
 
     if (claim.rule_key === 'browse_abandonment_15m' && payloadStepKey) {
-      const browseConfig = parseBrowseRuleConfig(ruleRows[0]?.config ?? null);
+      const browseConfig = parseBrowseRuleConfig(ruleConfig);
       const step = browseConfig.steps[payloadStepKey as BrowseStepKey];
 
       if (!step?.enabled) {
@@ -5733,7 +5729,7 @@ export const processAutomationJob = async (jobId: string) => {
     }
 
     if (claim.rule_key === 'shipping_notifications') {
-      const shippingConfig = parseShippingRuleConfig(ruleRows[0]?.config ?? null);
+      const shippingConfig = parseShippingRuleConfig(ruleConfig);
       const stepKey = (payloadStepKey || 'shipping-1') as ShippingStepKey;
       const step = shippingConfig.steps[stepKey];
 
@@ -5765,7 +5761,7 @@ export const processAutomationJob = async (jobId: string) => {
     }
 
     if (claim.rule_key === 'back_in_stock') {
-      const backInStockConfig = parseBackInStockRuleConfig(ruleRows[0]?.config ?? null);
+      const backInStockConfig = parseBackInStockRuleConfig(ruleConfig);
       const stepKey = (payloadStepKey || 'stock-1') as BackInStockStepKey;
       const step = backInStockConfig.steps[stepKey];
 
@@ -5797,7 +5793,7 @@ export const processAutomationJob = async (jobId: string) => {
     }
 
     if (claim.rule_key === 'price_drop') {
-      const priceDropConfig = parsePriceDropRuleConfig(ruleRows[0]?.config ?? null);
+      const priceDropConfig = parsePriceDropRuleConfig(ruleConfig);
       const stepKey = (payloadStepKey || 'price-1') as PriceDropStepKey;
       const step = priceDropConfig.steps[stepKey];
 
@@ -6055,11 +6051,16 @@ export const recordSubscriberActivity = async (input: {
     }
   }
 
-  await ensureSchema();
-  const sql = getNeonSql();
-  const triggeredAt = new Date().toISOString();
-
   await ensureAutomationRules(input.shopDomain);
+
+  // Schema DDL is only needed for the Neon activity write path. When events live
+  // on D1, skip the ensureSchema wake until/unless a job enqueue needs Neon.
+  const { isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
+  const eventsOnD1 = isD1EventsEnabled();
+  if (!eventsOnD1) {
+    await ensureSchema();
+  }
+  const triggeredAt = new Date().toISOString();
 
   const eventId = randomUUID();
 
@@ -6077,8 +6078,8 @@ export const recordSubscriberActivity = async (input: {
     }
     rawPersisted = true;
 
-    const { insertD1ActivityEvent, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
-    if (isD1EventsEnabled()) {
+    const { insertD1ActivityEvent } = await import('@/lib/server/integrations/d1-events');
+    if (eventsOnD1) {
       try {
         await insertD1ActivityEvent({
           id: eventId,
@@ -6098,6 +6099,7 @@ export const recordSubscriberActivity = async (input: {
       }
     }
 
+    const sql = getNeonSql();
     await sql`
       INSERT INTO subscriber_activity_events (id, shop_domain, external_id, event_type, page_url, product_id, cart_token, metadata)
       VALUES (
@@ -7202,14 +7204,18 @@ export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInpu
 };
 
 export const upsertShopifyProductVariants = async (input: UpsertShopifyProductVariantsInput) => {
-  await ensureSchema();
-  const sql = getNeonSql();
-  await ensureMerchant(input.shopDomain);
-
   const { isD1CatalogEnabled, d1GetExistingVariants, d1UpsertVariant } = await import(
     '@/lib/server/integrations/d1-catalog'
   );
   const useD1Catalog = isD1CatalogEnabled();
+
+  // When catalog lives on D1, skip Neon schema/merchant wakes until job enqueue.
+  let sql: ReturnType<typeof getNeonSql> | null = null;
+  if (!useD1Catalog) {
+    await ensureSchema();
+    sql = getNeonSql();
+    await ensureMerchant(input.shopDomain);
+  }
 
   const variantIds = input.variants.map((variant) => variant.variantId);
 
@@ -7224,7 +7230,7 @@ export const upsertShopifyProductVariants = async (input: UpsertShopifyProductVa
     ? await d1GetExistingVariants(input.shopDomain, variantIds)
     : new Map(
         ((variantIds.length
-          ? await sql`
+          ? await (sql ?? getNeonSql())`
             SELECT variant_id, price_cents, compare_at_price_cents, available
             FROM shopify_product_variants
             WHERE shop_domain = ${input.shopDomain}
@@ -7344,10 +7350,6 @@ export const upsertShopifyProductVariants = async (input: UpsertShopifyProductVa
 };
 
 export const processInventoryLevelUpdate = async (input: ProcessInventoryLevelUpdateInput) => {
-  await ensureSchema();
-  const sql = getNeonSql();
-  await ensureMerchant(input.shopDomain);
-
   const {
     isD1CatalogEnabled,
     d1GetVariantsByInventoryItem,
@@ -7355,10 +7357,18 @@ export const processInventoryLevelUpdate = async (input: ProcessInventoryLevelUp
   } = await import('@/lib/server/integrations/d1-catalog');
   const useD1Catalog = isD1CatalogEnabled();
 
+  // When catalog lives on D1, skip Neon schema/merchant wakes until job enqueue.
+  let sql: ReturnType<typeof getNeonSql> | null = null;
+  if (!useD1Catalog) {
+    await ensureSchema();
+    sql = getNeonSql();
+    await ensureMerchant(input.shopDomain);
+  }
+
   const variantRows = useD1Catalog
     ? await d1GetVariantsByInventoryItem(input.shopDomain, input.inventoryItemId)
     : ((
-        await sql`
+        await (sql ?? getNeonSql())`
           SELECT variant_id, product_id, product_title, handle, available
           FROM shopify_product_variants
           WHERE shop_domain = ${input.shopDomain}
@@ -7438,16 +7448,20 @@ export const processInventoryLevelUpdate = async (input: ProcessInventoryLevelUp
 };
 
 export const processFulfillmentUpdate = async (input: ProcessFulfillmentUpdateInput) => {
-  await ensureSchema();
-  const sql = getNeonSql();
-  await ensureMerchant(input.shopDomain);
-
-  const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
-
   const { isD1CommerceEnabled, d1UpsertFulfillment, d1GetOrderIdentityByOrderId } = await import(
     '@/lib/server/integrations/d1-commerce'
   );
   const commerceOnD1 = isD1CommerceEnabled();
+
+  // When commerce lives on D1, skip Neon schema/merchant wakes until job enqueue.
+  let sql: ReturnType<typeof getNeonSql> | null = null;
+  if (!commerceOnD1) {
+    await ensureSchema();
+    sql = getNeonSql();
+    await ensureMerchant(input.shopDomain);
+  }
+
+  const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
 
   if (commerceOnD1) {
     await d1UpsertFulfillment({
@@ -7517,7 +7531,7 @@ export const processFulfillmentUpdate = async (input: ProcessFulfillmentUpdateIn
   const orderRow = commerceOnD1
     ? await d1GetOrderIdentityByOrderId(input.shopDomain, input.orderId)
     : (
-        await sql`
+        await (sql ?? getNeonSql())`
           SELECT subscriber_id, external_id, customer_id
           FROM shopify_orders
           WHERE shop_domain = ${input.shopDomain}
@@ -8949,9 +8963,9 @@ export const recordOptInPromptEvent = async (input: {
   promptType: OptInPromptType;
   eventType: OptInPromptEventType;
 }) => {
-  await ensureSchema();
+  // Schema/merchant already exist for live storefront traffic — skip DDL/merchant
+  // wakes so high-frequency view beacons only pay for the stats upsert.
   const sql = getNeonSql();
-  await ensureMerchant(input.shopDomain);
 
   const viewDelta = input.eventType === 'view' ? 1 : 0;
   const clickDelta = input.eventType === 'click' ? 1 : 0;
@@ -8966,8 +8980,12 @@ export const recordOptInPromptEvent = async (input: {
       updated_at = NOW()
   `;
 
-  const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
-  void invalidateShopDashboardCaches(input.shopDomain);
+  // Views are high-frequency; only invalidate dashboard caches on clicks so we
+  // don't thrash bootstrap/API KV (and force Neon re-reads) on every page view.
+  if (input.eventType === 'click') {
+    const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+    void invalidateShopDashboardCaches(input.shopDomain);
+  }
 };
 
 export const recordOptInPromptConversion = async (shopDomain: string, promptType: OptInPromptType) => {
