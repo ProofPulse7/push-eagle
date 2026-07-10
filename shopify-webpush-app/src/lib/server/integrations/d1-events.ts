@@ -24,7 +24,7 @@ type D1QueryResult = {
   errors?: Array<{ message?: string }>;
 };
 
-const runD1Query = async (sql: string, params: unknown[] = []) => {
+export const runD1Query = async (sql: string, params: unknown[] = []) => {
   const accountId = env.CLOUDFLARE_ACCOUNT_ID.trim();
   const databaseId = getEventsDatabaseId();
 

@@ -2590,14 +2590,14 @@ const ensureAutomationRules = async (shopDomain: string) => {
     }
   }
 
-  const readyAt = Date.now();
-  automationRulesReadyAt.set(shop, readyAt);
+  const readyAtNow = Date.now();
+  automationRulesReadyAt.set(shop, readyAtNow);
   try {
     const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
     if (isCloudflareKvEnabled()) {
       void writeKvJson(
         automationRulesReadyKvKey(shop),
-        { at: readyAt },
+        { at: readyAtNow },
         Math.ceil(AUTOMATION_RULES_READY_TTL_MS / 1000),
       ).catch(() => undefined);
     }
