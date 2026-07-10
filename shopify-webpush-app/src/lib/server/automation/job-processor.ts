@@ -45,6 +45,39 @@ export const processAutomationJobs = async (options: ProcessJobsOptions = {}) =>
   const maxConcurrent = options.maxConcurrent || DEFAULT_MAX_CONCURRENT;
   const maxRetries = options.maxRetries || DEFAULT_MAX_RETRIES;
 
+  // When automation_jobs live on D1, reuse the main D1-aware claim/send path.
+  const { isD1AutomationJobsEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (isD1AutomationJobsEnabled()) {
+    const { listDueAutomationJobs, processAutomationJob } = await import(
+      '@/lib/server/data/store'
+    );
+    let totalProcessed = 0;
+    let totalErrors = 0;
+    while (true) {
+      const jobs = await listDueAutomationJobs(batchSize);
+      if (!jobs.length) break;
+      for (let i = 0; i < jobs.length; i += maxConcurrent) {
+        const chunk = jobs.slice(i, i + maxConcurrent);
+        const results = await Promise.all(
+          chunk.map(async (job) => {
+            try {
+              const result = await processAutomationJob(String(job.id));
+              return result.processed ? 'ok' : 'err';
+            } catch {
+              return 'err';
+            }
+          }),
+        );
+        totalProcessed += results.filter((r) => r === 'ok').length;
+        totalErrors += results.filter((r) => r === 'err').length;
+      }
+      if (jobs.length < batchSize) break;
+    }
+    return { processed: totalProcessed, errors: totalErrors };
+  }
+
   const sql = getNeonSql();
   const messaging = getFirebaseAdminMessaging();
   const { isD1AudienceReadActive, d1GetFcmTokensByIds } = await import(

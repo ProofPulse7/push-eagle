@@ -16,6 +16,8 @@ Push Eagle is designed so **30+ merchants** and **1M+ subscribers** can run on N
 | **Subscribers + tokens** | `D1_AUDIENCE_MODE=d1_only` | Largest transfer + storage win |
 | Pixel / activity events | `D1_EVENTS_ENABLED=true` | High write volume |
 | Delivery + click detail | `D1_DELIVERIES_ENABLED=true` | Grows with every send |
+| **Automation jobs** | `D1_AUTOMATION_JOBS_ENABLED=true` | High-frequency polling table removed from Neon |
+| **Opt-in stats** | `D1_OPT_IN_STATS_ENABLED=true` | Beacon writes no longer touch Neon |
 | Orders / fulfillments | `D1_COMMERCE_ENABLED=true` | Webhook-heavy |
 | Customers / catalog | `D1_CUSTOMERS_ENABLED`, `D1_CATALOG_ENABLED` | Cache tables |
 | Webhook dedup | KV namespace | Every webhook hit |
@@ -142,6 +144,8 @@ CLOUDFLARE_D1_DELIVERIES_DATABASE_ID=... # delivery detail
 D1_AUDIENCE_MODE=d1_only
 D1_EVENTS_ENABLED=true
 D1_DELIVERIES_ENABLED=true
+D1_AUTOMATION_JOBS_ENABLED=true   # direct cutover — no pending jobs needed on Neon
+D1_OPT_IN_STATS_ENABLED=true      # opt-in beacon writes removed from Neon
 D1_COMMERCE_ENABLED=true
 D1_CUSTOMERS_ENABLED=true
 D1_CATALOG_ENABLED=true
@@ -156,6 +160,8 @@ Backfill each layer before enabling its flag (see `ZERO-COST-DEPLOY.md`).
 | Audience | `D1_AUDIENCE_MODE=read` or `dual_write` (Neon still has historical rows until `d1_only` ran a long time) |
 | Events | `D1_EVENTS_ENABLED=false` |
 | Deliveries | `D1_DELIVERIES_ENABLED=false` |
+| Automation jobs | `D1_AUTOMATION_JOBS_ENABLED=false` (historical Neon rows stay untouched) |
+| Opt-in stats | `D1_OPT_IN_STATS_ENABLED=false` |
 
 ## Expected Neon usage after cutover
 

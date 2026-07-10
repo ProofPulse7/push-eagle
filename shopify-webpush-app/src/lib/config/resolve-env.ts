@@ -62,6 +62,9 @@ const EnvSchema = z.object({
   // Dedicated D1 for delivery/click detail (campaign + automation deliveries/clicks).
   // Falls back to CLOUDFLARE_D1_DATABASE_ID when unset.
   CLOUDFLARE_D1_DELIVERIES_DATABASE_ID: z.string().default(''),
+  // Dedicated D1 for automation_jobs. Falls back to CLOUDFLARE_D1_DELIVERIES_DATABASE_ID
+  // then CLOUDFLARE_D1_DATABASE_ID when unset.
+  CLOUDFLARE_D1_JOBS_DATABASE_ID: z.string().default(''),
   CLOUDFLARE_WORKER_URL: z.string().default(''),
   // Retention window (days) for raw events in D1. Must stay >= the longest
   // automation lookback (browse-abandonment/abandoned-cart use up to 14 days)
@@ -107,6 +110,17 @@ const EnvSchema = z.object({
   // Explicit opt-in for moving delivery/click detail tables to D1. Lifetime stats
   // (campaigns row + automation_rule_stats) stay on Neon; detail rows move here.
   D1_DELIVERIES_ENABLED: z
+    .string()
+    .default('false')
+    .transform((value) => value.trim().toLowerCase() === 'true'),
+  // Explicit opt-in for moving automation_jobs to D1. When true, ALL automation job
+  // reads/writes use D1 and automation_jobs is skipped in Neon ensureSchema.
+  D1_AUTOMATION_JOBS_ENABLED: z
+    .string()
+    .default('false')
+    .transform((value) => value.trim().toLowerCase() === 'true'),
+  // Explicit opt-in for moving opt_in_prompt_stats to D1 (uses deliveries/primary DB).
+  D1_OPT_IN_STATS_ENABLED: z
     .string()
     .default('false')
     .transform((value) => value.trim().toLowerCase() === 'true'),

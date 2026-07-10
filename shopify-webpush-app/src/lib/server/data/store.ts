@@ -879,22 +879,27 @@ const ensureSchema = async () => {
         UNIQUE (shop_domain, rule_key)
       )`;
 
-      await sql`CREATE TABLE IF NOT EXISTS automation_jobs (
-        id TEXT PRIMARY KEY,
-        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
-        rule_key TEXT NOT NULL,
-        token_id BIGINT REFERENCES subscriber_tokens(id) ON DELETE SET NULL,
-        subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
-        dedupe_key TEXT,
-        payload JSONB NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        attempts INTEGER NOT NULL DEFAULT 0,
-        error_message TEXT,
-        due_at TIMESTAMPTZ NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        sent_at TIMESTAMPTZ
-      )`;
+      const { isD1AutomationJobsEnabled: _isD1AJEnabled } = await import(
+        '@/lib/server/integrations/d1-automation-jobs'
+      );
+      if (!_isD1AJEnabled()) {
+        await sql`CREATE TABLE IF NOT EXISTS automation_jobs (
+          id TEXT PRIMARY KEY,
+          shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+          rule_key TEXT NOT NULL,
+          token_id BIGINT REFERENCES subscriber_tokens(id) ON DELETE SET NULL,
+          subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
+          dedupe_key TEXT,
+          payload JSONB NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          error_message TEXT,
+          due_at TIMESTAMPTZ NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          sent_at TIMESTAMPTZ
+        )`;
+      }
 
       if (!legacySkip.events) {
       await sql`CREATE TABLE IF NOT EXISTS subscriber_activity_events (
@@ -982,7 +987,14 @@ const ensureSchema = async () => {
 
       await sql`ALTER TABLE segments ADD COLUMN IF NOT EXISTS estimated_subscriber_count INTEGER`;
       await sql`ALTER TABLE segments ADD COLUMN IF NOT EXISTS estimated_count_at TIMESTAMPTZ`;
-      await sql`ALTER TABLE automation_jobs ADD COLUMN IF NOT EXISTS queue_enqueued_at TIMESTAMPTZ`;
+      {
+        const { isD1AutomationJobsEnabled: jobsOnD1Schema } = await import(
+          '@/lib/server/integrations/d1-automation-jobs'
+        );
+        if (!jobsOnD1Schema()) {
+          await sql`ALTER TABLE automation_jobs ADD COLUMN IF NOT EXISTS queue_enqueued_at TIMESTAMPTZ`;
+        }
+      }
 
       await sql`CREATE TABLE IF NOT EXISTS campaign_schedules (
         id TEXT PRIMARY KEY,
@@ -1150,10 +1162,12 @@ const ensureSchema = async () => {
       await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_processed_at ON ingestion_jobs(processed_at) WHERE status = 'processed'`;
       await sql`CREATE INDEX IF NOT EXISTS idx_media_assets_shop_created ON media_assets(shop_domain, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_automation_rules_shop_rule ON automation_rules(shop_domain, rule_key)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_due ON automation_jobs(shop_domain, status, due_at)`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_queue_promote ON automation_jobs(status, queue_enqueued_at, due_at) WHERE status = 'pending'`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_payload_external ON automation_jobs(shop_domain, ((payload ->> 'externalId'))) WHERE (payload ->> 'externalId') IS NOT NULL`;
-      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_jobs_dedupe ON automation_jobs(shop_domain, dedupe_key) WHERE dedupe_key IS NOT NULL`;
+      if (!legacySkip.automationJobs) {
+        await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_due ON automation_jobs(shop_domain, status, due_at)`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_queue_promote ON automation_jobs(status, queue_enqueued_at, due_at) WHERE status = 'pending'`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_automation_jobs_shop_payload_external ON automation_jobs(shop_domain, ((payload ->> 'externalId'))) WHERE (payload ->> 'externalId') IS NOT NULL`;
+        await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_jobs_dedupe ON automation_jobs(shop_domain, dedupe_key) WHERE dedupe_key IS NOT NULL`;
+      }
       if (!legacySkip.events) {
         await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_external_created ON subscriber_activity_events(shop_domain, external_id, created_at DESC)`;
         await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_activity_shop_product_created ON subscriber_activity_events(shop_domain, product_id, created_at DESC)`;
@@ -2665,15 +2679,25 @@ export const upsertAutomationRule = async (
   }
 
   if (!nextEnabled) {
-    await sql`
-      UPDATE automation_jobs
-      SET status = 'skipped',
-          error_message = 'Automation rule is disabled.',
-          updated_at = NOW()
-      WHERE shop_domain = ${shopDomain}
-        AND rule_key = ${ruleKey}
-        AND status = 'pending'
-    `;
+    const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
+    if (_d1AJEnabled()) {
+      const { d1SkipPendingJobsForDisabledRule } = await import(
+        '@/lib/server/integrations/d1-automation-jobs'
+      );
+      await d1SkipPendingJobsForDisabledRule(shopDomain, ruleKey);
+    } else {
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'skipped',
+            error_message = 'Automation rule is disabled.',
+            updated_at = NOW()
+        WHERE shop_domain = ${shopDomain}
+          AND rule_key = ${ruleKey}
+          AND status = 'pending'
+      `;
+    }
   }
 
   return row
@@ -3679,6 +3703,17 @@ const cancelPendingCartReminderJobs = async (input: {
     return;
   }
 
+  const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (_d1AJEnabled()) {
+    const { d1CancelPendingCartJobs } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
+    await d1CancelPendingCartJobs({ shopDomain: input.shopDomain, externalId, cartToken });
+    return;
+  }
+
   const sql = getNeonSql();
   if (externalId && cartToken) {
     await sql`
@@ -3889,7 +3924,11 @@ export const pruneAutomationData = async () => {
   const now = Date.now();
   const webhookCutoff = new Date(now - readRetentionDays('PE_RETENTION_WEBHOOK_EVENT_DAYS', 5) * DAY_MS);
   const activityCutoff = new Date(now - readRetentionDays('PE_RETENTION_ACTIVITY_DAYS', 45) * DAY_MS);
-  const jobCutoff = new Date(now - readRetentionDays('PE_RETENTION_AUTOMATION_JOB_DAYS', 14) * DAY_MS);
+  const { isD1AutomationJobsEnabled: _isD1AJEnabledForRetention } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  const jobRetentionDefault = _isD1AJEnabledForRetention() ? 3 : 14;
+  const jobCutoff = new Date(now - readRetentionDays('PE_RETENTION_AUTOMATION_JOB_DAYS', jobRetentionDefault) * DAY_MS);
 
   if (await neonTableExists('webhook_events')) {
     await sql`
@@ -3908,11 +3947,19 @@ export const pruneAutomationData = async () => {
     `;
   }
 
-  await sql`
-    DELETE FROM automation_jobs
-    WHERE status IN ('sent', 'failed', 'skipped')
-      AND updated_at < ${jobCutoff}
-  `;
+  const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (_d1AJEnabled()) {
+    const { d1PruneTerminalJobs } = await import('@/lib/server/integrations/d1-automation-jobs');
+    await d1PruneTerminalJobs(jobCutoff.toISOString());
+  } else {
+    await sql`
+      DELETE FROM automation_jobs
+      WHERE status IN ('sent', 'failed', 'skipped')
+        AND updated_at < ${jobCutoff}
+    `;
+  }
 };
 
 export const rollupMerchantDailyStats = async () => {
@@ -4291,13 +4338,26 @@ export const runRetentionMaintenance = async () => {
   // any orphan is returned to 'pending' so the next tick delivers it. It runs on
   // the maintenance cadence only, so it can never keep the tick awake or affect
   // the Neon-sleep guarantee.
-  const reclaimedStuckJobs = await sql`
-    UPDATE automation_jobs
-    SET status = 'pending', updated_at = NOW()
-    WHERE status = 'processing'
-      AND updated_at < NOW() - INTERVAL '15 minutes'
-    RETURNING id
-  `;
+  const { isD1AutomationJobsEnabled: _d1AJForRetention } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  let reclaimedStuckJobsCount = 0;
+  if (_d1AJForRetention()) {
+    const { d1ReclaimStuckProcessing } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
+    const staleIso = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    reclaimedStuckJobsCount = await d1ReclaimStuckProcessing(staleIso);
+  } else {
+    const reclaimedStuckJobs = await sql`
+      UPDATE automation_jobs
+      SET status = 'pending', updated_at = NOW()
+      WHERE status = 'processing'
+        AND updated_at < NOW() - INTERVAL '15 minutes'
+      RETURNING id
+    `;
+    reclaimedStuckJobsCount = reclaimedStuckJobs.length;
+  }
 
   await pruneAutomationData();
 
@@ -4333,7 +4393,7 @@ export const runRetentionMaintenance = async () => {
   return {
     ingestionJobsDeleted: ingestionDeleted.length,
     heartbeatsDeleted: heartbeatsDeleted.length,
-    reclaimedStuckJobs: reclaimedStuckJobs.length,
+    reclaimedStuckJobs: reclaimedStuckJobsCount,
     pixelArchive,
     d1Prune,
     campaignMediaPrune,
@@ -4351,6 +4411,36 @@ export const enqueueAutomationJob = async (input: {
   dueAt?: Date;
   payload: AutomationJobPayload;
 }) => {
+  const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  const jobId = randomUUID();
+  const dueAt = input.dueAt ?? new Date();
+
+  if (_d1AJEnabled()) {
+    const { d1EnqueueAutomationJob, ensureD1AutomationJobsSchema } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
+    await ensureD1AutomationJobsSchema();
+    const insertedId = await d1EnqueueAutomationJob({
+      id: jobId,
+      shopDomain: input.shopDomain,
+      ruleKey: input.ruleKey,
+      tokenId: input.tokenId ?? null,
+      subscriberId: input.subscriberId ?? null,
+      dedupeKey: input.dedupeKey ?? null,
+      payload: input.payload as Record<string, unknown>,
+      dueAt,
+    });
+    if (insertedId) {
+      const { queueAutomationJobAfterInsert } = await import('@/lib/server/automation/queue-scheduler');
+      queueAutomationJobAfterInsert(insertedId, dueAt);
+      const { bumpCronWakeForDueAt } = await import('@/lib/server/cron/cron-idle');
+      void bumpCronWakeForDueAt(dueAt);
+    }
+    return insertedId;
+  }
+
   // Schema is ensured at install/deploy; skip DDL probe on every job insert (transfer).
   const sql = getNeonSql();
   const { isD1AudienceOnly } = await import('@/lib/server/integrations/d1-audience');
@@ -4358,9 +4448,6 @@ export const enqueueAutomationJob = async (input: {
   // processAutomationJob resolves the live token via payload.externalId in D1.
   const tokenId = isD1AudienceOnly() ? null : (input.tokenId ?? null);
   const subscriberId = isD1AudienceOnly() ? null : (input.subscriberId ?? null);
-
-  const jobId = randomUUID();
-  const dueAt = input.dueAt ?? new Date();
 
   if (input.dedupeKey) {
     await sql`
@@ -4470,19 +4557,32 @@ export const completeCronHeartbeat = async (input: {
  * instantly without waiting for the next cron cycle.
  */
 export const dispatchWelcomeJobNow = async (shopDomain: string, tokenId: number) => {
-  const sql = getNeonSql();
+  const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
 
-  const jobRows = await sql`
-    SELECT id
-    FROM automation_jobs
-    WHERE shop_domain = ${shopDomain}
-      AND rule_key = 'welcome_subscriber'
-      AND token_id = ${tokenId}
-      AND status = 'pending'
-      AND due_at <= NOW() + INTERVAL '5 seconds'
-    ORDER BY due_at ASC, created_at ASC
-    LIMIT 20
-  `;
+  let jobRows: Array<{ id: string }>;
+
+  if (_d1AJEnabled()) {
+    const { d1FindPendingWelcomeJobsForToken } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
+    jobRows = await d1FindPendingWelcomeJobsForToken(shopDomain, tokenId);
+  } else {
+    const sql = getNeonSql();
+    const neonRows = await sql`
+      SELECT id
+      FROM automation_jobs
+      WHERE shop_domain = ${shopDomain}
+        AND rule_key = 'welcome_subscriber'
+        AND token_id = ${tokenId}
+        AND status = 'pending'
+        AND due_at <= NOW() + INTERVAL '5 seconds'
+      ORDER BY due_at ASC, created_at ASC
+      LIMIT 20
+    `;
+    jobRows = neonRows.map((r) => ({ id: String(r.id) }));
+  }
 
   if (!jobRows.length) {
     return { dispatched: false };
@@ -4782,6 +4882,37 @@ export const processIngestionQueue = async (input?: {
 };
 
 export const listDueAutomationJobs = async (limit = 100, shardCount = 1, shardIndex = 0) => {
+  const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+
+  if (_d1AJEnabled()) {
+    const { d1ListDueJobs } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
+    const rows = await d1ListDueJobs(limit);
+    // Enrich with fcm_token from D1 audience (processAutomationJob re-reads anyway)
+    const { isD1AudienceReadActive, d1GetFcmTokensByIds } = await import(
+      '@/lib/server/integrations/d1-audience'
+    );
+    const readActive = isD1AudienceReadActive();
+    const fcmMap = readActive && rows.length > 0
+      ? await d1GetFcmTokensByIds(rows.map((r) => r.token_id).filter((id): id is number => id != null))
+      : new Map<number, string>();
+    return rows.map((r) => ({
+      ...r,
+      fcm_token: r.token_id != null ? fcmMap.get(r.token_id) ?? null : null,
+    })) as Array<{
+      id: string;
+      shop_domain: string;
+      rule_key: string;
+      token_id: number | null;
+      subscriber_id: number | null;
+      payload: AutomationJobPayload;
+      fcm_token: string | null;
+    }>;
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
   const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
@@ -4868,6 +4999,34 @@ export const listDueAutomationJobsByRule = async (
   shardCount = 1,
   shardIndex = 0,
 ) => {
+  const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+
+  if (_d1AJEnabled()) {
+    const { d1ListDueJobsByRule } = await import('@/lib/server/integrations/d1-automation-jobs');
+    const rows = await d1ListDueJobsByRule(ruleKey, limit);
+    const { isD1AudienceReadActive, d1GetFcmTokensByIds } = await import(
+      '@/lib/server/integrations/d1-audience'
+    );
+    const readActive = isD1AudienceReadActive();
+    const fcmMap = readActive && rows.length > 0
+      ? await d1GetFcmTokensByIds(rows.map((r) => r.token_id).filter((id): id is number => id != null))
+      : new Map<number, string>();
+    return rows.map((r) => ({
+      ...r,
+      fcm_token: r.token_id != null ? fcmMap.get(r.token_id) ?? null : null,
+    })) as Array<{
+      id: string;
+      shop_domain: string;
+      rule_key: string;
+      token_id: number | null;
+      subscriber_id: number | null;
+      payload: AutomationJobPayload;
+      fcm_token: string | null;
+    }>;
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
   const safeShardCount = Math.max(1, Math.min(Number(shardCount) || 1, 128));
@@ -4950,18 +5109,29 @@ export const listDueAutomationJobsByRule = async (
 };
 
 export const processDueAutomationJobsForShop = async (shopDomain: string, limit = 50, maxConcurrent = 10) => {
-  await ensureSchema();
-  const sql = getNeonSql();
+  const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
 
-  const jobs = await sql`
-    SELECT id
-    FROM automation_jobs
-    WHERE shop_domain = ${shopDomain}
-      AND status = 'pending'
-      AND due_at <= NOW()
-    ORDER BY due_at ASC
-    LIMIT ${limit}
-  `;
+  let jobs: Array<{ id: string }>;
+
+  if (_d1AJEnabled()) {
+    const { d1ListDueJobsForShop } = await import('@/lib/server/integrations/d1-automation-jobs');
+    jobs = await d1ListDueJobsForShop(shopDomain, limit);
+  } else {
+    await ensureSchema();
+    const sql = getNeonSql();
+    const neonJobs = await sql`
+      SELECT id
+      FROM automation_jobs
+      WHERE shop_domain = ${shopDomain}
+        AND status = 'pending'
+        AND due_at <= NOW()
+      ORDER BY due_at ASC
+      LIMIT ${limit}
+    `;
+    jobs = neonJobs.map((r) => ({ id: String(r.id) }));
+  }
 
   const processed = [] as Array<{ jobId: string; processed: boolean; error?: string }>;
 
@@ -4997,31 +5167,116 @@ const rescheduleAutomationJobAfterDefer = async (jobId: string, dueAt: Date) => 
 };
 
 export const processAutomationJob = async (jobId: string) => {
-  await ensureSchema();
+  const { isD1AutomationJobsEnabled: _jobsOnD1 } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  const jobsOnD1 = _jobsOnD1();
+
+  // Always create the Neon client handle (lazy until first query). Skip ensureSchema
+  // when jobs are on D1 so processing a job does not wake Neon for DDL.
   const sql = getNeonSql();
+  if (!jobsOnD1) {
+    await ensureSchema();
+  }
 
-  const claimRows = await sql`
-    UPDATE automation_jobs
-    SET status = 'processing', attempts = attempts + 1, updated_at = NOW()
-    WHERE id = ${jobId}
-      AND status = 'pending'
-    RETURNING id, shop_domain, rule_key, token_id, subscriber_id, payload, attempts
-  `;
+  type ClaimRow = {
+    id: string;
+    shop_domain: string;
+    rule_key: string;
+    token_id: number | null;
+    subscriber_id: number | null;
+    payload: AutomationJobPayload;
+    attempts: number;
+  };
 
-  const claim = claimRows[0] as
-    | {
-      id: string;
-      shop_domain: string;
-      rule_key: string;
-      token_id: number | null;
-      subscriber_id: number | null;
-      payload: AutomationJobPayload;
-      attempts: number;
+  let claim: ClaimRow | undefined;
+
+  if (jobsOnD1) {
+    const { d1ClaimAutomationJob } = await import('@/lib/server/integrations/d1-automation-jobs');
+    const d1Row = await d1ClaimAutomationJob(jobId);
+    if (d1Row) {
+      claim = {
+        id: d1Row.id,
+        shop_domain: d1Row.shop_domain,
+        rule_key: d1Row.rule_key,
+        token_id: d1Row.token_id,
+        subscriber_id: d1Row.subscriber_id,
+        payload: d1Row.payload as AutomationJobPayload,
+        attempts: d1Row.attempts,
+      };
     }
-    | undefined;
+  } else {
+    const claimRows = await sql`
+      UPDATE automation_jobs
+      SET status = 'processing', attempts = attempts + 1, updated_at = NOW()
+      WHERE id = ${jobId}
+        AND status = 'pending'
+      RETURNING id, shop_domain, rule_key, token_id, subscriber_id, payload, attempts
+    `;
+    claim = claimRows[0] as ClaimRow | undefined;
+  }
+
   if (!claim) {
     return { processed: false };
   }
+
+  // Local helper: write a status update to the correct DB (D1 or Neon).
+  const writeJob = async (patch: {
+    status: string;
+    errorMessage?: string | null;
+    dueAt?: string | null;
+    sentAt?: string | null;
+    clearQueue?: boolean;
+  }) => {
+    if (jobsOnD1) {
+      const { d1UpdateAutomationJob } = await import(
+        '@/lib/server/integrations/d1-automation-jobs'
+      );
+      await d1UpdateAutomationJob(jobId, patch);
+      return;
+    }
+    // Neon fallback — build targeted SQL per status to avoid huge dynamic SQL
+    const now = new Date();
+    if (patch.status === 'sent') {
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'sent', sent_at = NOW(), updated_at = NOW(), error_message = NULL
+        WHERE id = ${jobId}
+      `;
+    } else if (patch.status === 'skipped') {
+      if (patch.clearQueue) {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = ${patch.errorMessage ?? null},
+              updated_at = NOW(), queue_enqueued_at = NULL
+          WHERE id = ${jobId}
+        `;
+      } else {
+        await sql`
+          UPDATE automation_jobs
+          SET status = 'skipped', error_message = ${patch.errorMessage ?? null}, updated_at = NOW()
+          WHERE id = ${jobId}
+        `;
+      }
+    } else if (patch.status === 'failed') {
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'failed', error_message = ${patch.errorMessage ?? null}, updated_at = NOW()
+        WHERE id = ${jobId}
+      `;
+    } else if (patch.status === 'pending') {
+      const dueAt = patch.dueAt ? new Date(patch.dueAt) : now;
+      await sql`
+        UPDATE automation_jobs
+        SET status = 'pending',
+            error_message = ${patch.errorMessage ?? null},
+            due_at = ${dueAt},
+            queue_enqueued_at = NULL,
+            updated_at = NOW()
+        WHERE id = ${jobId}
+      `;
+    }
+  };
 
   // Audience reads route to D1 in read/d1_only (Neon fallback on error), run both
   // in shadow, and stay on Neon otherwise. token_id/subscriber_id come from the
@@ -5151,24 +5406,10 @@ export const processAutomationJob = async (jobId: string) => {
         : 60_000;
 
     if (shouldFail) {
-      await sql`
-        UPDATE automation_jobs
-        SET status = 'failed',
-            error_message = ${errorMessage},
-            updated_at = NOW()
-        WHERE id = ${jobId}
-      `;
+      await writeJob({ status: 'failed', errorMessage });
     } else {
       const deferredDueAt = new Date(Date.now() + deferMs);
-      await sql`
-        UPDATE automation_jobs
-        SET status = 'pending',
-            error_message = ${errorMessage},
-            due_at = ${deferredDueAt},
-            queue_enqueued_at = NULL,
-            updated_at = NOW()
-        WHERE id = ${jobId}
-      `;
+      await writeJob({ status: 'pending', errorMessage, dueAt: deferredDueAt.toISOString(), clearQueue: true });
       await rescheduleAutomationJobAfterDefer(jobId, deferredDueAt);
     }
     return { processed: false, error: errorMessage };
@@ -5232,11 +5473,7 @@ export const processAutomationJob = async (jobId: string) => {
     const rule = await getRuleConfig(claim.shop_domain, claim.rule_key as AutomationRuleKey);
 
     if (!rule.enabled) {
-      await sql`
-        UPDATE automation_jobs
-        SET status = 'skipped', error_message = 'Automation rule is disabled.', updated_at = NOW()
-        WHERE id = ${jobId}
-      `;
+      await writeJob({ status: 'skipped', errorMessage: 'Automation rule is disabled.' });
       return { processed: false, error: 'Automation rule is disabled.' };
     }
 
@@ -5252,11 +5489,7 @@ export const processAutomationJob = async (jobId: string) => {
       const welcomeStepOrder: WelcomeStepKey[] = ['reminder-1', 'reminder-2', 'reminder-3'];
 
       if (!step?.enabled) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Welcome reminder step is disabled.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
+        await writeJob({ status: 'skipped', errorMessage: 'Welcome reminder step is disabled.' });
         return { processed: false, error: 'Welcome reminder step is disabled.' };
       }
 
@@ -5279,25 +5512,28 @@ export const processAutomationJob = async (jobId: string) => {
 
       const payloadExternalId = payload.externalId == null ? '' : String(payload.externalId);
       if (payloadExternalId) {
-        const canonicalWelcomeRows = await sql`
-          SELECT id
-          FROM automation_jobs
-          WHERE shop_domain = ${claim.shop_domain}
-            AND rule_key = 'welcome_subscriber'
-            AND payload ->> 'externalId' = ${payloadExternalId}
-            AND payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-            AND status IN ('pending', 'processing', 'sent')
-          ORDER BY created_at ASC
-          LIMIT 1
-        `;
-
-        const canonicalWelcomeJobId = canonicalWelcomeRows[0]?.id == null ? '' : String(canonicalWelcomeRows[0].id);
-        if (canonicalWelcomeJobId && canonicalWelcomeJobId !== claim.id) {
-          await sql`
-            UPDATE automation_jobs
-            SET status = 'skipped', error_message = 'Duplicate welcome reminder job suppressed.', updated_at = NOW()
-            WHERE id = ${jobId}
+        let canonicalWelcomeJobId = '';
+        if (jobsOnD1) {
+          const { d1FindFirstActiveJobByExternalIdStep } = await import(
+            '@/lib/server/integrations/d1-automation-jobs'
+          );
+          canonicalWelcomeJobId = (await d1FindFirstActiveJobByExternalIdStep(
+            claim.shop_domain, 'welcome_subscriber', payloadExternalId, payloadStepKey,
+          )) ?? '';
+        } else {
+          const canonicalWelcomeRows = await sql`
+            SELECT id FROM automation_jobs
+            WHERE shop_domain = ${claim.shop_domain}
+              AND rule_key = 'welcome_subscriber'
+              AND payload ->> 'externalId' = ${payloadExternalId}
+              AND payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+              AND status IN ('pending', 'processing', 'sent')
+            ORDER BY created_at ASC LIMIT 1
           `;
+          canonicalWelcomeJobId = canonicalWelcomeRows[0]?.id == null ? '' : String(canonicalWelcomeRows[0].id);
+        }
+        if (canonicalWelcomeJobId && canonicalWelcomeJobId !== claim.id) {
+          await writeJob({ status: 'skipped', errorMessage: 'Duplicate welcome reminder job suppressed.' });
           return { processed: false, error: 'Duplicate welcome reminder job suppressed.' };
         }
 
@@ -5309,35 +5545,34 @@ export const processAutomationJob = async (jobId: string) => {
             externalId: payloadExternalId,
           })) ?? '';
         if (existingDeliveryJobId && existingDeliveryJobId !== claim.id) {
-          await sql`
-            UPDATE automation_jobs
-            SET status = 'skipped', error_message = 'Welcome reminder already delivered for this step.', updated_at = NOW()
-            WHERE id = ${jobId}
-          `;
+          await writeJob({ status: 'skipped', errorMessage: 'Welcome reminder already delivered for this step.' });
           return { processed: false, error: 'Welcome reminder already delivered for this step.' };
         }
       }
 
       if (claim.subscriber_id) {
-        const canonicalSubscriberWelcomeRows = await sql`
-          SELECT id
-          FROM automation_jobs
-          WHERE shop_domain = ${claim.shop_domain}
-            AND rule_key = 'welcome_subscriber'
-            AND subscriber_id = ${claim.subscriber_id}
-            AND payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
-            AND status IN ('pending', 'processing', 'sent')
-          ORDER BY created_at ASC
-          LIMIT 1
-        `;
-
-        const canonicalSubscriberWelcomeJobId = canonicalSubscriberWelcomeRows[0]?.id == null ? '' : String(canonicalSubscriberWelcomeRows[0].id);
-        if (canonicalSubscriberWelcomeJobId && canonicalSubscriberWelcomeJobId !== claim.id) {
-          await sql`
-            UPDATE automation_jobs
-            SET status = 'skipped', error_message = 'Duplicate welcome reminder job suppressed for subscriber.', updated_at = NOW()
-            WHERE id = ${jobId}
+        let canonicalSubscriberWelcomeJobId = '';
+        if (jobsOnD1) {
+          const { d1FindFirstActiveJobBySubscriberIdStep } = await import(
+            '@/lib/server/integrations/d1-automation-jobs'
+          );
+          canonicalSubscriberWelcomeJobId = (await d1FindFirstActiveJobBySubscriberIdStep(
+            claim.shop_domain, 'welcome_subscriber', claim.subscriber_id, payloadStepKey,
+          )) ?? '';
+        } else {
+          const canonicalSubscriberWelcomeRows = await sql`
+            SELECT id FROM automation_jobs
+            WHERE shop_domain = ${claim.shop_domain}
+              AND rule_key = 'welcome_subscriber'
+              AND subscriber_id = ${claim.subscriber_id}
+              AND payload -> 'metadata' ->> 'stepKey' = ${payloadStepKey}
+              AND status IN ('pending', 'processing', 'sent')
+            ORDER BY created_at ASC LIMIT 1
           `;
+          canonicalSubscriberWelcomeJobId = canonicalSubscriberWelcomeRows[0]?.id == null ? '' : String(canonicalSubscriberWelcomeRows[0].id);
+        }
+        if (canonicalSubscriberWelcomeJobId && canonicalSubscriberWelcomeJobId !== claim.id) {
+          await writeJob({ status: 'skipped', errorMessage: 'Duplicate welcome reminder job suppressed for subscriber.' });
           return { processed: false, error: 'Duplicate welcome reminder job suppressed for subscriber.' };
         }
       }
@@ -5364,44 +5599,51 @@ export const processAutomationJob = async (jobId: string) => {
             : null;
 
         if (!previousDeliveredId) {
-          const previousPendingRows = payloadExternalIdForOrdering
-            ? await sql`
-              SELECT id
-              FROM automation_jobs
-              WHERE shop_domain = ${claim.shop_domain}
-                AND rule_key = 'welcome_subscriber'
-                AND payload ->> 'externalId' = ${payloadExternalIdForOrdering}
-                AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                AND status IN ('pending', 'processing', 'sent')
-              ORDER BY created_at ASC
-              LIMIT 1
-            `
-            : claim.subscriber_id
+          let previousPendingJobId: string | null = null;
+          if (jobsOnD1) {
+            const { d1FindJobByExternalIdStep, d1FindJobBySubscriberIdStep } = await import(
+              '@/lib/server/integrations/d1-automation-jobs'
+            );
+            previousPendingJobId = payloadExternalIdForOrdering
+              ? await d1FindJobByExternalIdStep(
+                  claim.shop_domain, 'welcome_subscriber', payloadExternalIdForOrdering,
+                  previousStepKey, ['pending', 'processing', 'sent'],
+                )
+              : claim.subscriber_id
+                ? await d1FindJobBySubscriberIdStep(
+                    claim.shop_domain, 'welcome_subscriber', claim.subscriber_id,
+                    previousStepKey, ['pending', 'processing', 'sent'],
+                  )
+                : null;
+          } else {
+            const previousPendingRows = payloadExternalIdForOrdering
               ? await sql`
-                SELECT id
-                FROM automation_jobs
+                SELECT id FROM automation_jobs
                 WHERE shop_domain = ${claim.shop_domain}
                   AND rule_key = 'welcome_subscriber'
-                  AND subscriber_id = ${claim.subscriber_id}
+                  AND payload ->> 'externalId' = ${payloadExternalIdForOrdering}
                   AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
                   AND status IN ('pending', 'processing', 'sent')
-                ORDER BY created_at ASC
-                LIMIT 1
+                ORDER BY created_at ASC LIMIT 1
               `
-              : [];
+              : claim.subscriber_id
+                ? await sql`
+                  SELECT id FROM automation_jobs
+                  WHERE shop_domain = ${claim.shop_domain}
+                    AND rule_key = 'welcome_subscriber'
+                    AND subscriber_id = ${claim.subscriber_id}
+                    AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                    AND status IN ('pending', 'processing', 'sent')
+                  ORDER BY created_at ASC LIMIT 1
+                `
+                : [];
+            previousPendingJobId = previousPendingRows[0]?.id ? String(previousPendingRows[0].id) : null;
+          }
 
-          if (previousPendingRows[0]?.id) {
+          if (previousPendingJobId) {
             const waitMessage = `Waiting for previous welcome step (${previousStepKey}) before sending ${payloadStepKey}.`;
             const deferredDueAt = new Date(Date.now() + 90_000);
-            await sql`
-              UPDATE automation_jobs
-              SET status = 'pending',
-                  error_message = ${waitMessage},
-                  due_at = ${deferredDueAt},
-                  queue_enqueued_at = NULL,
-                  updated_at = NOW()
-              WHERE id = ${jobId}
-            `;
+            await writeJob({ status: 'pending', errorMessage: waitMessage, dueAt: deferredDueAt.toISOString(), clearQueue: true });
             await rescheduleAutomationJobAfterDefer(jobId, deferredDueAt);
             return { processed: false, error: waitMessage };
           }
@@ -5417,11 +5659,7 @@ export const processAutomationJob = async (jobId: string) => {
         })) ?? '';
 
       if (tokenDeliveryJobId) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Welcome reminder already delivered to token for this step.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
+        await writeJob({ status: 'skipped', errorMessage: 'Welcome reminder already delivered to token for this step.' });
         return { processed: false, error: 'Welcome reminder already delivered to token for this step.' };
       }
 
@@ -5435,11 +5673,7 @@ export const processAutomationJob = async (jobId: string) => {
           })) ?? '';
 
         if (subscriberDeliveryJobId) {
-          await sql`
-            UPDATE automation_jobs
-            SET status = 'skipped', error_message = 'Welcome reminder already delivered to subscriber for this step.', updated_at = NOW()
-            WHERE id = ${jobId}
-          `;
+          await writeJob({ status: 'skipped', errorMessage: 'Welcome reminder already delivered to subscriber for this step.' });
           return { processed: false, error: 'Welcome reminder already delivered to subscriber for this step.' };
         }
       }
@@ -5460,11 +5694,7 @@ export const processAutomationJob = async (jobId: string) => {
         : null;
 
       if (!step?.enabled) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Cart reminder step is disabled.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
+        await writeJob({ status: 'skipped', errorMessage: 'Cart reminder step is disabled.' });
         return { processed: false, error: 'Cart reminder step is disabled.' };
       }
 
@@ -5519,11 +5749,7 @@ export const processAutomationJob = async (jobId: string) => {
       });
 
       if (checkoutAlreadyComplete) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Cart recovered before reminder send.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
+        await writeJob({ status: 'skipped', errorMessage: 'Cart recovered before reminder send.' });
         return { processed: false, error: 'Cart recovered before reminder send.' };
       }
 
@@ -5541,103 +5767,97 @@ export const processAutomationJob = async (jobId: string) => {
         });
 
         if (!previousCartStepJobId && hasIdentityForStepOrdering) {
-          const previousStepJobRows = payloadExternalId && payloadCartToken && claim.subscriber_id
-            ? await sql`
-              SELECT status, attempts, error_message
-              FROM automation_jobs
-              WHERE shop_domain = ${claim.shop_domain}
-                AND rule_key = 'cart_abandonment_30m'
-                AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                AND (
-                  payload ->> 'externalId' = ${payloadExternalId}
-                  OR payload ->> 'cartToken' = ${payloadCartToken}
-                  OR subscriber_id = ${claim.subscriber_id}
-                )
-              ORDER BY created_at DESC
-              LIMIT 1
-            `
-            : payloadExternalId && payloadCartToken
+          let previousStepJob: { status: string; attempts: number; error_message: string | null } | null = null;
+
+          if (jobsOnD1) {
+            const { d1FindCartPreviousStepJob } = await import(
+              '@/lib/server/integrations/d1-automation-jobs'
+            );
+            previousStepJob = await d1FindCartPreviousStepJob({
+              shopDomain: claim.shop_domain,
+              stepKey: previousStepKey,
+              externalId: payloadExternalId || null,
+              cartToken: payloadCartToken || null,
+              subscriberId: claim.subscriber_id,
+            });
+          } else {
+            const previousStepJobRows = payloadExternalId && payloadCartToken && claim.subscriber_id
               ? await sql`
-                SELECT status, attempts, error_message
-                FROM automation_jobs
+                SELECT status, attempts, error_message FROM automation_jobs
                 WHERE shop_domain = ${claim.shop_domain}
                   AND rule_key = 'cart_abandonment_30m'
                   AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                  AND (
-                    payload ->> 'externalId' = ${payloadExternalId}
-                    OR payload ->> 'cartToken' = ${payloadCartToken}
-                  )
-                ORDER BY created_at DESC
-                LIMIT 1
+                  AND (payload ->> 'externalId' = ${payloadExternalId} OR payload ->> 'cartToken' = ${payloadCartToken} OR subscriber_id = ${claim.subscriber_id})
+                ORDER BY created_at DESC LIMIT 1
               `
-              : payloadExternalId && claim.subscriber_id
+              : payloadExternalId && payloadCartToken
                 ? await sql`
-                  SELECT status, attempts, error_message
-                  FROM automation_jobs
+                  SELECT status, attempts, error_message FROM automation_jobs
                   WHERE shop_domain = ${claim.shop_domain}
                     AND rule_key = 'cart_abandonment_30m'
                     AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                    AND (
-                      payload ->> 'externalId' = ${payloadExternalId}
-                      OR subscriber_id = ${claim.subscriber_id}
-                    )
-                  ORDER BY created_at DESC
-                  LIMIT 1
+                    AND (payload ->> 'externalId' = ${payloadExternalId} OR payload ->> 'cartToken' = ${payloadCartToken})
+                  ORDER BY created_at DESC LIMIT 1
                 `
-                : payloadCartToken && claim.subscriber_id
+                : payloadExternalId && claim.subscriber_id
                   ? await sql`
-                    SELECT status, attempts, error_message
-                    FROM automation_jobs
+                    SELECT status, attempts, error_message FROM automation_jobs
                     WHERE shop_domain = ${claim.shop_domain}
                       AND rule_key = 'cart_abandonment_30m'
                       AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                      AND (
-                        payload ->> 'cartToken' = ${payloadCartToken}
-                        OR subscriber_id = ${claim.subscriber_id}
-                      )
-                    ORDER BY created_at DESC
-                    LIMIT 1
+                      AND (payload ->> 'externalId' = ${payloadExternalId} OR subscriber_id = ${claim.subscriber_id})
+                    ORDER BY created_at DESC LIMIT 1
                   `
-                  : payloadExternalId
+                  : payloadCartToken && claim.subscriber_id
                     ? await sql`
-                      SELECT status, attempts, error_message
-                      FROM automation_jobs
+                      SELECT status, attempts, error_message FROM automation_jobs
                       WHERE shop_domain = ${claim.shop_domain}
                         AND rule_key = 'cart_abandonment_30m'
                         AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                        AND payload ->> 'externalId' = ${payloadExternalId}
-                      ORDER BY created_at DESC
-                      LIMIT 1
+                        AND (payload ->> 'cartToken' = ${payloadCartToken} OR subscriber_id = ${claim.subscriber_id})
+                      ORDER BY created_at DESC LIMIT 1
                     `
-                    : payloadCartToken
+                    : payloadExternalId
                       ? await sql`
-                        SELECT status, attempts, error_message
-                        FROM automation_jobs
+                        SELECT status, attempts, error_message FROM automation_jobs
                         WHERE shop_domain = ${claim.shop_domain}
                           AND rule_key = 'cart_abandonment_30m'
                           AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                          AND payload ->> 'cartToken' = ${payloadCartToken}
-                        ORDER BY created_at DESC
-                        LIMIT 1
+                          AND payload ->> 'externalId' = ${payloadExternalId}
+                        ORDER BY created_at DESC LIMIT 1
                       `
-                      : claim.subscriber_id
+                      : payloadCartToken
                         ? await sql`
-                          SELECT status, attempts, error_message
-                          FROM automation_jobs
+                          SELECT status, attempts, error_message FROM automation_jobs
                           WHERE shop_domain = ${claim.shop_domain}
                             AND rule_key = 'cart_abandonment_30m'
                             AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
-                            AND subscriber_id = ${claim.subscriber_id}
-                          ORDER BY created_at DESC
-                          LIMIT 1
+                            AND payload ->> 'cartToken' = ${payloadCartToken}
+                          ORDER BY created_at DESC LIMIT 1
                         `
-                        : [];
+                        : claim.subscriber_id
+                          ? await sql`
+                            SELECT status, attempts, error_message FROM automation_jobs
+                            WHERE shop_domain = ${claim.shop_domain}
+                              AND rule_key = 'cart_abandonment_30m'
+                              AND payload -> 'metadata' ->> 'stepKey' = ${previousStepKey}
+                              AND subscriber_id = ${claim.subscriber_id}
+                            ORDER BY created_at DESC LIMIT 1
+                          `
+                          : [];
+            if (previousStepJobRows[0]) {
+              const r = previousStepJobRows[0] as Record<string, unknown>;
+              previousStepJob = {
+                status: String(r.status ?? ''),
+                attempts: Number(r.attempts ?? 0),
+                error_message: r.error_message != null ? String(r.error_message) : null,
+              };
+            }
+          }
 
-          const previousStepStatus = previousStepJobRows[0]?.status == null
-            ? ''
-            : String(previousStepJobRows[0].status).toLowerCase();
-          const previousStepAttempts = Number(previousStepJobRows[0]?.attempts ?? 0);
-          const previousStepError = String(previousStepJobRows[0]?.error_message ?? '').trim();
+          const previousStepStatus = previousStepJob?.status?.toLowerCase() ?? '';
+          const previousStepAttempts = previousStepJob?.attempts ?? 0;
+          const previousStepError = (previousStepJob?.error_message ?? '').trim();
           const previousStepLooksStuck =
             previousStepStatus === 'pending'
             && previousStepAttempts >= 3
@@ -5646,15 +5866,7 @@ export const processAutomationJob = async (jobId: string) => {
           if ((previousStepStatus === 'pending' && !previousStepLooksStuck) || previousStepStatus === 'processing' || previousStepStatus === 'sent') {
             const waitMessage = `Waiting for previous cart reminder step (${previousStepKey}) before sending ${payloadStepKey}.`;
             const deferredDueAt = new Date(Date.now() + 60_000);
-            await sql`
-              UPDATE automation_jobs
-              SET status = 'pending',
-                  error_message = ${waitMessage},
-                  due_at = ${deferredDueAt},
-                  queue_enqueued_at = NULL,
-                  updated_at = NOW()
-              WHERE id = ${jobId}
-            `;
+            await writeJob({ status: 'pending', errorMessage: waitMessage, dueAt: deferredDueAt.toISOString(), clearQueue: true });
             await rescheduleAutomationJobAfterDefer(jobId, deferredDueAt);
             return { processed: false, error: waitMessage };
           }
@@ -5667,11 +5879,7 @@ export const processAutomationJob = async (jobId: string) => {
               || previousStepError.includes('already delivered');
             if (intentionalSkip) {
               const skipMessage = `Skipping ${payloadStepKey} because previous cart reminder step (${previousStepKey}) was intentionally skipped.`;
-              await sql`
-                UPDATE automation_jobs
-                SET status = 'skipped', error_message = ${skipMessage}, updated_at = NOW()
-                WHERE id = ${jobId}
-              `;
+              await writeJob({ status: 'skipped', errorMessage: skipMessage });
               return { processed: false, error: skipMessage };
             }
           }
@@ -5688,11 +5896,7 @@ export const processAutomationJob = async (jobId: string) => {
       });
 
       if (existingCartStepJobId) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Cart reminder already delivered for this step.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
+        await writeJob({ status: 'skipped', errorMessage: 'Cart reminder already delivered for this step.' });
         return { processed: false, error: 'Cart reminder already delivered for this step.' };
       }
     }
@@ -5702,11 +5906,7 @@ export const processAutomationJob = async (jobId: string) => {
       const step = browseConfig.steps[payloadStepKey as BrowseStepKey];
 
       if (!step?.enabled) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Browse reminder step is disabled.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
+        await writeJob({ status: 'skipped', errorMessage: 'Browse reminder step is disabled.' });
         return { processed: false, error: 'Browse reminder step is disabled.' };
       }
 
@@ -5734,11 +5934,7 @@ export const processAutomationJob = async (jobId: string) => {
       const step = shippingConfig.steps[stepKey];
 
       if (!step?.enabled) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Shipping notification step is disabled.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
+        await writeJob({ status: 'skipped', errorMessage: 'Shipping notification step is disabled.' });
         return { processed: false, error: 'Shipping notification step is disabled.' };
       }
 
@@ -5766,11 +5962,7 @@ export const processAutomationJob = async (jobId: string) => {
       const step = backInStockConfig.steps[stepKey];
 
       if (!step?.enabled) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Back-in-stock notification step is disabled.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
+        await writeJob({ status: 'skipped', errorMessage: 'Back-in-stock notification step is disabled.' });
         return { processed: false, error: 'Back-in-stock notification step is disabled.' };
       }
 
@@ -5798,11 +5990,7 @@ export const processAutomationJob = async (jobId: string) => {
       const step = priceDropConfig.steps[stepKey];
 
       if (!step?.enabled) {
-        await sql`
-          UPDATE automation_jobs
-          SET status = 'skipped', error_message = 'Price-drop notification step is disabled.', updated_at = NOW()
-          WHERE id = ${jobId}
-        `;
+        await writeJob({ status: 'skipped', errorMessage: 'Price-drop notification step is disabled.' });
         return { processed: false, error: 'Price-drop notification step is disabled.' };
       }
 
@@ -5826,11 +6014,7 @@ export const processAutomationJob = async (jobId: string) => {
 
     const skipReason = await getAutomationSkipReason(claim.shop_domain, payload);
     if (skipReason) {
-      await sql`
-        UPDATE automation_jobs
-        SET status = 'skipped', error_message = ${skipReason}, updated_at = NOW()
-        WHERE id = ${jobId}
-      `;
+      await writeJob({ status: 'skipped', errorMessage: skipReason });
       return { processed: false, error: skipReason };
     }
 
@@ -5954,11 +6138,7 @@ export const processAutomationJob = async (jobId: string) => {
       fcmMessageId = await messaging.send(message);
     }
 
-    await sql`
-      UPDATE automation_jobs
-      SET status = 'sent', sent_at = NOW(), updated_at = NOW(), error_message = NULL
-      WHERE id = ${jobId}
-    `;
+    await writeJob({ status: 'sent', sentAt: new Date().toISOString() });
 
     const { insertAutomationDelivery, extractAutomationDeliveryMeta } = await import(
       '@/lib/server/integrations/deliveries-data'
@@ -5988,11 +6168,7 @@ export const processAutomationJob = async (jobId: string) => {
     const isImpressionLimit = message.includes('Monthly impression limit reached');
 
     if (isImpressionLimit) {
-      await sql`
-        UPDATE automation_jobs
-        SET status = 'skipped', error_message = ${message}, updated_at = NOW(), queue_enqueued_at = NULL
-        WHERE id = ${jobId}
-      `;
+      await writeJob({ status: 'skipped', errorMessage: message, clearQueue: true });
       return { processed: false, error: message };
     }
 
@@ -6005,15 +6181,11 @@ export const processAutomationJob = async (jobId: string) => {
     const shouldFail = Number(claim.attempts ?? 0) >= maxSendAttempts;
     const deferredDueAt = shouldFail ? null : new Date(Date.now() + retryMinutes * 60_000);
 
-    await sql`
-      UPDATE automation_jobs
-      SET status = CASE WHEN attempts >= ${maxSendAttempts} THEN 'failed' ELSE 'pending' END,
-          error_message = ${message},
-          due_at = CASE WHEN attempts >= ${maxSendAttempts} THEN due_at ELSE ${deferredDueAt} END,
-          queue_enqueued_at = NULL,
-          updated_at = NOW()
-      WHERE id = ${jobId}
-    `;
+    if (shouldFail) {
+      await writeJob({ status: 'failed', errorMessage: message, clearQueue: true });
+    } else {
+      await writeJob({ status: 'pending', errorMessage: message, dueAt: deferredDueAt!.toISOString(), clearQueue: true });
+    }
 
     if (deferredDueAt) {
       await rescheduleAutomationJobAfterDefer(jobId, deferredDueAt);
@@ -8160,6 +8332,8 @@ export const recoverStuckSendingCampaigns = async (limit = 25, shardCount = 1, s
 
   const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
   void bumpCronWakeNow();
+  const { invalidateCampaignIdleCache } = await import('@/lib/server/cron/cron-work-probe');
+  void invalidateCampaignIdleCache();
 
   return stuck.length;
 };
@@ -8582,21 +8756,37 @@ const maybeEnqueueWelcomeAutomation = async (params: {
   }
 
   if (immediateWelcomeJobIds.length > 0) {
-    const sql = getNeonSql();
     const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+    const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
     for (const jobId of immediateWelcomeJobIds) {
       const result = await processAutomationJob(jobId);
       if (!result.processed) {
-        await sql`
-          UPDATE automation_jobs
-          SET
-            status = 'pending',
-            due_at = NOW() + INTERVAL '5 seconds',
-            queue_enqueued_at = NULL,
-            updated_at = NOW()
-          WHERE id = ${jobId}
-            AND status IN ('pending', 'processing')
-        `;
+        const deferDueAt = new Date(Date.now() + 5000).toISOString();
+        if (_d1AJEnabled()) {
+          const { d1UpdateAutomationJob } = await import(
+            '@/lib/server/integrations/d1-automation-jobs'
+          );
+          await d1UpdateAutomationJob(
+            jobId,
+            { status: 'pending', dueAt: deferDueAt, clearQueue: true },
+            ['pending', 'processing'],
+          );
+        } else {
+          const sql = getNeonSql();
+          const deferDueAtDate = new Date(Date.now() + 5000);
+          await sql`
+            UPDATE automation_jobs
+            SET
+              status = 'pending',
+              due_at = ${deferDueAtDate},
+              queue_enqueued_at = NULL,
+              updated_at = NOW()
+            WHERE id = ${jobId}
+              AND status IN ('pending', 'processing')
+          `;
+        }
         void bumpCronWakeNow();
       }
     }
@@ -8963,6 +9153,26 @@ export const recordOptInPromptEvent = async (input: {
   promptType: OptInPromptType;
   eventType: OptInPromptEventType;
 }) => {
+  const { isD1OptInStatsEnabled } = await import(
+    '@/lib/server/integrations/d1-opt-in-stats'
+  );
+
+  if (isD1OptInStatsEnabled()) {
+    const { d1RecordOptInPromptEvent } = await import(
+      '@/lib/server/integrations/d1-opt-in-stats'
+    );
+    await d1RecordOptInPromptEvent({
+      shopDomain: input.shopDomain,
+      promptType: input.promptType,
+      eventType: input.eventType,
+    });
+    if (input.eventType === 'click') {
+      const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+      void invalidateShopDashboardCaches(input.shopDomain);
+    }
+    return;
+  }
+
   // Schema/merchant already exist for live storefront traffic — skip DDL/merchant
   // wakes so high-frequency view beacons only pay for the stats upsert.
   const sql = getNeonSql();
@@ -8989,6 +9199,18 @@ export const recordOptInPromptEvent = async (input: {
 };
 
 export const recordOptInPromptConversion = async (shopDomain: string, promptType: OptInPromptType) => {
+  const { isD1OptInStatsEnabled } = await import('@/lib/server/integrations/d1-opt-in-stats');
+
+  if (isD1OptInStatsEnabled()) {
+    const { d1RecordOptInPromptConversion } = await import(
+      '@/lib/server/integrations/d1-opt-in-stats'
+    );
+    await d1RecordOptInPromptConversion(shopDomain, promptType);
+    const { invalidateShopDashboardCaches } = await import('@/lib/server/cache/api-kv-cache');
+    void invalidateShopDashboardCaches(shopDomain);
+    return;
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
   await ensureMerchant(shopDomain);
@@ -9015,14 +9237,28 @@ export const getOptInPromptStats = async (
   shopDomain: string,
   activePromptType: OptInSettings['promptType'] = 'custom',
 ): Promise<OptInPromptStatsBundle> => {
-  await ensureSchema();
-  const sql = getNeonSql();
+  const { isD1OptInStatsEnabled } = await import('@/lib/server/integrations/d1-opt-in-stats');
 
-  const rows = await sql`
-    SELECT prompt_type, views, clicks, conversions
-    FROM opt_in_prompt_stats
-    WHERE shop_domain = ${shopDomain}
-  `;
+  let rows: Array<{ prompt_type: string; views: number; clicks: number; conversions: number }>;
+
+  if (isD1OptInStatsEnabled()) {
+    const { d1GetOptInPromptStats } = await import('@/lib/server/integrations/d1-opt-in-stats');
+    rows = await d1GetOptInPromptStats(shopDomain);
+  } else {
+    await ensureSchema();
+    const neonSql = getNeonSql();
+    const neonRows = await neonSql`
+      SELECT prompt_type, views, clicks, conversions
+      FROM opt_in_prompt_stats
+      WHERE shop_domain = ${shopDomain}
+    `;
+    rows = neonRows.map((r) => ({
+      prompt_type: String(r.prompt_type),
+      views: Number(r.views ?? 0),
+      clicks: Number(r.clicks ?? 0),
+      conversions: Number(r.conversions ?? 0),
+    }));
+  }
 
   const byType = new Map<string, { views: number; clicks: number; conversions: number }>();
   for (const row of rows) {
@@ -9055,29 +9291,40 @@ export const getOptInPromptStats = async (
     customNormalized.clicks !== customRow.clicks ||
     customNormalized.views !== customRow.views
   ) {
-    if (browserNormalized.clicks !== browserRow.clicks || browserNormalized.views !== browserRow.views) {
-      await sql`
-        UPDATE opt_in_prompt_stats
-        SET
-          clicks = GREATEST(clicks, conversions),
-          views = GREATEST(views, GREATEST(clicks, conversions)),
-          updated_at = NOW()
-        WHERE shop_domain = ${shopDomain}
-          AND prompt_type = 'browser'
-          AND (clicks < conversions OR views < GREATEST(clicks, conversions))
-      `;
-    }
-    if (customNormalized.clicks !== customRow.clicks || customNormalized.views !== customRow.views) {
-      await sql`
-        UPDATE opt_in_prompt_stats
-        SET
-          clicks = GREATEST(clicks, conversions),
-          views = GREATEST(views, GREATEST(clicks, conversions)),
-          updated_at = NOW()
-        WHERE shop_domain = ${shopDomain}
-          AND prompt_type = 'custom'
-          AND (clicks < conversions OR views < GREATEST(clicks, conversions))
-      `;
+    if (isD1OptInStatsEnabled()) {
+      const { d1RepairOptInPromptStats } = await import('@/lib/server/integrations/d1-opt-in-stats');
+      if (browserNormalized.clicks !== browserRow.clicks || browserNormalized.views !== browserRow.views) {
+        void d1RepairOptInPromptStats(shopDomain, 'browser');
+      }
+      if (customNormalized.clicks !== customRow.clicks || customNormalized.views !== customRow.views) {
+        void d1RepairOptInPromptStats(shopDomain, 'custom');
+      }
+    } else {
+      const neonSql = getNeonSql();
+      if (browserNormalized.clicks !== browserRow.clicks || browserNormalized.views !== browserRow.views) {
+        await neonSql`
+          UPDATE opt_in_prompt_stats
+          SET
+            clicks = GREATEST(clicks, conversions),
+            views = GREATEST(views, GREATEST(clicks, conversions)),
+            updated_at = NOW()
+          WHERE shop_domain = ${shopDomain}
+            AND prompt_type = 'browser'
+            AND (clicks < conversions OR views < GREATEST(clicks, conversions))
+        `;
+      }
+      if (customNormalized.clicks !== customRow.clicks || customNormalized.views !== customRow.views) {
+        await neonSql`
+          UPDATE opt_in_prompt_stats
+          SET
+            clicks = GREATEST(clicks, conversions),
+            views = GREATEST(views, GREATEST(clicks, conversions)),
+            updated_at = NOW()
+          WHERE shop_domain = ${shopDomain}
+            AND prompt_type = 'custom'
+            AND (clicks < conversions OR views < GREATEST(clicks, conversions))
+        `;
+      }
     }
   }
 
@@ -10867,6 +11114,9 @@ export const sendCampaign = async (
     RETURNING *
   `;
 
+  const { invalidateCampaignIdleCache } = await import('@/lib/server/cron/cron-work-probe');
+  void invalidateCampaignIdleCache();
+
   const campaign = campaignRows[0] as
     | {
         id: string;
@@ -12334,23 +12584,35 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
 };
 
 export const clearWelcomeAutomationHistory = async (shopDomain: string) => {
-  await ensureSchema();
-  const sql = getNeonSql();
   const { deleteWelcomeAutomationDeliveries } = await import(
     '@/lib/server/integrations/deliveries-data'
   );
-
   const cleared = await deleteWelcomeAutomationDeliveries(shopDomain);
 
-  const jobRows = await sql`
-    DELETE FROM automation_jobs
-    WHERE shop_domain = ${shopDomain}
-      AND rule_key = 'welcome_subscriber'
-    RETURNING id
-  `;
+  const { isD1AutomationJobsEnabled: _d1AJEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  let clearedJobs = 0;
+
+  if (_d1AJEnabled()) {
+    const { d1DeleteJobsByShopAndRule } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
+    clearedJobs = await d1DeleteJobsByShopAndRule(shopDomain, 'welcome_subscriber');
+  } else {
+    await ensureSchema();
+    const sql = getNeonSql();
+    const jobRows = await sql`
+      DELETE FROM automation_jobs
+      WHERE shop_domain = ${shopDomain}
+        AND rule_key = 'welcome_subscriber'
+      RETURNING id
+    `;
+    clearedJobs = jobRows.length;
+  }
 
   return {
-    clearedJobs: jobRows.length,
+    clearedJobs,
     clearedDeliveries: cleared.deliveries,
     clearedClicks: cleared.clicks,
     clearedAt: new Date().toISOString(),

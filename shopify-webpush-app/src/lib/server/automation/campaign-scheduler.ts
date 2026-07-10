@@ -69,6 +69,15 @@ export const scheduleCampaign = async (input: ScheduleCampaignInput): Promise<st
     WHERE id = ${input.campaignId}
   `;
 
+  const { invalidateCampaignIdleCache } = await import('@/lib/server/cron/cron-work-probe');
+  void invalidateCampaignIdleCache();
+  const { bumpCronWakeForDueAt, bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
+  if (input.sendAt) {
+    void bumpCronWakeForDueAt(input.sendAt);
+  } else {
+    void bumpCronWakeNow();
+  }
+
   return scheduleId;
 };
 

@@ -11,6 +11,7 @@ import { isD1CustomersEnabled } from '@/lib/server/integrations/d1-customers';
 import { isD1DeliveriesEnabled } from '@/lib/server/integrations/d1-deliveries';
 import { isD1AudienceOnly } from '@/lib/server/integrations/d1-audience';
 import { isD1EventsEnabled } from '@/lib/server/integrations/d1-events';
+import { isD1AutomationJobsEnabled } from '@/lib/server/integrations/d1-automation-jobs';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 
 const neonTableExistsCache = new Map<string, { exists: boolean; at: number }>();
@@ -24,6 +25,7 @@ export type NeonLegacySchemaSkip = {
   catalog: boolean;
   events: boolean;
   webhooks: boolean;
+  automationJobs: boolean;
 };
 
 export type NeonLegacyTableGroup = {
@@ -33,6 +35,11 @@ export type NeonLegacyTableGroup = {
 };
 
 export const NEON_LEGACY_TABLE_GROUPS: NeonLegacyTableGroup[] = [
+  {
+    key: 'automationJobs',
+    label: 'Automation jobs queue (D1 automation_jobs)',
+    tables: ['automation_jobs'],
+  },
   // Drop dependent tables before audience (FK from deliveries → subscribers).
   {
     key: 'deliveries',
@@ -92,6 +99,8 @@ const skipFlagForGroup = (key: keyof NeonLegacySchemaSkip): boolean => {
       return isD1EventsEnabled();
     case 'webhooks':
       return isCloudflareKvEnabled();
+    case 'automationJobs':
+      return isD1AutomationJobsEnabled();
     default:
       return false;
   }
@@ -106,6 +115,7 @@ export const getNeonLegacySchemaSkip = (): NeonLegacySchemaSkip => ({
   catalog: isD1CatalogEnabled(),
   events: isD1EventsEnabled(),
   webhooks: isCloudflareKvEnabled(),
+  automationJobs: isD1AutomationJobsEnabled(),
 });
 
 export const neonTableExists = async (tableName: string): Promise<boolean> => {
@@ -155,6 +165,10 @@ const countLegacyTableRows = async (tableName: string): Promise<number> => {
   }
   const sql = getNeonSql();
   switch (tableName) {
+    case 'automation_jobs': {
+      const rows = await sql`SELECT COUNT(*)::BIGINT AS count FROM automation_jobs`;
+      return Number(rows[0]?.count ?? 0);
+    }
     case 'campaign_deliveries': {
       const rows = await sql`SELECT COUNT(*)::BIGINT AS count FROM campaign_deliveries`;
       return Number(rows[0]?.count ?? 0);
@@ -222,6 +236,9 @@ const dropLegacyTable = async (tableName: string): Promise<void> => {
   }
   const sql = getNeonSql();
   switch (tableName) {
+    case 'automation_jobs':
+      await sql`DROP TABLE IF EXISTS automation_jobs CASCADE`;
+      return;
     case 'campaign_deliveries':
       await sql`DROP TABLE IF EXISTS campaign_deliveries CASCADE`;
       return;
@@ -353,6 +370,9 @@ export const dropNeonLegacyTablesAfterD1Cutover = async (options?: {
         if (count > 0 && forcePurge) {
           // Data already lives on D1/KV; reclaim Neon storage + stop transfer on scans.
           switch (table) {
+            case 'automation_jobs':
+              await sql`TRUNCATE TABLE automation_jobs`;
+              break;
             case 'campaign_deliveries':
               await sql`TRUNCATE TABLE campaign_deliveries`;
               break;

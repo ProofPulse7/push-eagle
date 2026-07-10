@@ -54,9 +54,17 @@ export const rescheduleAutomationJobInQueue = async (jobId: string, dueAt: Date)
 };
 
 export const markAutomationJobQueued = async (jobId: string) => {
+  const { isD1AutomationJobsEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (isD1AutomationJobsEnabled()) {
+    const { d1MarkQueued } = await import('@/lib/server/integrations/d1-automation-jobs');
+    await d1MarkQueued(jobId);
+    return;
+  }
+
   const { getNeonSql } = await import('@/lib/integrations/database/neon');
   const sql = getNeonSql();
-
   await sql`
     UPDATE automation_jobs
     SET queue_enqueued_at = NOW(), updated_at = NOW()
@@ -65,9 +73,17 @@ export const markAutomationJobQueued = async (jobId: string) => {
 };
 
 export const clearAutomationJobQueueMarker = async (jobId: string) => {
+  const { isD1AutomationJobsEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (isD1AutomationJobsEnabled()) {
+    const { d1ClearQueueMarker } = await import('@/lib/server/integrations/d1-automation-jobs');
+    await d1ClearQueueMarker(jobId);
+    return;
+  }
+
   const { getNeonSql } = await import('@/lib/integrations/database/neon');
   const sql = getNeonSql();
-
   await sql`
     UPDATE automation_jobs
     SET queue_enqueued_at = NULL, updated_at = NOW()
@@ -80,19 +96,30 @@ export const promoteAutomationJobsToQueue = async (limit = 250) => {
     return { promoted: 0, skipped: 0 };
   }
 
-  const { getNeonSql } = await import('@/lib/integrations/database/neon');
-  const sql = getNeonSql();
+  const { isD1AutomationJobsEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
 
-  const rows = await sql`
-    SELECT id, due_at
-    FROM automation_jobs
-    WHERE status = 'pending'
-      AND queue_enqueued_at IS NULL
-      AND due_at > NOW()
-      AND due_at <= NOW() + make_interval(hours => 12)
-    ORDER BY due_at ASC
-    LIMIT ${limit}
-  `;
+  let rows: Array<{ id: string; due_at: string }>;
+
+  if (isD1AutomationJobsEnabled()) {
+    const { d1ListPromoteableJobs } = await import('@/lib/server/integrations/d1-automation-jobs');
+    rows = await d1ListPromoteableJobs(limit);
+  } else {
+    const { getNeonSql } = await import('@/lib/integrations/database/neon');
+    const sql = getNeonSql();
+    const neonRows = (await sql`
+      SELECT id, due_at
+      FROM automation_jobs
+      WHERE status = 'pending'
+        AND queue_enqueued_at IS NULL
+        AND due_at > NOW()
+        AND due_at <= NOW() + make_interval(hours => 12)
+      ORDER BY due_at ASC
+      LIMIT ${limit}
+    `) as Array<{ id: unknown; due_at: unknown }>;
+    rows = neonRows.map((r) => ({ id: String(r.id), due_at: String(r.due_at) }));
+  }
 
   let promoted = 0;
   let skipped = 0;
@@ -131,17 +158,32 @@ export const queueAutomationJobAfterInsert = (jobId: string, dueAt: Date) => {
 };
 
 export const reconcileMissedAutomationJobs = async (limit = 100) => {
-  const { getNeonSql } = await import('@/lib/integrations/database/neon');
-  const sql = getNeonSql();
+  const { isD1AutomationJobsEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
 
-  const rows = await sql`
-    SELECT id, due_at, queue_enqueued_at
-    FROM automation_jobs
-    WHERE status = 'pending'
-      AND due_at <= NOW() - INTERVAL '30 seconds'
-    ORDER BY due_at ASC
-    LIMIT ${limit}
-  `;
+  let rows: Array<{ id: string; due_at: string; queue_enqueued_at: string | null }>;
+
+  if (isD1AutomationJobsEnabled()) {
+    const { d1ListMissedJobs } = await import('@/lib/server/integrations/d1-automation-jobs');
+    rows = await d1ListMissedJobs(limit);
+  } else {
+    const { getNeonSql } = await import('@/lib/integrations/database/neon');
+    const sql = getNeonSql();
+    const neonRows = (await sql`
+      SELECT id, due_at, queue_enqueued_at
+      FROM automation_jobs
+      WHERE status = 'pending'
+        AND due_at <= NOW() - INTERVAL '30 seconds'
+      ORDER BY due_at ASC
+      LIMIT ${limit}
+    `) as Array<{ id: unknown; due_at: unknown; queue_enqueued_at: unknown }>;
+    rows = neonRows.map((r) => ({
+      id: String(r.id),
+      due_at: String(r.due_at),
+      queue_enqueued_at: r.queue_enqueued_at != null ? String(r.queue_enqueued_at) : null,
+    }));
+  }
 
   if (!rows.length) {
     return { checked: 0, processed: 0, requeued: 0 };

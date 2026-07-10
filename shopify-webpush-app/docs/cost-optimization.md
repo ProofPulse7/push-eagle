@@ -51,6 +51,9 @@ Code now **stops reading/writing Neon** for data that already lives on D1:
 | Audience outbox empty cache 90m | Cron tick skips Neon outbox SELECT when empty |
 | `d1_only` audience: no Neon empty/error fallback | Stops stale Neon audience transfer |
 | Diagnostic API requires `CRON_SECRET` | Prevents accidental heavy Neon scans |
+| **`automation_jobs` → D1** when `D1_AUTOMATION_JOBS_ENABLED=true` | Removes highest-frequency polling table from Neon entirely |
+| **`opt_in_prompt_stats` → D1** when `D1_OPT_IN_STATS_ENABLED=true` | Opt-in beacon writes no longer touch Neon |
+| Campaign idle KV cache 90m | Cron probe skips Neon campaign scan when both jobs and campaigns are idle |
 
 **Required production flags (already set on Vercel):**
 
@@ -58,6 +61,8 @@ Code now **stops reading/writing Neon** for data that already lives on D1:
 D1_AUDIENCE_MODE=d1_only
 D1_EVENTS_ENABLED=true
 D1_DELIVERIES_ENABLED=true
+D1_AUTOMATION_JOBS_ENABLED=true   # direct cutover — no pending jobs needed
+D1_OPT_IN_STATS_ENABLED=true
 D1_COMMERCE_ENABLED=true
 D1_CUSTOMERS_ENABLED=true
 D1_CATALOG_ENABLED=true
@@ -66,7 +71,7 @@ CLOUDFLARE_WORKER_URL=...
 AUTOMATION_QUEUE_ENABLED=true
 ```
 
-Neon should mainly hold: `merchants`, `automation_rules`, `automation_jobs`, `campaigns`, billing, segments, media refs — not high-volume events/audience/deliveries.
+Neon should mainly hold: `merchants`, `automation_rules`, `campaigns`, billing, segments, media refs — not high-volume events/audience/deliveries/jobs.
 
 ## What changed (code)
 
