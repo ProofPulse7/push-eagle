@@ -13,7 +13,7 @@ import {
   promoteAutomationJobsToQueue,
   reconcileMissedAutomationJobs,
 } from '@/lib/server/automation/queue-scheduler';
-import { clearCronSleep, writeCronSleepUntil } from '@/lib/server/cron/cron-idle';
+import { clearCronSleep, peekCronIdleCaches, writeCronSleepUntil } from '@/lib/server/cron/cron-idle';
 import {
   cronProbeHasImmediateWork,
   probeCronPendingWork,
@@ -27,9 +27,12 @@ const PROMOTION_KEY = 'pe:cron:last:promotion';
 const SAFETY_NET_KEY = 'pe:cron:last:safetynet';
 
 const MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const PROMOTION_INTERVAL_MS = 5 * 60 * 1000;
-const QUEUE_SAFETY_NET_INTERVAL_MS = 2 * 60 * 1000;
-const INLINE_AUTOMATION_INTERVAL_MS = 5 * 60 * 1000;
+/** Promote long-delay jobs to CF Queue; rare — most jobs enqueue at create time. */
+const PROMOTION_INTERVAL_MS = 15 * 60 * 1000;
+/** When CF Queue owns delayed jobs, Neon is only a safety net — check rarely. */
+const QUEUE_SAFETY_NET_INTERVAL_MS = 15 * 60 * 1000;
+/** Without the queue, Neon must process due jobs more often (still capped for free plan). */
+const INLINE_AUTOMATION_INTERVAL_MS = 10 * 60 * 1000;
 
 // Time-based scheduling (via KV markers) instead of matching an exact UTC minute:
 // once the cron idles it wakes at a fixed minute each hour, which would never line
@@ -62,11 +65,10 @@ const markPeriodicRan = (key: string, intervalMs: number) => {
 };
 
 // Neon compute autosuspends after ~5 min idle, and every wake bills a full
-// suspend cycle. Sleeping only 14 min meant the probe re-woke Neon ~100x/day,
-// burning ~10 compute-hours. Since scheduling any campaign/automation calls
-// bumpCronWakeNow() (which clears this sleep marker), we can idle much longer and
-// still deliver on time — the cron only needs to self-wake for periodic safety nets.
-const IDLE_SLEEP_MS = 60 * 60 * 1000;
+// suspend cycle. Idle longer on free plan; campaigns / near-due jobs still call
+// bumpCronWakeNow / bumpCronWakeForDueAt to clear sleep when work is imminent.
+const IDLE_SLEEP_MS = 2 * 60 * 60 * 1000;
+const MAX_IDLE_SLEEP_MS = 6 * 60 * 60 * 1000;
 
 const processAutomationChunk = async (
   jobs: Array<{ id: string }>,
@@ -93,11 +95,14 @@ const processAutomationChunk = async (
 };
 
 const resolveIdleSleepUntil = (probe: Awaited<ReturnType<typeof probeCronPendingWork>>) => {
-  const cap = Date.now() + IDLE_SLEEP_MS;
+  const defaultCap = Date.now() + IDLE_SLEEP_MS;
+  const maxCap = Date.now() + MAX_IDLE_SLEEP_MS;
   if (probe.nextWakeAt && probe.nextWakeAt.getTime() > Date.now()) {
-    return new Date(Math.min(probe.nextWakeAt.getTime(), cap));
+    // Honor upcoming due work, but never sleep longer than MAX_IDLE_SLEEP_MS
+    // so periodic safety nets still get a chance to run.
+    return new Date(Math.min(probe.nextWakeAt.getTime(), maxCap));
   }
-  return new Date(cap);
+  return new Date(defaultCap);
 };
 
 export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick') => {
@@ -111,6 +116,25 @@ export const runCronTick = async (config: CronTickConfig, workerId = 'cron-tick'
     ),
   ]);
   const runQueuePromotion = queueEnabled && runQueuePromotionDue;
+
+  // Fast path: when no periodic work is due and KV still says "idle + empty outbox",
+  // re-sleep WITHOUT touching Neon. This is the main free-plan compute saver.
+  if (!runHeavyMaintenance && !runQueuePromotionDue && !runAutomationSafetyNet) {
+    const idlePeek = await peekCronIdleCaches();
+    if (idlePeek.canSleepWithoutNeon && idlePeek.probe) {
+      const sleepUntil = resolveIdleSleepUntil(idlePeek.probe);
+      await writeCronSleepUntil(sleepUntil);
+      return {
+        ok: true,
+        idle: true,
+        workerId,
+        sleepUntil: sleepUntil.toISOString(),
+        probe: idlePeek.probe,
+        audienceOutbox: { processed: 0, failed: 0, remaining: 0, cachedEmpty: true },
+        neonSkipped: true,
+      };
+    }
+  }
 
   const probe = await probeCronPendingWork();
   const hasImmediateWork = cronProbeHasImmediateWork(probe);

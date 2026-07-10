@@ -1943,7 +1943,36 @@ const selectAutomationImageForDevice = (
   return payload.imageUrl ?? null;
 };
 
-const ensureMerchant = async (shopDomain: string) => {
+/** Avoid waking Neon on every storefront opt-in — merchant row is stable for days. */
+const MERCHANT_ENSURED_TTL_MS = 24 * 60 * 60 * 1000;
+const MERCHANT_ENSURED_TTL_SECONDS = 24 * 60 * 60;
+const merchantEnsuredAt = new Map<string, number>();
+const merchantEnsuredKvKey = (shop: string) => `pe:merchant:ensured:v1:${shop}`;
+
+const ensureMerchant = async (shopDomain: string, options?: { force?: boolean }) => {
+  const shop = shopDomain.trim().toLowerCase();
+  const force = Boolean(options?.force);
+
+  if (!force) {
+    const memAt = merchantEnsuredAt.get(shop);
+    if (memAt && Date.now() - memAt < MERCHANT_ENSURED_TTL_MS) {
+      return;
+    }
+
+    try {
+      const { isCloudflareKvEnabled, readKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+      if (isCloudflareKvEnabled()) {
+        const cached = await readKvJson<{ at?: number }>(merchantEnsuredKvKey(shop));
+        if (cached?.at && Date.now() - cached.at < MERCHANT_ENSURED_TTL_MS) {
+          merchantEnsuredAt.set(shop, cached.at);
+          return;
+        }
+      }
+    } catch {
+      // fall through to Neon upsert
+    }
+  }
+
   const sql = getNeonSql();
   await sql`
     INSERT INTO merchants (shop_domain, first_installed_at, last_authenticated_at, uninstalled_at)
@@ -1966,11 +1995,38 @@ const ensureMerchant = async (shopDomain: string) => {
       updated_at = NOW()
     WHERE shop_domain = ${shopDomain}
   `;
+
+  const ensuredAt = Date.now();
+  merchantEnsuredAt.set(shop, ensuredAt);
+  try {
+    const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(merchantEnsuredKvKey(shop), { at: ensuredAt }, MERCHANT_ENSURED_TTL_SECONDS).catch(
+        () => undefined,
+      );
+    }
+  } catch {
+    // best-effort cache
+  }
+};
+
+const clearMerchantEnsuredCache = async (shopDomain: string) => {
+  const shop = shopDomain.trim().toLowerCase();
+  merchantEnsuredAt.delete(shop);
+  try {
+    const { isCloudflareKvEnabled, deleteKvKey } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void deleteKvKey(merchantEnsuredKvKey(shop)).catch(() => undefined);
+    }
+  } catch {
+    // best-effort
+  }
 };
 
 export const ensureMerchantAccount = async (shopDomain: string) => {
   await ensureSchema();
-  await ensureMerchant(shopDomain);
+  // Auth/install paths must refresh last_authenticated_at and clear uninstalled_at.
+  await ensureMerchant(shopDomain, { force: true });
 };
 
 const DEFAULT_WELCOME_STEPS: Record<WelcomeStepKey, WelcomeStepConfig> = {
@@ -2346,13 +2402,28 @@ const DEFAULT_AUTOMATION_RULES: Array<{ key: AutomationRuleKey; enabled: boolean
 ];
 
 const automationRulesReadyAt = new Map<string, number>();
-const AUTOMATION_RULES_READY_TTL_MS = 5 * 60 * 1000;
+/** Defaults only need seeding once; long TTL keeps opt-in path off Neon. */
+const AUTOMATION_RULES_READY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const automationRulesReadyKvKey = (shop: string) => `pe:rules:ready:v2:${shop}`;
 
 const ensureAutomationRules = async (shopDomain: string) => {
   const shop = shopDomain.trim().toLowerCase();
   const readyAt = automationRulesReadyAt.get(shop);
   if (readyAt && Date.now() - readyAt < AUTOMATION_RULES_READY_TTL_MS) {
     return;
+  }
+
+  try {
+    const { isCloudflareKvEnabled, readKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      const cached = await readKvJson<{ at?: number }>(automationRulesReadyKvKey(shop));
+      if (cached?.at && Date.now() - cached.at < AUTOMATION_RULES_READY_TTL_MS) {
+        automationRulesReadyAt.set(shop, cached.at);
+        return;
+      }
+    }
+  } catch {
+    // fall through
   }
 
   await ensureSchema();
@@ -2505,7 +2576,20 @@ const ensureAutomationRules = async (shopDomain: string) => {
     }
   }
 
-  automationRulesReadyAt.set(shop, Date.now());
+  const readyAt = Date.now();
+  automationRulesReadyAt.set(shop, readyAt);
+  try {
+    const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(
+        automationRulesReadyKvKey(shop),
+        { at: readyAt },
+        Math.ceil(AUTOMATION_RULES_READY_TTL_MS / 1000),
+      ).catch(() => undefined);
+    }
+  } catch {
+    // best-effort
+  }
 };
 
 export const listAutomationRules = async (shopDomain: string) => {
@@ -4251,8 +4335,8 @@ export const enqueueAutomationJob = async (input: {
     if (refreshedId) {
       const { queueAutomationJobAfterInsert } = await import('@/lib/server/automation/queue-scheduler');
       queueAutomationJobAfterInsert(refreshedId, dueAt);
-      const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
-      void bumpCronWakeNow();
+      const { bumpCronWakeForDueAt } = await import('@/lib/server/cron/cron-idle');
+      void bumpCronWakeForDueAt(dueAt);
       return refreshedId;
     }
   }
@@ -4277,8 +4361,8 @@ export const enqueueAutomationJob = async (input: {
   if (insertedId) {
     const { queueAutomationJobAfterInsert } = await import('@/lib/server/automation/queue-scheduler');
     queueAutomationJobAfterInsert(insertedId, dueAt);
-    const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
-    void bumpCronWakeNow();
+    const { bumpCronWakeForDueAt } = await import('@/lib/server/cron/cron-idle');
+    void bumpCronWakeForDueAt(dueAt);
   }
 
   return insertedId;
@@ -8213,10 +8297,8 @@ const enqueueAudienceOutbox = async (input: UpsertTokenInput) => {
   `;
 
   try {
-    const { isCloudflareKvEnabled, deleteKvKey } = await import('@/lib/server/cache/cloudflare-kv');
-    if (isCloudflareKvEnabled()) {
-      void deleteKvKey('pe:cron:audience_outbox_empty_v1').catch(() => undefined);
-    }
+    const { clearCronOutboxEmptyCache } = await import('@/lib/server/cron/cron-idle');
+    void clearCronOutboxEmptyCache();
   } catch {
     // best-effort cache bust
   }
@@ -8468,11 +8550,9 @@ export const reconcileAudienceOutbox = async (limit = 500) => {
   const {
     isCloudflareKvEnabled,
     readKvJson,
-    writeKvJson,
-    deleteKvKey,
   } = await import('@/lib/server/cache/cloudflare-kv');
   const OUTBOX_EMPTY_CACHE_KEY = 'pe:cron:audience_outbox_empty_v1';
-  const OUTBOX_EMPTY_TTL_SECONDS = 300;
+  const OUTBOX_EMPTY_TTL_SECONDS = 90 * 60;
 
   if (isCloudflareKvEnabled()) {
     try {
@@ -8497,13 +8577,15 @@ export const reconcileAudienceOutbox = async (limit = 500) => {
 
   if (rows.length === 0) {
     if (isCloudflareKvEnabled()) {
-      void writeKvJson(OUTBOX_EMPTY_CACHE_KEY, { empty: true, at: Date.now() }, OUTBOX_EMPTY_TTL_SECONDS).catch(() => undefined);
+      const { markCronOutboxEmpty } = await import('@/lib/server/cron/cron-idle');
+      void markCronOutboxEmpty();
     }
     return { processed: 0, failed: 0, remaining: 0 };
   }
 
   if (isCloudflareKvEnabled()) {
-    void deleteKvKey(OUTBOX_EMPTY_CACHE_KEY).catch(() => undefined);
+    const { clearCronOutboxEmptyCache } = await import('@/lib/server/cron/cron-idle');
+    void clearCronOutboxEmptyCache();
   }
 
   let processed = 0;
@@ -8578,12 +8660,7 @@ export const getAudienceOutboxStatus = async () => {
 };
 
 export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
-  await ensureSchema();
-  const sql = getNeonSql();
   const serializedDeviceContext = input.deviceContext ? JSON.stringify(input.deviceContext) : null;
-
-  await ensureMerchant(input.shopDomain);
-  await ensureAutomationRules(input.shopDomain);
 
   const {
     isD1AudienceOnly,
@@ -8592,6 +8669,17 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
     d1MirrorToken,
     d1UpsertAudienceAuthoritative,
   } = await import('@/lib/server/integrations/d1-audience');
+
+  // Seed defaults once (KV/memory cached). Avoid ensureSchema/ensureMerchant on the
+  // d1_only hot path when rules are already ready — that was waking Neon every opt-in.
+  await ensureAutomationRules(input.shopDomain);
+
+  let sql: ReturnType<typeof getNeonSql> | null = null;
+  if (!isD1AudienceOnly()) {
+    await ensureSchema();
+    sql = getNeonSql();
+    await ensureMerchant(input.shopDomain);
+  }
 
   let subscriberId: number;
   let tokenId: number;
@@ -8650,7 +8738,8 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
       return { subscriberId: 0, tokenId: 0, buffered: true };
     }
   } else {
-    const subscriberRows = await sql`
+    const neonSql = sql ?? getNeonSql();
+    const subscriberRows = await neonSql`
       INSERT INTO subscribers (shop_domain, external_id, browser, platform, locale, country, city, device_context, opt_in_prompt_type, last_seen_at)
       VALUES (
         ${input.shopDomain},
@@ -8679,7 +8768,7 @@ export const upsertSubscriberToken = async (input: UpsertTokenInput) => {
 
     subscriberId = Number(subscriberRows[0]?.id);
 
-    const tokenRows = await sql`
+    const tokenRows = await neonSql`
       INSERT INTO subscriber_tokens (shop_domain, subscriber_id, fcm_token, user_agent, status, token_type, vapid_endpoint, vapid_p256dh, vapid_auth, updated_at, last_seen_at)
       VALUES (
         ${input.shopDomain},
@@ -8939,16 +9028,24 @@ export const getOptInPromptStats = async (
 };
 
 export const countActiveDeliverableSubscribers = async (shopDomain: string) => {
-  await ensureSchema();
-  const sql = getNeonSql();
-  const { audienceRead, d1CountActiveDeliverableSubscribers } = await import(
+  const { audienceRead, d1CountActiveDeliverableSubscribers, isD1AudienceOnly } = await import(
     '@/lib/server/integrations/d1-audience'
   );
+
+  // d1_only: skip Neon schema bootstrap — count lives entirely in D1.
+  if (!isD1AudienceOnly()) {
+    await ensureSchema();
+  }
+
+  const sql = !isD1AudienceOnly() ? getNeonSql() : null;
 
   return audienceRead<number>({
     label: 'countActiveDeliverableSubscribers',
     key: (n) => String(n),
     neon: async () => {
+      if (!sql) {
+        return 0;
+      }
       const rows = await sql`
         SELECT COUNT(DISTINCT s.id)::BIGINT AS count
         FROM subscribers s
@@ -11361,6 +11458,8 @@ export const markMerchantUninstalled = async (shopDomain: string) => {
     SET uninstalled_at = NOW(), updated_at = NOW()
     WHERE shop_domain = ${shopDomain}
   `;
+
+  await clearMerchantEnsuredCache(shopDomain);
 
   await sql`
     UPDATE subscriber_tokens

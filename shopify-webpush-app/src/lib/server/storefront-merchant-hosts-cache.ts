@@ -7,8 +7,11 @@ import { getNeonSql } from '@/lib/integrations/database/neon';
 import { parseShopDomain } from '@/lib/server/shop-context';
 
 const MERCHANT_HOSTS_TTL_SECONDS = 86_400;
+const HOST_RECORDED_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 const merchantHostsKvKey = (shopDomain: string) => `pe:hosts:v1:${shopDomain}`;
+const hostRecordedKvKey = (shopDomain: string, host: string) =>
+  `pe:host:rec:v1:${shopDomain}:${host}`;
 
 const normalizeHost = (value: string | null) => {
   if (!value) {
@@ -99,6 +102,29 @@ export const recordStorefrontHost = async (shopDomainInput: string, originOrHost
   }
 
   const shopDomain = parseShopDomain(shopDomainInput);
+
+  // Skip Neon UPDATE when this custom domain was already recorded recently.
+  // Bootstrap/token hit this on every page view and was keeping Neon awake.
+  if (isCloudflareKvEnabled()) {
+    try {
+      const [hostsCached, alreadyRecorded] = await Promise.all([
+        readKvJson<string[]>(merchantHostsKvKey(shopDomain)),
+        readKvJson<{ at?: number }>(hostRecordedKvKey(shopDomain, host)),
+      ]);
+      if (alreadyRecorded?.at) {
+        return;
+      }
+      if (Array.isArray(hostsCached) && hostsCached.some((h) => h.toLowerCase() === host)) {
+        void writeKvJson(hostRecordedKvKey(shopDomain, host), { at: Date.now() }, HOST_RECORDED_TTL_SECONDS).catch(
+          () => undefined,
+        );
+        return;
+      }
+    } catch {
+      // fall through to Neon write
+    }
+  }
+
   const sql = getNeonSql();
 
   await sql`
@@ -108,6 +134,12 @@ export const recordStorefrontHost = async (shopDomainInput: string, originOrHost
       updated_at = NOW()
     WHERE shop_domain = ${shopDomain}
   `;
+
+  if (isCloudflareKvEnabled()) {
+    void writeKvJson(hostRecordedKvKey(shopDomain, host), { at: Date.now() }, HOST_RECORDED_TTL_SECONDS).catch(
+      () => undefined,
+    );
+  }
 
   void invalidateMerchantStorefrontHostsCache(shopDomain);
 };

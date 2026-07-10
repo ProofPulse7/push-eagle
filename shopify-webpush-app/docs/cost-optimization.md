@@ -2,6 +2,25 @@
 
 Target: **30 merchants**, **1M subscriber tokens**, all automations + tracking on **Neon free + Vercel free + Cloudflare Workers $5/mo**.
 
+## Neon COMPUTE hours (critical for free 100 CU/mo)
+
+Neon autosuspends after ~5 minutes idle; **every wake bills compute**. Goal: keep the endpoint suspended most of the month.
+
+| Change | Impact |
+|--------|--------|
+| Cron idle sleep **2h** (max 6h when next due is later) | Far fewer probe wakes while quiet |
+| Cron fast-path: re-sleep from KV probe+outbox caches (**90m**) without Neon | Idle ticks never touch Neon |
+| Soft wake `bumpCronWakeForDueAt` | Delayed automations (cart/welcome) no longer clear cron sleep when CF Queue owns delivery |
+| Safety-net / promotion intervals **15m** (was 2–5m) | Queue mode rarely probes Neon |
+| `ensureMerchant` KV+memory cache **24h** | Opt-ins stop double-writing merchants every time |
+| Automation-rules seed cache **7d** (KV) | Repeat opt-ins skip Neon entirely in `d1_only` |
+| `recordStorefrontHost` debounce **7d** | Bootstrap/token stop updating `primary_domain` every page view |
+| Probe + outbox-empty caches **90m** | Align with peek fast-path |
+
+**Still wakes Neon (expected):** campaign launch/send, near-due jobs (≤3m), outbox drain after D1 blip, SSO/install (`ensureMerchantAccount` force), retention every 6h, safety net every 15m when sleep expired.
+
+**Required:** `AUTOMATION_QUEUE_ENABLED=true`, Cloudflare KV + worker, all `D1_*` flags below. Without KV, sleep/probe caches collapse and compute burns fast.
+
 ## Neon network transfer (critical for free 5 GB/mo)
 
 Code now **stops reading/writing Neon** for data that already lives on D1:
@@ -16,8 +35,8 @@ Code now **stops reading/writing Neon** for data that already lives on D1:
 | Skip Neon activity/commerce/delivery deletes when D1 owns them | Retention no longer scans empty Neon tables |
 | `getRuleConfig` 60s in-process cache | Fewer `automation_rules` round-trips |
 | Collection flags TTL 2m / KV 10m | Fewer rule-enabled Neon reads |
-| Cron probe idle cache 15m | Fewer COUNT probes while idle |
-| Audience outbox empty cache 5m | Cron tick skips Neon outbox SELECT when empty |
+| Cron probe idle cache 90m | Fewer COUNT probes while idle |
+| Audience outbox empty cache 90m | Cron tick skips Neon outbox SELECT when empty |
 | `d1_only` audience: no Neon empty/error fallback | Stops stale Neon audience transfer |
 | Diagnostic API requires `CRON_SECRET` | Prevents accidental heavy Neon scans |
 
@@ -46,7 +65,7 @@ Neon should mainly hold: `merchants`, `automation_rules`, `automation_jobs`, `ca
 | **No inline automation on page views** | Bootstrap/activity no longer run `processDueAutomationJobsForShop` when queue is enabled |
 | **KV merchant host cache** | Storefront CORS auth avoids repeated Neon `merchants` lookups |
 | **KV cron probe cache** | Idle ticks reuse probe result (fewer COUNT queries) |
-| **Cron idle sleep** | Worker skips ticks for up to ~60 min when no work (needs KV) |
+| **Cron idle sleep** | Worker skips ticks for up to ~2h when no work (needs KV); soft-wake for delayed jobs |
 | **Removed analytics page load** | Dashboard bootstrap no longer loads heavy analytics stats |
 | **All 6 automations unlocked** | `COMING_SOON_AUTOMATIONS_ENABLED=false` |
 
@@ -79,7 +98,7 @@ Neon should mainly hold: `merchants`, `automation_rules`, `automation_jobs`, `ca
 4. Jobs with delays **> 12 hours** stay DB-only until the cron tick promotes them into the queue window.
 5. Cron still scans due jobs after a **90-second grace period** if the queue message was missed.
 
-**Timing accuracy:** 1m / 3m / 5m reminders use queue delay seconds, not slower cron intervals.
+**Timing accuracy:** 1m / 3m / 5m reminders use queue delay seconds, not slower cron intervals. Delayed enqueues no longer clear cron sleep (queue delivers); only jobs due within ~3 minutes force a wake.
 
 ---
 
@@ -183,13 +202,14 @@ Worker HTTP routes:
 
 ## Verification checklist
 
-- [ ] `cron_heartbeats` shows `cron_tick` every minute
-- [ ] Abandoned cart reminders fire at configured delays (test with 1m / 3m / 5m)
+- [ ] Idle cron ticks return `kv-sleep` / `neonSkipped` most of the time (Neon suspended)
+- [ ] Abandoned cart reminders fire at configured delays (test with 1m / 3m / 5m via CF Queue)
 - [ ] Queue consumer logs show `process-automation-job` calls at due times
 - [ ] Manual campaign send returns instantly and completes in background
 - [ ] Bootstrap loads fast on repeat visits (KV hit in logs if configured)
 - [ ] Analytics page loads; repeat date-range requests hit KV
 - [ ] R2 bucket shows `pixel-archive/` objects after retention runs (if R2 configured)
+- [ ] Neon compute hours stay well under 100 CU/month on free plan
 
 ---
 

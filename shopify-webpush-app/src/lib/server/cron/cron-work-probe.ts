@@ -16,7 +16,8 @@ export type CronWorkProbe = {
 };
 
 const PROBE_CACHE_KEY = 'pe:cron:probe_idle_cache_v1';
-const PROBE_CACHE_TTL_SECONDS = 900;
+/** Align with peekCronIdleCaches freshness window — keep Neon suspended while idle. */
+const PROBE_CACHE_TTL_SECONDS = 90 * 60;
 
 const readProbeFromNeon = async (): Promise<CronWorkProbe> => {
   const sql = getNeonSql();
