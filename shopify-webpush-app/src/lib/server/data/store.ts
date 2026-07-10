@@ -2066,6 +2066,14 @@ export const ensureMerchantAccount = async (shopDomain: string) => {
   await ensureMerchant(shopDomain, { force: true });
 };
 
+/**
+ * Soft merchant ensure for hot paths (billing, webhooks, sends).
+ * Uses 24h memory/KV cache — does NOT refresh last_authenticated_at.
+ */
+export const ensureMerchantCached = async (shopDomain: string) => {
+  await ensureMerchant(shopDomain);
+};
+
 const DEFAULT_WELCOME_STEPS: Record<WelcomeStepKey, WelcomeStepConfig> = {
   'reminder-1': {
     enabled: true,
@@ -2874,8 +2882,8 @@ const buildProductUrl = (handle?: string | null) => {
   return normalized ? `/products/${normalized}` : null;
 };
 
-const RULE_CONFIG_CACHE_TTL_MS = 10 * 60_000;
-const RULE_CONFIG_KV_TTL_SECONDS = 10 * 60;
+const RULE_CONFIG_CACHE_TTL_MS = 2 * 60 * 60_000;
+const RULE_CONFIG_KV_TTL_SECONDS = 2 * 60 * 60;
 const ruleConfigCache = new Map<string, { value: { enabled: boolean; config: Record<string, unknown> }; at: number }>();
 const ruleConfigKvKey = (shopDomain: string, ruleKey: string) =>
   `pe:rule:cfg:v1:${shopDomain.trim().toLowerCase()}:${ruleKey}`;

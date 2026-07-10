@@ -28,11 +28,11 @@ const SAFETY_NET_KEY = 'pe:cron:last:safetynet';
 
 const MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Promote long-delay jobs to CF Queue; rare — most jobs enqueue at create time. */
-const PROMOTION_INTERVAL_MS = 15 * 60 * 1000;
+const PROMOTION_INTERVAL_MS = 45 * 60 * 1000;
 /** When CF Queue owns delayed jobs, Neon is only a safety net — check rarely. */
-const QUEUE_SAFETY_NET_INTERVAL_MS = 15 * 60 * 1000;
+const QUEUE_SAFETY_NET_INTERVAL_MS = 45 * 60 * 1000;
 /** Without the queue, Neon must process due jobs more often (still capped for free plan). */
-const INLINE_AUTOMATION_INTERVAL_MS = 10 * 60 * 1000;
+const INLINE_AUTOMATION_INTERVAL_MS = 15 * 60 * 1000;
 
 // Time-based scheduling (via KV markers) instead of matching an exact UTC minute:
 // once the cron idles it wakes at a fixed minute each hour, which would never line

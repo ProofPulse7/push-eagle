@@ -1,6 +1,6 @@
 import { getNeonSql } from '@/lib/integrations/database/neon';
 import { BASIC_PLAN, getBillingPeriodEnd, getBillingPeriodStart, type PlanKey } from '@/lib/server/billing/plans';
-import { ensureMerchantAccount } from '@/lib/server/data/store';
+import { ensureMerchantCached } from '@/lib/server/data/store';
 import { countImpressionsForBillingPeriod } from '@/lib/server/integrations/deliveries-data';
 
 export type MerchantBillingRecord = {
@@ -21,12 +21,48 @@ const BILLING_SCHEMA_KV_KEY = 'pe:billing:schema:ready:v1';
 const BILLING_SCHEMA_TTL_SECONDS = 24 * 60 * 60;
 let billingSchemaReady = false;
 
+/** Short in-process cache so burst sends (welcome + cart) share one Neon billing read. */
+const BILLING_READ_CACHE_TTL_MS = 60_000;
+const billingReadCache = new Map<string, { record: MerchantBillingRecord; at: number }>();
+
+const getCachedBilling = (shopDomain: string): MerchantBillingRecord | null => {
+  const shop = shopDomain.trim().toLowerCase();
+  const hit = billingReadCache.get(shop);
+  if (!hit) return null;
+  if (Date.now() - hit.at > BILLING_READ_CACHE_TTL_MS) {
+    billingReadCache.delete(shop);
+    return null;
+  }
+  return hit.record;
+};
+
+const setCachedBilling = (record: MerchantBillingRecord) => {
+  billingReadCache.set(record.shopDomain.trim().toLowerCase(), {
+    record,
+    at: Date.now(),
+  });
+};
+
+const bumpCachedBillingUsage = (shopDomain: string, delta: number) => {
+  const shop = shopDomain.trim().toLowerCase();
+  const hit = billingReadCache.get(shop);
+  if (!hit) return;
+  const used = hit.record.impressionsUsed + delta;
+  const next: MerchantBillingRecord = {
+    ...hit.record,
+    impressionsUsed: used,
+    impressionsRemaining: Math.max(0, hit.record.impressionLimit - used),
+  };
+  billingReadCache.set(shop, { record: next, at: Date.now() });
+};
+
 /**
  * Billing DDL also lives in ensureSchema(). Cache readiness so dashboard/bootstrap
  * billing reads do not run CREATE/ALTER on every request (Neon wake + transfer).
  */
 const ensureBillingSchema = async (shopDomain: string) => {
-  await ensureMerchantAccount(shopDomain);
+  // Soft ensure — never force last_authenticated_at refresh on every send/billing read.
+  await ensureMerchantCached(shopDomain);
   if (billingSchemaReady) return;
 
   try {
@@ -115,6 +151,7 @@ export const incrementBillingImpressions = async (shopDomain: string, delta: num
       impressions_used = merchant_billing.impressions_used + ${delta},
       updated_at = NOW()
   `;
+  bumpCachedBillingUsage(shopDomain, delta);
 };
 
 const mapBillingRow = (
@@ -167,6 +204,11 @@ export const getMerchantBilling = async (
   shopDomain: string,
   options?: { reconcileUsage?: boolean },
 ): Promise<MerchantBillingRecord> => {
+  if (!options?.reconcileUsage) {
+    const cached = getCachedBilling(shopDomain);
+    if (cached) return cached;
+  }
+
   await ensureBillingSchema(shopDomain);
   const sql = getNeonSql();
   const periodStart = getBillingPeriodStart();
@@ -247,7 +289,9 @@ export const getMerchantBilling = async (
     `;
   }
 
-  return mapBillingRow(shopDomain, row, impressionsUsed);
+  const record = mapBillingRow(shopDomain, row, impressionsUsed);
+  setCachedBilling(record);
+  return record;
 };
 
 export const getMerchantBillingFast = async (shopDomain: string) =>
@@ -345,7 +389,9 @@ export const upsertMerchantBilling = async (input: {
 };
 
 export const assertCanSendNotifications = async (shopDomain: string, requestedCount = 1) => {
-  const billing = await getMerchantBilling(shopDomain, { reconcileUsage: true });
+  // Use the counter maintained by incrementBillingImpressions — do NOT recount
+  // all deliveries from D1 on every send (that was a major Neon+D1 cost).
+  const billing = await getMerchantBilling(shopDomain, { reconcileUsage: false });
   if (billing.status !== 'active') {
     throw new Error(
       billing.status === 'pending'

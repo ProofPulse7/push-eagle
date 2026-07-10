@@ -43,8 +43,9 @@ export const clearCronSleep = async () => {
   }
 
   try {
+    // Only clear the sleep marker. Keep probe/outbox idle caches so the next
+    // tick can re-sleep without a Neon campaign EXISTS probe after soft wakes.
     await deleteKvKey(CRON_SLEEP_KV_KEY);
-    await deleteKvKey(CRON_PROBE_CACHE_KEY);
   } catch (error) {
     console.error('[cron-idle] failed to clear sleep marker', error);
   }

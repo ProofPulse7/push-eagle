@@ -28,10 +28,9 @@ Push Eagle is designed so **30+ merchants** and **1M+ subscribers** can run on N
 These matter as much as code for free-plan CU:
 
 1. Open the **existing** compute (not only “Change default compute settings”).
-2. Set **Min = 0.25 CU** and **Max = 0.25 CU** (or Max **0.5** if sends feel slow).
-3. Enable **Scale to zero** / autosuspend with the **shortest** idle delay available (often **1–5 minutes**).
-4. Remember: changing **defaults** does **not** change the live primary — edit the running endpoint too.
-5. Keep **one** primary compute; avoid extra read replicas on free plan.
+2. Set **Min = 0.25 CU** and **Max = 0.25 CU**.
+3. Set **Autosuspend delay = 1 minute** (your metrics show 5 min default — that is the biggest remaining CU lever).
+4. Keep **one** primary compute; avoid extra read replicas on free plan.
 
 ## Audience migration (subscribers → D1)
 

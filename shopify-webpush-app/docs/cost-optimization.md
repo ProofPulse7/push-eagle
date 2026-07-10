@@ -15,7 +15,12 @@ Neon autosuspends after ~5 minutes idle; **every wake bills compute**. Goal: kee
 | `ensureMerchant` KV+memory cache **24h** | Opt-ins stop double-writing merchants every time |
 | Automation-rules seed cache **7d** (KV) | Repeat opt-ins skip Neon entirely in `d1_only` |
 | `recordStorefrontHost` debounce **7d** | Bootstrap/token stop updating `primary_domain` every page view |
-| Probe + outbox-empty caches **4h** | Align with idle sleep; fewer Neon wakes while quiet |
+| Soft `ensureMerchantCached` for billing (no force auth refresh) | Stops merchant UPSERT on every send |
+| `assertCanSend` uses counter, not full delivery recount | Removes D1+Neon reconcile on every automation |
+| Billing read cache **60s** in-process | Burst sends share one billing SELECT |
+| Rule config cache **2h** (invalidate on save) | Fewer `automation_rules` Neon reads |
+| Cron safety/promotion **45m** (queue mode) | Fewer Neon probe wakes |
+| `clearCronSleep` keeps probe idle caches | Soft wakes no longer force campaign EXISTS |
 | Campaign idle KV **4h** (invalidated on schedule/send) | Cron skips Neon campaign EXISTS while idle |
 | Combined probe cache written on D1 idle path | `peekCronIdleCaches` can re-sleep without Neon |
 | Campaign probe uses KV even when D1 jobs have work | Stops Neon wake on every automation tick |
@@ -87,14 +92,12 @@ The screenshot “Change default compute settings” only affects **new** comput
 
 | Setting | Recommended (free plan) | Why |
 |---------|-------------------------|-----|
-| Min CU | **0.25** | Lowest billable size |
-| Max CU | **0.25** (or **0.5** if campaign sends feel slow) | Stops autoscaling to 2 CU and burning hours |
-| Scale to zero / autosuspend | **On**, shortest idle (1–5 min) | Compute hours only while awake |
+| Autosuspend Delay | **1 minute** (not 5) | Each brief wake currently bills ~5 min; 1 min cuts that 5× |
+| Min CU | **0.25** | Already correct on your metrics |
+| Max CU | **0.25** | Prevent scale-up |
 | Read replicas | **None** | Extra computes = extra CU |
 
-With Max at 2 CU (as in the screenshot defaults), a busy send can scale up and burn free hours much faster even after our D1 cutover.
-
-## What changed (code)
+Edit the **running primary** compute (your metrics already show 0.25 CU). Changing only “default compute settings” does not change the live endpoint.
 
 | Change | Impact |
 |--------|--------|
