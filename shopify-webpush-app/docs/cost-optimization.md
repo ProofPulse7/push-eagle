@@ -16,6 +16,12 @@ Neon autosuspends after ~5 minutes idle; **every wake bills compute**. Goal: kee
 | Automation-rules seed cache **7d** (KV) | Repeat opt-ins skip Neon entirely in `d1_only` |
 | `recordStorefrontHost` debounce **7d** | Bootstrap/token stop updating `primary_domain` every page view |
 | Soft `ensureMerchantCached` for billing (no force auth refresh) | Stops merchant UPSERT on every send |
+| Bootstrap memory+KV **30m**; client staleTime **30m** | Casual page browsing serves cache, not Neon |
+| LiveShopSync no longer fans out 5 APIs on focus | Focus only polls D1 subscriber count |
+| Prefetch trimmed (no custom-attrs/settings storm) | Background warm-up no longer wakes Neon |
+| Privacy/branding settings **6h KV** | Settings reads skip Neon on browse |
+| Segment custom-attrs schema+seed cached | Stops CREATE TABLE / seed on every Segments hit |
+| Campaigns API KV **10m** (was 30s) | List page browse stays on KV |
 | `assertCanSend` uses counter, not full delivery recount | Removes D1+Neon reconcile on every automation |
 | Billing read cache **60s** in-process | Burst sends share one billing SELECT |
 | Rule config cache **2h** (invalidate on save) | Fewer `automation_rules` Neon reads |

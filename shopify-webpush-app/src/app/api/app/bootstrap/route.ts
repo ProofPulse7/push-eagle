@@ -26,11 +26,11 @@ import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
 
-const CACHE_HEADERS = {
-  'Cache-Control': 'private, max-age=120, stale-while-revalidate=600',
-};
+const BOOTSTRAP_KV_TTL_SECONDS = 30 * 60;
 
-const BOOTSTRAP_KV_TTL_SECONDS = 600;
+const CACHE_HEADERS = {
+  'Cache-Control': 'private, max-age=1800, stale-while-revalidate=3600',
+};
 
 export async function GET(request: Request) {
   try {

@@ -9,61 +9,87 @@ import { getNeonSql } from '@/lib/integrations/database/neon';
 const ATTRIBUTE_NAME_PATTERN = /^[A-Z][A-Z0-9_]{0,49}$/;
 
 let schemaReadyPromise: Promise<void> | null = null;
+let schemaReadyCached = false;
+const SEGMENT_ATTR_SCHEMA_KV_KEY = 'pe:segment-attr:schema:ready:v1';
 
 const ensureSegmentCustomAttributeSchema = async () => {
+  if (schemaReadyCached) return;
+
   if (!schemaReadyPromise) {
     schemaReadyPromise = (async () => {
-      const sql = getNeonSql();
-      await sql`CREATE TABLE IF NOT EXISTS segment_custom_attributes (
-        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
-        name TEXT NOT NULL,
-        type TEXT NOT NULL,
-        options JSONB,
-        is_system BOOLEAN NOT NULL DEFAULT FALSE,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (shop_domain, name)
-      )`;
+      try {
+        const { isCloudflareKvEnabled, readKvJson, writeKvJson } = await import(
+          '@/lib/server/cache/cloudflare-kv'
+        );
+        if (isCloudflareKvEnabled()) {
+          const ready = await readKvJson<{ ready?: boolean }>(SEGMENT_ATTR_SCHEMA_KV_KEY);
+          if (ready?.ready) {
+            schemaReadyCached = true;
+            return;
+          }
+        }
 
-      await sql`CREATE TABLE IF NOT EXISTS subscriber_custom_attribute_values (
-        shop_domain TEXT NOT NULL,
-        subscriber_id BIGINT NOT NULL,
-        attribute_name TEXT NOT NULL,
-        value_text TEXT,
-        value_number DOUBLE PRECISION,
-        value_date TIMESTAMPTZ,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (shop_domain, subscriber_id, attribute_name)
-      )`;
+        const sql = getNeonSql();
+        await sql`CREATE TABLE IF NOT EXISTS segment_custom_attributes (
+          shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL,
+          options JSONB,
+          is_system BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (shop_domain, name)
+        )`;
 
-      await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_custom_attr_shop_name
-        ON subscriber_custom_attribute_values(shop_domain, attribute_name)`;
+        await sql`CREATE TABLE IF NOT EXISTS subscriber_custom_attribute_values (
+          shop_domain TEXT NOT NULL,
+          subscriber_id BIGINT NOT NULL,
+          attribute_name TEXT NOT NULL,
+          value_text TEXT,
+          value_number DOUBLE PRECISION,
+          value_date TIMESTAMPTZ,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (shop_domain, subscriber_id, attribute_name)
+        )`;
+
+        await sql`CREATE INDEX IF NOT EXISTS idx_subscriber_custom_attr_shop_name
+          ON subscriber_custom_attribute_values(shop_domain, attribute_name)`;
+
+        schemaReadyCached = true;
+        if (isCloudflareKvEnabled()) {
+          void writeKvJson(SEGMENT_ATTR_SCHEMA_KV_KEY, { ready: true }, 24 * 60 * 60).catch(
+            () => undefined,
+          );
+        }
+      } catch (error) {
+        schemaReadyPromise = null;
+        throw error;
+      }
     })();
   }
 
   await schemaReadyPromise;
 };
 
-const normalizeAttributeName = (name: string) =>
-  name.trim().toUpperCase().replace(/\s+/g, '_');
-
-const parseOptions = (value: unknown): string[] | undefined => {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const options = value.map((entry) => String(entry).trim()).filter(Boolean);
-  return options.length > 0 ? options : undefined;
-};
-
-const mapAttributeRow = (row: Record<string, unknown>): SegmentCustomAttribute => ({
-  name: String(row.name),
-  type: String(row.type) as SegmentCustomAttributeType,
-  options: parseOptions(row.options),
-  isSystem: Boolean(row.is_system),
-  createdAt: row.created_at ? String(row.created_at) : undefined,
-});
+const seedSystemKvKey = (shop: string) => `pe:segment-attr:seeded:v1:${shop.trim().toLowerCase()}`;
 
 export const seedSystemSegmentCustomAttributes = async (shopDomain: string) => {
   await ensureSegmentCustomAttributeSchema();
+
+  try {
+    const { isCloudflareKvEnabled, readKvJson, writeKvJson } = await import(
+      '@/lib/server/cache/cloudflare-kv'
+    );
+    if (isCloudflareKvEnabled()) {
+      const seeded = await readKvJson<{ at?: number }>(seedSystemKvKey(shopDomain));
+      // Re-seed at most once per 7 days per shop (system attrs are stable).
+      if (seeded?.at && Date.now() - seeded.at < 7 * 24 * 60 * 60 * 1000) {
+        return;
+      }
+    }
+  } catch {
+    // fall through
+  }
+
   const sql = getNeonSql();
 
   for (const attribute of SYSTEM_SEGMENT_CUSTOM_ATTRIBUTES) {
@@ -101,7 +127,37 @@ export const seedSystemSegmentCustomAttributes = async (shopDomain: string) => {
         AND is_system = TRUE
     `;
   }
+
+  try {
+    const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(seedSystemKvKey(shopDomain), { at: Date.now() }, 7 * 24 * 60 * 60).catch(
+        () => undefined,
+      );
+    }
+  } catch {
+    // best-effort
+  }
 };
+
+const normalizeAttributeName = (name: string) =>
+  name.trim().toUpperCase().replace(/\s+/g, '_');
+
+const parseOptions = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const options = value.map((entry) => String(entry).trim()).filter(Boolean);
+  return options.length > 0 ? options : undefined;
+};
+
+const mapAttributeRow = (row: Record<string, unknown>): SegmentCustomAttribute => ({
+  name: String(row.name),
+  type: String(row.type) as SegmentCustomAttributeType,
+  options: parseOptions(row.options),
+  isSystem: Boolean(row.is_system),
+  createdAt: row.created_at ? String(row.created_at) : undefined,
+});
 
 export const listSegmentCustomAttributes = async (shopDomain: string): Promise<SegmentCustomAttribute[]> => {
   await ensureSegmentCustomAttributeSchema();

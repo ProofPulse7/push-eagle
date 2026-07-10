@@ -43,7 +43,7 @@ export function useAppBootstrap() {
     queryKey: queryKeys.bootstrap(shop),
     queryFn: () => fetchAppBootstrap(queryClient, shop),
     enabled: Boolean(shop),
-    staleTime: 60_000,
+    staleTime: 30 * 60 * 1000,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     placeholderData: (previous) => previous ?? (shop ? queryClient.getQueryData(queryKeys.bootstrap(shop)) : undefined),
@@ -652,7 +652,7 @@ export function prefetchShopQueries(queryClient: QueryClient, shop: string) {
   void queryClient.prefetchQuery({
     queryKey: queryKeys.bootstrap(shop),
     queryFn: () => fetchAppBootstrap(queryClient, shop),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 30 * 60 * 1000,
   });
 }
 
@@ -673,29 +673,20 @@ const prefetchIfMissing = async (
   });
 };
 
-/** Background prefetch for main app pages — skips queries already warm in cache. */
+/** Background prefetch for main app pages — skips queries already warm in cache.
+ * Does not re-fetch settings/custom-attributes already hydrated by bootstrap
+ * (those were waking Neon on every casual browse).
+ */
 export async function prefetchAppPages(queryClient: QueryClient, shop: string) {
   if (!shop) {
     return;
   }
 
-  const { fromIso, toIso } = resolveAnalyticsDateRange();
-
   const steps: Array<() => Promise<unknown>> = [
     () =>
       prefetchIfMissing(queryClient, queryKeys.bootstrap(shop), () => fetchAppBootstrap(queryClient, shop)),
     () =>
-      prefetchIfMissing(queryClient, queryKeys.dashboardSummary(shop), () => fetchDashboardSummary(shop)),
-    () =>
       prefetchIfMissing(queryClient, queryKeys.campaigns(shop), () => fetchCampaignsList(queryClient, shop)),
-    () =>
-      prefetchIfMissing(queryClient, queryKeys.subscribersOverview(shop), () =>
-        fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
-      ),
-    () =>
-      prefetchIfMissing(queryClient, queryKeys.subscribersGrowthSeries(shop), () =>
-        fetchJson<SubscriberGrowthPayload>(`/api/subscribers/growth?shop=${encodeURIComponent(shop)}`),
-      ),
     () =>
       prefetchIfMissing(queryClient, queryKeys.automationsOverview(shop), async () => {
         const fresh = await fetchJsonWithShop<{
@@ -705,41 +696,13 @@ export async function prefetchAppPages(queryClient: QueryClient, shop: string) {
         return mergeAutomationsFromCache(queryClient, shop, fresh);
       }),
     () =>
-      prefetchIfMissing(queryClient, queryKeys.automationStats(shop, 'all', 'all'), async () => {
-        const params = new URLSearchParams({ shop });
-        return fetchJson<Record<string, unknown>>(`/api/automations/stats?${params.toString()}`);
-      }),
-    () => {
-      const { fromIso, toIso } = resolveAnalyticsDateRange();
-      return prefetchIfMissing(queryClient, queryKeys.automationStats(shop, fromIso, toIso), async () => {
-        const params = new URLSearchParams({ shop, from: fromIso, to: toIso });
-        return fetchJson<Record<string, unknown>>(`/api/automations/stats?${params.toString()}`);
-      });
-    },
-    () =>
       prefetchIfMissing(queryClient, queryKeys.segments(shop), async () => {
         const fresh = await fetchJsonWithShop<{ segments: unknown[] }>('/api/segments', shop);
         return mergeSegmentsFromCache(queryClient, shop, fresh);
       }),
     () =>
-      prefetchIfMissing(queryClient, queryKeys.segmentCustomAttributes(shop), () =>
-        fetchJsonWithShop<{ attributes: unknown[] }>('/api/segments/custom-attributes', shop),
-      ),
-    () =>
       prefetchIfMissing(queryClient, queryKeys.billingStatus(shop), () =>
         fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=0', shop),
-      ),
-    () =>
-      prefetchIfMissing(queryClient, queryKeys.optIn(shop), () =>
-        fetchJsonWithShop<Record<string, unknown>>('/api/settings/opt-in', shop),
-      ),
-    () =>
-      prefetchIfMissing(queryClient, queryKeys.privacy(shop), () =>
-        fetchJsonWithShop<Record<string, unknown>>('/api/settings/privacy', shop),
-      ),
-    () =>
-      prefetchIfMissing(queryClient, queryKeys.branding(shop), () =>
-        fetchJsonWithShop<Record<string, unknown>>('/api/settings/branding', shop),
       ),
   ];
 

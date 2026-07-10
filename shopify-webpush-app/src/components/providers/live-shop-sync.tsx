@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { prefetchAppBootstrap, prefetchCampaignsList, prefetchDashboardSummary } from '@/lib/client/query-fetchers';
+import { prefetchAppBootstrap } from '@/lib/client/query-fetchers';
 import { queryKeys } from '@/lib/client/query-keys';
 import {
   EARLY_SUBSCRIBER_SYNC_MAX,
@@ -34,7 +34,11 @@ const refreshSubscriberData = async (
   return { changed, next };
 };
 
-/** Keeps dashboard data fresh across tabs. Uses prefetch (with queryFn) instead of blind refetch. */
+/**
+ * Keeps subscriber counts fresh across tabs.
+ * Does NOT re-hit Neon on every focus with dashboardSummary/campaigns —
+ * bootstrap KV (30m) already hydrates those for casual browsing.
+ */
 export function LiveShopSync() {
   const shop = useShopDomain();
   const queryClient = useQueryClient();
@@ -45,9 +49,11 @@ export function LiveShopSync() {
       return;
     }
 
-    void prefetchAppBootstrap(queryClient, shop);
-    void prefetchDashboardSummary(queryClient, shop);
-    void prefetchCampaignsList(queryClient, shop);
+    // Only warm bootstrap if missing — never fan-out 5 Neon APIs on mount/focus.
+    const bootstrapState = queryClient.getQueryState(queryKeys.bootstrap(shop));
+    if (bootstrapState?.status !== 'success') {
+      void prefetchAppBootstrap(queryClient, shop);
+    }
 
     const unsubscribe = subscribeShopSync(shop, (event) => {
       if (event.type === 'all') {
@@ -80,8 +86,9 @@ export function LiveShopSync() {
       if (document.visibilityState === 'visible') {
         const cachedCount = readCachedSubscriberCount(queryClient, shop);
         const isEarlyPhase = cachedCount < EARLY_SUBSCRIBER_SYNC_MAX;
+        // Count poll is D1-only when audience is d1_only — does not wake Neon.
         const { next } = await refreshSubscriberData(queryClient, shop, {
-          fullRefresh: !isEarlyPhase,
+          fullRefresh: false,
         });
 
         if (!isEarlyPhase) {
@@ -114,10 +121,8 @@ export function LiveShopSync() {
     );
 
     const onFocus = () => {
-      void prefetchAppBootstrap(queryClient, shop);
-      void prefetchDashboardSummary(queryClient, shop);
-      void prefetchCampaignsList(queryClient, shop);
-      void refreshSubscriberData(queryClient, shop, { fullRefresh: true });
+      // Focus: only refresh D1 subscriber count. Do not wake Neon for browse.
+      void refreshSubscriberData(queryClient, shop, { fullRefresh: false });
     };
 
     window.addEventListener('focus', onFocus);
@@ -129,7 +134,7 @@ export function LiveShopSync() {
       }
       window.removeEventListener('focus', onFocus);
     };
-  }, [queryClient, shop]);
+  }, [shop, queryClient]);
 
   return null;
 }

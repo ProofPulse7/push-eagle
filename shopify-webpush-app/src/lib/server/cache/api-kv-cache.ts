@@ -5,12 +5,14 @@ export const shopApiKvKey = (shopDomain: string, scope: string) =>
   `api:v1:${shopDomain.trim().toLowerCase()}:${scope}`;
 
 export const API_KV_TTL = {
-  bootstrap: 600,
+  bootstrap: 1800,
   analytics: 600,
-  segments: 300,
-  campaigns: 30,
-  subscribersOverview: 300,
-  automationsOverview: 300,
+  segments: 600,
+  campaigns: 600,
+  subscribersOverview: 600,
+  automationsOverview: 600,
+  customAttributes: 3600,
+  settingsOverview: 1800,
 } as const;
 
 export const withShopApiKvCache = async <T>(
@@ -70,5 +72,7 @@ export const invalidateShopDashboardCaches = async (shopDomain: string) => {
     invalidateShopApiKvCache(shopDomain, 'subscribers-overview'),
     invalidateShopApiKvCache(shopDomain, 'subscriber-growth:all'),
     invalidateShopApiKvCache(shopDomain, 'automations-overview'),
+    invalidateShopApiKvCache(shopDomain, 'settings-overview'),
+    invalidateShopApiKvCache(shopDomain, 'segment-custom-attributes'),
   ]);
 };

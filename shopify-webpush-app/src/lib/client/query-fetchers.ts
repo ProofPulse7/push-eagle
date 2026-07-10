@@ -14,11 +14,12 @@ export type DashboardSummaryPayload = {
 };
 
 export const fetchDashboardSummary = async (shop: string): Promise<DashboardSummaryPayload> => {
+  // Never use reconcile=1 for browse/prefetch — that recounts all impressions and wakes Neon+D1.
   const [overview, campaignStats, subscriberKpis, billingPayload, automationOverview] = await Promise.all([
     fetchJsonWithShop<Record<string, unknown>>('/api/settings/overview', shop),
     fetchJsonWithShop<Record<string, unknown>>('/api/campaigns/stats', shop),
     fetchJsonWithShop<Record<string, unknown>>('/api/subscribers/overview', shop),
-    fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=1', shop),
+    fetchJsonWithShop<{ billing?: Record<string, unknown> }>('/api/billing/status?reconcile=0', shop),
     fetchJsonWithShop<{ totals?: Record<string, unknown> }>('/api/automations/overview', shop),
   ]);
 
@@ -60,12 +61,12 @@ export const prefetchAppBootstrap = (queryClient: QueryClient, shop: string) =>
   queryClient.prefetchQuery({
     queryKey: queryKeys.bootstrap(shop),
     queryFn: () => fetchAppBootstrap(queryClient, shop),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 30 * 60 * 1000,
   });
 
 export const prefetchCampaignsList = (queryClient: QueryClient, shop: string) =>
   queryClient.prefetchQuery({
     queryKey: queryKeys.campaigns(shop),
     queryFn: () => fetchCampaignsList(queryClient, shop),
-    staleTime: 60_000,
+    staleTime: 10 * 60 * 1000,
   });

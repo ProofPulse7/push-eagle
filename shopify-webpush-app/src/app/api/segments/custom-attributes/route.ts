@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { ensureMerchantAccount } from '@/lib/server/data/store';
+import { ensureMerchantCached } from '@/lib/server/data/store';
 import {
   createSegmentCustomAttribute,
   deleteSegmentCustomAttribute,
   listSegmentCustomAttributes,
 } from '@/lib/server/segment-custom-attributes';
+import { API_KV_TTL, withShopApiKvCache, invalidateShopApiKvCache } from '@/lib/server/cache/api-kv-cache';
 import { extractShopDomain } from '@/lib/server/shop-context';
 
 export const runtime = 'nodejs';
@@ -23,8 +24,14 @@ const createAttributeSchema = z.object({
 export async function GET(request: Request) {
   try {
     const shopDomain = extractShopDomain(request);
-    await ensureMerchantAccount(shopDomain);
-    const attributes = await listSegmentCustomAttributes(shopDomain);
+    // Soft merchant ensure + 1h KV — browsing Segments must not force Neon UPSERT/DDL every time.
+    await ensureMerchantCached(shopDomain);
+    const attributes = await withShopApiKvCache(
+      shopDomain,
+      'segment-custom-attributes',
+      API_KV_TTL.customAttributes,
+      () => listSegmentCustomAttributes(shopDomain),
+    );
     return NextResponse.json({ ok: true, attributes });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load custom attributes.';
@@ -36,12 +43,13 @@ export async function POST(request: Request) {
   try {
     const body = createAttributeSchema.parse(await request.json());
     const shopDomain = extractShopDomain(request, body.shopDomain);
-    await ensureMerchantAccount(shopDomain);
+    await ensureMerchantCached(shopDomain);
     const attribute = await createSegmentCustomAttribute(shopDomain, {
       name: body.name,
       type: body.type,
       options: body.options,
     });
+    void invalidateShopApiKvCache(shopDomain, 'segment-custom-attributes');
     return NextResponse.json({ ok: true, attribute });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create custom attribute.';
@@ -58,8 +66,9 @@ export async function DELETE(request: Request) {
     }
 
     const shopDomain = extractShopDomain(request);
-    await ensureMerchantAccount(shopDomain);
+    await ensureMerchantCached(shopDomain);
     await deleteSegmentCustomAttribute(shopDomain, name);
+    void invalidateShopApiKvCache(shopDomain, 'segment-custom-attributes');
     return NextResponse.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to delete custom attribute.';

@@ -12137,6 +12137,21 @@ export const updateAttributionSettings = async (input: UpdateAttributionSettings
 };
 
 export const getPrivacySettings = async (shopDomain: string): Promise<PrivacySettings> => {
+  const shop = shopDomain.trim().toLowerCase();
+  const kvKey = `pe:privacy:settings:v1:${shop}`;
+
+  try {
+    const { isCloudflareKvEnabled, readKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      const cached = await readKvJson<PrivacySettings>(kvKey);
+      if (cached && typeof cached.allowSupport === 'boolean') {
+        return cached;
+      }
+    }
+  } catch {
+    // fall through
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
   await ensureMerchant(shopDomain);
@@ -12163,7 +12178,7 @@ export const getPrivacySettings = async (shopDomain: string): Promise<PrivacySet
 
   const row = rows[0];
 
-  return {
+  const value: PrivacySettings = {
     allowSupport: row?.support_tools_enabled === undefined ? defaultPrivacySettings.allowSupport : Boolean(row.support_tools_enabled),
     ipAddressOption: (row?.ip_address_option as PrivacySettings['ipAddressOption']) ?? defaultPrivacySettings.ipAddressOption,
     enableGeo: row?.geo_location_enabled === undefined ? defaultPrivacySettings.enableGeo : Boolean(row.geo_location_enabled),
@@ -12175,6 +12190,17 @@ export const getPrivacySettings = async (shopDomain: string): Promise<PrivacySet
     locationStoreOption: (row?.location_store_option as PrivacySettings['locationStoreOption']) ?? defaultPrivacySettings.locationStoreOption,
     nameStoreOption: (row?.name_store_option as PrivacySettings['nameStoreOption']) ?? defaultPrivacySettings.nameStoreOption,
   };
+
+  try {
+    const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(kvKey, value, 6 * 60 * 60).catch(() => undefined);
+    }
+  } catch {
+    // best-effort
+  }
+
+  return value;
 };
 
 export const updatePrivacySettings = async (input: UpdatePrivacySettingsInput): Promise<PrivacySettings> => {
@@ -12217,6 +12243,17 @@ export const updatePrivacySettings = async (input: UpdatePrivacySettingsInput): 
       updated_at = NOW()
   `;
 
+  try {
+    const { isCloudflareKvEnabled, deleteKvKey } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void deleteKvKey(`pe:privacy:settings:v1:${input.shopDomain.trim().toLowerCase()}`).catch(
+        () => undefined,
+      );
+    }
+  } catch {
+    // best-effort
+  }
+
   return {
     allowSupport: Boolean(input.allowSupport),
     ipAddressOption: input.ipAddressOption,
@@ -12229,6 +12266,21 @@ export const updatePrivacySettings = async (input: UpdatePrivacySettingsInput): 
 };
 
 export const getBrandingSettings = async (shopDomain: string): Promise<BrandingSettings> => {
+  const shop = shopDomain.trim().toLowerCase();
+  const kvKey = `pe:branding:settings:v1:${shop}`;
+
+  try {
+    const { isCloudflareKvEnabled, readKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      const cached = await readKvJson<BrandingSettings>(kvKey);
+      if (cached && 'logoUrl' in cached) {
+        return cached;
+      }
+    }
+  } catch {
+    // fall through
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
   await ensureMerchant(shopDomain);
@@ -12246,9 +12298,20 @@ export const getBrandingSettings = async (shopDomain: string): Promise<BrandingS
     LIMIT 1
   `;
 
-  return {
+  const value: BrandingSettings = {
     logoUrl: rows[0]?.brand_logo_url ? String(rows[0].brand_logo_url) : null,
   };
+
+  try {
+    const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(kvKey, value, 6 * 60 * 60).catch(() => undefined);
+    }
+  } catch {
+    // best-effort
+  }
+
+  return value;
 };
 
 export const updateBrandingSettings = async (input: UpdateBrandingSettingsInput): Promise<BrandingSettings> => {
@@ -12275,6 +12338,17 @@ export const updateBrandingSettings = async (input: UpdateBrandingSettingsInput)
 
   if (previousLogoUrl && previousLogoUrl !== (input.logoUrl ?? null)) {
     await cleanupUnusedMediaAssets(input.shopDomain, [previousLogoUrl]);
+  }
+
+  try {
+    const { isCloudflareKvEnabled, deleteKvKey } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void deleteKvKey(`pe:branding:settings:v1:${input.shopDomain.trim().toLowerCase()}`).catch(
+        () => undefined,
+      );
+    }
+  } catch {
+    // best-effort
   }
 
   return {
