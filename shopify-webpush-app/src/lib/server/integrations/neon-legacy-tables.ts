@@ -12,6 +12,7 @@ import { isD1DeliveriesEnabled } from '@/lib/server/integrations/d1-deliveries';
 import { isD1AudienceOnly } from '@/lib/server/integrations/d1-audience';
 import { isD1EventsEnabled } from '@/lib/server/integrations/d1-events';
 import { isD1AutomationJobsEnabled } from '@/lib/server/integrations/d1-automation-jobs';
+import { isD1OptInStatsEnabled } from '@/lib/server/integrations/d1-opt-in-stats';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 
 const neonTableExistsCache = new Map<string, { exists: boolean; at: number }>();
@@ -26,6 +27,7 @@ export type NeonLegacySchemaSkip = {
   events: boolean;
   webhooks: boolean;
   automationJobs: boolean;
+  optInStats: boolean;
 };
 
 export type NeonLegacyTableGroup = {
@@ -39,6 +41,11 @@ export const NEON_LEGACY_TABLE_GROUPS: NeonLegacyTableGroup[] = [
     key: 'automationJobs',
     label: 'Automation jobs queue (D1 automation_jobs)',
     tables: ['automation_jobs'],
+  },
+  {
+    key: 'optInStats',
+    label: 'Opt-in prompt stats (D1 opt_in_prompt_stats)',
+    tables: ['opt_in_prompt_stats'],
   },
   // Drop dependent tables before audience (FK from deliveries → subscribers).
   {
@@ -101,6 +108,8 @@ const skipFlagForGroup = (key: keyof NeonLegacySchemaSkip): boolean => {
       return isCloudflareKvEnabled();
     case 'automationJobs':
       return isD1AutomationJobsEnabled();
+    case 'optInStats':
+      return isD1OptInStatsEnabled();
     default:
       return false;
   }
@@ -116,6 +125,7 @@ export const getNeonLegacySchemaSkip = (): NeonLegacySchemaSkip => ({
   events: isD1EventsEnabled(),
   webhooks: isCloudflareKvEnabled(),
   automationJobs: isD1AutomationJobsEnabled(),
+  optInStats: isD1OptInStatsEnabled(),
 });
 
 export const neonTableExists = async (tableName: string): Promise<boolean> => {
@@ -167,6 +177,10 @@ const countLegacyTableRows = async (tableName: string): Promise<number> => {
   switch (tableName) {
     case 'automation_jobs': {
       const rows = await sql`SELECT COUNT(*)::BIGINT AS count FROM automation_jobs`;
+      return Number(rows[0]?.count ?? 0);
+    }
+    case 'opt_in_prompt_stats': {
+      const rows = await sql`SELECT COUNT(*)::BIGINT AS count FROM opt_in_prompt_stats`;
       return Number(rows[0]?.count ?? 0);
     }
     case 'campaign_deliveries': {
@@ -238,6 +252,9 @@ const dropLegacyTable = async (tableName: string): Promise<void> => {
   switch (tableName) {
     case 'automation_jobs':
       await sql`DROP TABLE IF EXISTS automation_jobs CASCADE`;
+      return;
+    case 'opt_in_prompt_stats':
+      await sql`DROP TABLE IF EXISTS opt_in_prompt_stats CASCADE`;
       return;
     case 'campaign_deliveries':
       await sql`DROP TABLE IF EXISTS campaign_deliveries CASCADE`;
@@ -372,6 +389,9 @@ export const dropNeonLegacyTablesAfterD1Cutover = async (options?: {
           switch (table) {
             case 'automation_jobs':
               await sql`TRUNCATE TABLE automation_jobs`;
+              break;
+            case 'opt_in_prompt_stats':
+              await sql`TRUNCATE TABLE opt_in_prompt_stats`;
               break;
             case 'campaign_deliveries':
               await sql`TRUNCATE TABLE campaign_deliveries`;

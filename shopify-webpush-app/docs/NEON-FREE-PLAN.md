@@ -4,10 +4,9 @@ Push Eagle is designed so **30+ merchants** and **1M+ subscribers** can run on N
 
 ## What stays on Neon (required)
 
-- Merchants, campaigns, automations, segments, settings, billing
-- Automation/campaign job queues
+- Merchants, campaigns, automation **rules**, segments, settings, billing, sessions
 - `d1_audience_outbox` (durability buffer if D1 blips)
-- Tiny rollups (`merchant_daily_stats`, `opt_in_prompt_stats`)
+- Tiny rollups (`merchant_daily_stats`, `automation_rule_stats`)
 
 ## What moves off Neon (recommended)
 
@@ -21,8 +20,18 @@ Push Eagle is designed so **30+ merchants** and **1M+ subscribers** can run on N
 | Orders / fulfillments | `D1_COMMERCE_ENABLED=true` | Webhook-heavy |
 | Customers / catalog | `D1_CUSTOMERS_ENABLED`, `D1_CATALOG_ENABLED` | Cache tables |
 | Webhook dedup | KV namespace | Every webhook hit |
-| Cron idle probe | KV cache (built-in) | 1 query/min → ~1/5 min when idle |
-| Schema DDL | KV `pe:schema:ready:v5` | Skip ~40 DDL on cold start |
+| Cron idle probe | KV cache **4h** | Idle ticks skip Neon |
+| Schema DDL | KV `pe:schema:ready:v7` | Skip ~40 DDL on cold start |
+
+## Neon project compute settings (dashboard)
+
+These matter as much as code for free-plan CU:
+
+1. Open the **existing** compute (not only “Change default compute settings”).
+2. Set **Min = 0.25 CU** and **Max = 0.25 CU** (or Max **0.5** if sends feel slow).
+3. Enable **Scale to zero** / autosuspend with the **shortest** idle delay available (often **1–5 minutes**).
+4. Remember: changing **defaults** does **not** change the live primary — edit the running endpoint too.
+5. Keep **one** primary compute; avoid extra read replicas on free plan.
 
 ## Audience migration (subscribers → D1)
 

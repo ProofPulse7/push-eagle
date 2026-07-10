@@ -124,14 +124,15 @@ export const peekCronIdleCaches = async (): Promise<{
       readKvJson<{ empty: true; at: number }>(CRON_OUTBOX_EMPTY_KEY),
     ]);
 
+    const IDLE_CACHE_FRESH_MS = 4 * 60 * 60 * 1000;
     const probeFresh =
       probeCached?.probe
       && typeof probeCached.cachedAt === 'number'
-      && Date.now() - probeCached.cachedAt < 90 * 60 * 1000;
+      && Date.now() - probeCached.cachedAt < IDLE_CACHE_FRESH_MS;
     const outboxFresh =
       outboxEmpty?.empty
       && typeof outboxEmpty.at === 'number'
-      && Date.now() - outboxEmpty.at < 90 * 60 * 1000;
+      && Date.now() - outboxEmpty.at < IDLE_CACHE_FRESH_MS;
 
     if (!probeFresh || !outboxFresh) {
       return { canSleepWithoutNeon: false, probe: null };
@@ -165,7 +166,7 @@ export const peekCronIdleCaches = async (): Promise<{
   }
 };
 
-const OUTBOX_EMPTY_TTL_SECONDS = 90 * 60;
+const OUTBOX_EMPTY_TTL_SECONDS = 4 * 60 * 60;
 
 export const markCronOutboxEmpty = async () => {
   if (!isCloudflareKvEnabled()) {

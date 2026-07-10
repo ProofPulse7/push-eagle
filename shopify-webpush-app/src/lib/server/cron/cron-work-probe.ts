@@ -20,11 +20,12 @@ export type CronWorkProbe = {
 
 const PROBE_CACHE_KEY = 'pe:cron:probe_idle_cache_v1';
 /** Align with peekCronIdleCaches freshness window — keep Neon suspended while idle. */
-const PROBE_CACHE_TTL_SECONDS = 90 * 60;
+const PROBE_CACHE_TTL_SECONDS = 4 * 60 * 60;
 
 /** KV cache key for campaign-only idle state (used when D1 owns automation_jobs). */
 const CAMPAIGN_IDLE_CACHE_KEY = 'pe:cron:campaign_idle_v1';
-const CAMPAIGN_IDLE_TTL_SECONDS = 75 * 60;
+/** Long idle cache; invalidated on schedule/launch/send via invalidateCampaignIdleCache(). */
+const CAMPAIGN_IDLE_TTL_SECONDS = 4 * 60 * 60;
 
 /**
  * Prefer EXISTS (0/1) over COUNT(*) so Neon does not scan/aggregate large job tables
@@ -261,57 +262,92 @@ export const probeCronPendingWork = async (): Promise<CronWorkProbe> => {
 
     const hasJobWork = jobsProbe.dueAutomationJobs > 0 || jobsProbe.promoteableAutomationJobs > 0;
 
-    // Check KV campaign idle cache before hitting Neon.
+    // Prefer campaign idle KV even when D1 jobs have work — previously any job
+    // activity forced a Neon campaign EXISTS probe on every tick.
+    let campaigns: Pick<
+      CronWorkProbe,
+      'dueScheduledCampaigns' | 'queuedCampaigns' | 'sendingCampaigns' | 'dueIngestionJobs' | 'nextWakeAt'
+    > | null = null;
+
     if (isCloudflareKvEnabled()) {
       try {
-        const campaignCached = await readKvJson<{ probe: Pick<CronWorkProbe, 'dueScheduledCampaigns' | 'queuedCampaigns' | 'sendingCampaigns' | 'dueIngestionJobs' | 'nextWakeAt'>; cachedAt: number }>(CAMPAIGN_IDLE_CACHE_KEY);
+        const campaignCached = await readKvJson<{
+          probe: Pick<
+            CronWorkProbe,
+            'dueScheduledCampaigns' | 'queuedCampaigns' | 'sendingCampaigns' | 'dueIngestionJobs' | 'nextWakeAt'
+          >;
+          cachedAt: number;
+        }>(CAMPAIGN_IDLE_CACHE_KEY);
         if (
           campaignCached?.probe
           && typeof campaignCached.cachedAt === 'number'
           && Date.now() - campaignCached.cachedAt < CAMPAIGN_IDLE_TTL_SECONDS * 1000
         ) {
-          const campaigns = campaignCached.probe;
-          const hasCampaignWork =
-            campaigns.dueScheduledCampaigns + campaigns.queuedCampaigns + campaigns.sendingCampaigns + campaigns.dueIngestionJobs > 0;
-
-          // If both D1 jobs and campaigns are idle, skip Neon entirely.
-          if (!hasJobWork && !hasCampaignWork) {
-          const campaignNextWakeRaw = campaigns.nextWakeAt;
-          const campaignNextWake = campaignNextWakeRaw
-            ? (campaignNextWakeRaw instanceof Date ? campaignNextWakeRaw : new Date(campaignNextWakeRaw as unknown as string))
-            : null;
-          const nextWakeAt = earlierDate(jobsProbe.nextWakeAt, campaignNextWake);
-            return {
-              dueScheduledCampaigns: campaigns.dueScheduledCampaigns,
-              queuedCampaigns: campaigns.queuedCampaigns,
-              sendingCampaigns: campaigns.sendingCampaigns,
-              dueAutomationJobs: jobsProbe.dueAutomationJobs,
-              promoteableAutomationJobs: jobsProbe.promoteableAutomationJobs,
-              dueIngestionJobs: campaigns.dueIngestionJobs,
-              nextWakeAt,
-            };
-          }
+          campaigns = campaignCached.probe;
         }
       } catch {
         // fall through to Neon
       }
     }
 
-    // Need fresh campaign data from Neon.
-    const campaigns = await readCampaignProbeFromNeon();
-    const hasCampaignWork =
-      campaigns.dueScheduledCampaigns + campaigns.queuedCampaigns + campaigns.sendingCampaigns + campaigns.dueIngestionJobs > 0;
-
-    // Cache campaign result if idle.
-    if (isCloudflareKvEnabled() && !hasCampaignWork) {
-      void writeKvJson(
-        CAMPAIGN_IDLE_CACHE_KEY,
-        { probe: campaigns, cachedAt: Date.now() },
-        CAMPAIGN_IDLE_TTL_SECONDS,
-      ).catch(() => undefined);
+    if (!campaigns) {
+      campaigns = await readCampaignProbeFromNeon();
+      const hasCampaignWork =
+        campaigns.dueScheduledCampaigns
+        + campaigns.queuedCampaigns
+        + campaigns.sendingCampaigns
+        + campaigns.dueIngestionJobs
+        > 0;
+      if (isCloudflareKvEnabled() && !hasCampaignWork) {
+        void writeKvJson(
+          CAMPAIGN_IDLE_CACHE_KEY,
+          { probe: campaigns, cachedAt: Date.now() },
+          CAMPAIGN_IDLE_TTL_SECONDS,
+        ).catch(() => undefined);
+      }
     }
 
-    const campaignNextWake = campaigns.nextWakeAt;
+    const hasCampaignWork =
+      campaigns.dueScheduledCampaigns
+      + campaigns.queuedCampaigns
+      + campaigns.sendingCampaigns
+      + campaigns.dueIngestionJobs
+      > 0;
+
+    if (!hasJobWork && !hasCampaignWork) {
+      const campaignNextWakeRaw = campaigns.nextWakeAt;
+      const campaignNextWake = campaignNextWakeRaw
+        ? (campaignNextWakeRaw instanceof Date
+          ? campaignNextWakeRaw
+          : new Date(campaignNextWakeRaw as unknown as string))
+        : null;
+      const nextWakeAt = earlierDate(jobsProbe.nextWakeAt, campaignNextWake);
+      const idleProbe: CronWorkProbe = {
+        dueScheduledCampaigns: campaigns.dueScheduledCampaigns,
+        queuedCampaigns: campaigns.queuedCampaigns,
+        sendingCampaigns: campaigns.sendingCampaigns,
+        dueAutomationJobs: jobsProbe.dueAutomationJobs,
+        promoteableAutomationJobs: jobsProbe.promoteableAutomationJobs,
+        dueIngestionJobs: campaigns.dueIngestionJobs,
+        nextWakeAt,
+      };
+      // Also write the combined probe cache so peekCronIdleCaches can re-sleep
+      // without Neon on the next tick (D1 path previously only wrote campaign idle).
+      if (isCloudflareKvEnabled()) {
+        void writeKvJson(
+          PROBE_CACHE_KEY,
+          { probe: idleProbe, cachedAt: Date.now() },
+          PROBE_CACHE_TTL_SECONDS,
+        ).catch(() => undefined);
+      }
+      return idleProbe;
+    }
+
+    const campaignNextWake = campaigns.nextWakeAt
+      ? (campaigns.nextWakeAt instanceof Date
+        ? campaigns.nextWakeAt
+        : new Date(campaigns.nextWakeAt as unknown as string))
+      : null;
     const nextWakeAt = earlierDate(jobsProbe.nextWakeAt, campaignNextWake);
 
     return {

@@ -476,7 +476,7 @@ const parseScopes = (value?: string | null) =>
     .map((scope) => scope.trim())
     .filter(Boolean);
 
-const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v6';
+const SCHEMA_READY_KV_KEY = 'pe:schema:ready:v7';
 const SCHEMA_READY_TTL_SECONDS = 24 * 60 * 60;
 
 const ensureSchema = async () => {
@@ -628,15 +628,38 @@ const ensureSchema = async () => {
       )`;
       }
 
-      await sql`CREATE TABLE IF NOT EXISTS opt_in_prompt_stats (
-        shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
-        prompt_type TEXT NOT NULL CHECK (prompt_type IN ('browser', 'custom')),
-        views BIGINT NOT NULL DEFAULT 0,
-        clicks BIGINT NOT NULL DEFAULT 0,
-        conversions BIGINT NOT NULL DEFAULT 0,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (shop_domain, prompt_type)
+      {
+        const { isD1OptInStatsEnabled } = await import(
+          '@/lib/server/integrations/d1-opt-in-stats'
+        );
+        if (!isD1OptInStatsEnabled()) {
+          await sql`CREATE TABLE IF NOT EXISTS opt_in_prompt_stats (
+            shop_domain TEXT NOT NULL REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+            prompt_type TEXT NOT NULL CHECK (prompt_type IN ('browser', 'custom')),
+            views BIGINT NOT NULL DEFAULT 0,
+            clicks BIGINT NOT NULL DEFAULT 0,
+            conversions BIGINT NOT NULL DEFAULT 0,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (shop_domain, prompt_type)
+          )`;
+        }
+      }
+
+      await sql`CREATE TABLE IF NOT EXISTS merchant_billing (
+        shop_domain TEXT PRIMARY KEY REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        plan_key TEXT NOT NULL DEFAULT 'basic',
+        tier_id TEXT,
+        impression_limit INTEGER NOT NULL DEFAULT 10000,
+        price_usd NUMERIC(10,2) NOT NULL DEFAULT 0,
+        shopify_subscription_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        period_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        period_end TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
+        impressions_used INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      await sql`ALTER TABLE merchant_billing ADD COLUMN IF NOT EXISTS impressions_used INTEGER NOT NULL DEFAULT 0`;
 
       await sql`CREATE TABLE IF NOT EXISTS campaigns (
         id TEXT PRIMARY KEY,
@@ -8818,7 +8841,8 @@ export const reconcileAudienceOutbox = async (limit = 500) => {
     readKvJson,
   } = await import('@/lib/server/cache/cloudflare-kv');
   const OUTBOX_EMPTY_CACHE_KEY = 'pe:cron:audience_outbox_empty_v1';
-  const OUTBOX_EMPTY_TTL_SECONDS = 90 * 60;
+  // Align with cron idle sleep (2–6h) so empty outbox does not wake Neon every 90m.
+  const OUTBOX_EMPTY_TTL_SECONDS = 4 * 60 * 60;
 
   if (isCloudflareKvEnabled()) {
     try {
@@ -8831,8 +8855,28 @@ export const reconcileAudienceOutbox = async (limit = 500) => {
     }
   }
 
-  await ensureSchema();
+  // Skip full DDL when schema-ready KV says Neon control plane is already synced.
+  try {
+    const schemaReady = await readKvJson<{ ready?: boolean }>('pe:schema:ready:v7');
+    if (!schemaReady?.ready) {
+      await ensureSchema();
+    }
+  } catch {
+    await ensureSchema();
+  }
   const sql = getNeonSql();
+
+  // Cheap emptiness check before pulling payload rows.
+  const existsRows = await sql`
+    SELECT 1 AS present FROM d1_audience_outbox LIMIT 1
+  `;
+  if (!existsRows[0]) {
+    if (isCloudflareKvEnabled()) {
+      const { markCronOutboxEmpty } = await import('@/lib/server/cron/cron-idle');
+      void markCronOutboxEmpty();
+    }
+    return { processed: 0, failed: 0, remaining: 0 };
+  }
 
   const rows = await sql`
     SELECT id, payload

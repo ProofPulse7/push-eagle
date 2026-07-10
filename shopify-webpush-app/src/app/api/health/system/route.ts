@@ -4,10 +4,14 @@ import { isCronAuthorized } from '@/lib/server/cron/auth';
 
 export const maxDuration = 30;
 
+const HEALTH_CACHE_KV_KEY = 'pe:health:system:v1';
+const HEALTH_CACHE_TTL_SECONDS = 10 * 60;
+
 /**
  * GET /api/health/system
  *
  * Returns system health metrics (cron-authenticated).
+ * Cached 10m in KV so monitors do not wake Neon on every poll.
  */
 export async function GET(request: Request) {
   if (!isCronAuthorized(request)) {
@@ -15,23 +19,45 @@ export async function GET(request: Request) {
   }
 
   try {
-    const sql = getNeonSql();
+    const forceFresh = new URL(request.url).searchParams.get('fresh') === '1';
 
-    // Get timestamp
+    if (!forceFresh) {
+      try {
+        const { isCloudflareKvEnabled, readKvJson } = await import(
+          '@/lib/server/cache/cloudflare-kv'
+        );
+        if (isCloudflareKvEnabled()) {
+          const cached = await readKvJson<{ payload: unknown; at: number }>(HEALTH_CACHE_KV_KEY);
+          if (
+            cached?.payload
+            && typeof cached.at === 'number'
+            && Date.now() - cached.at < HEALTH_CACHE_TTL_SECONDS * 1000
+          ) {
+            return NextResponse.json({
+              ...(cached.payload as Record<string, unknown>),
+              cached: true,
+              cachedAt: new Date(cached.at).toISOString(),
+            });
+          }
+        }
+      } catch {
+        // fall through to live query
+      }
+    }
+
+    const sql = getNeonSql();
     const now = new Date();
 
-    // Database health
     const dbHealth = await Promise.all([
       sql`SELECT 1 as health`.then(() => true).catch(() => false),
     ]).then((results) => results[0]);
 
-    // Last cron execution (infer from recently updated campaigns/jobs)
     const lastCampaignSent = await sql`
       SELECT sent_at FROM campaigns 
       WHERE sent_at IS NOT NULL 
       ORDER BY sent_at DESC 
       LIMIT 1
-    `.then((rows) => (rows[0] ? new Date(rows[0].sent_at) : null));
+    `.then((rows) => (rows[0] ? new Date(rows[0].sent_at as string) : null));
 
     const lastAutomationSent = await (async () => {
       const { isD1AutomationJobsEnabled, d1GlobalLastSentAt } = await import(
@@ -46,16 +72,15 @@ export async function GET(request: Request) {
         WHERE status = 'sent'
         ORDER BY sent_at DESC
         LIMIT 1
-      `.then((rows) => (rows[0] ? new Date(rows[0].sent_at) : null));
+      `.then((rows) => (rows[0] ? new Date(rows[0].sent_at as string) : null));
     })();
 
-    // Queue sizes
     const [dueCampaigns, dueAutomations, pendingTokens, activeSubscribers] = await Promise.all([
       sql`
         SELECT COUNT(*)::INT as count FROM campaigns 
         WHERE status IN ('draft', 'scheduled') 
         AND (scheduled_at IS NULL OR scheduled_at <= NOW())
-      `.then((rows) => Number(rows[0]?.count ?? 0)),
+      `.then((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0)),
 
       (async () => {
         const { isD1AutomationJobsEnabled, d1CountDuePendingJobs } = await import(
@@ -67,7 +92,7 @@ export async function GET(request: Request) {
         return sql`
           SELECT COUNT(*)::INT as count FROM automation_jobs 
           WHERE status = 'pending' AND due_at <= NOW()
-        `.then((rows) => Number(rows[0]?.count ?? 0));
+        `.then((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0));
       })(),
 
       (async () => {
@@ -80,7 +105,7 @@ export async function GET(request: Request) {
         return sql`
           SELECT COUNT(*)::INT as count FROM subscriber_tokens 
           WHERE status = 'active'
-        `.then((rows) => Number(rows[0]?.count ?? 0));
+        `.then((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0));
       })(),
 
       (async () => {
@@ -92,7 +117,7 @@ export async function GET(request: Request) {
         }
         return sql`
           SELECT COUNT(*)::INT as count FROM subscribers
-        `.then((rows) => Number(rows[0]?.count ?? 0));
+        `.then((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0));
       })(),
     ]);
 
@@ -113,11 +138,8 @@ export async function GET(request: Request) {
       WHERE status = 'failed' OR (status = 'sent' AND delivery_count = 0)
       ORDER BY created_at DESC
       LIMIT 5
-    `;
+    ` as Array<Record<string, unknown>>;
 
-    const recentFailures = recentCampaignFailures;
-
-    // System stats
     const campaignStats = await sql`
       SELECT
         (SELECT COUNT(*)::INT FROM campaigns WHERE status = 'sent') as campaigns_sent,
@@ -125,7 +147,7 @@ export async function GET(request: Request) {
         (SELECT COUNT(*)::INT FROM campaigns WHERE status = 'scheduled') as campaigns_scheduled,
         (SELECT COALESCE(SUM(delivery_count), 0)::INT FROM campaigns) as total_deliveries,
         (SELECT COALESCE(SUM(click_count), 0)::INT FROM campaigns) as total_clicks
-    `;
+    ` as Array<Record<string, unknown>>;
 
     let automationsSent = 0;
     let automationsPending = 0;
@@ -141,7 +163,7 @@ export async function GET(request: Request) {
           (SELECT COUNT(*)::INT FROM automation_jobs WHERE status = 'sent') as automations_sent,
           (SELECT COUNT(*)::INT FROM automation_jobs WHERE status = 'pending') as automations_pending,
           (SELECT COUNT(*)::INT FROM automation_jobs WHERE status = 'failed') as automations_failed
-      `;
+      ` as Array<Record<string, unknown>>;
       automationsSent = Number(jobStats[0]?.automations_sent ?? 0);
       automationsPending = Number(jobStats[0]?.automations_pending ?? 0);
       automationsFailed = Number(jobStats[0]?.automations_failed ?? 0);
@@ -149,7 +171,7 @@ export async function GET(request: Request) {
 
     const stat = campaignStats[0];
 
-    return NextResponse.json({
+    const payload = {
       timestamp: now.toISOString(),
       health: {
         database: dbHealth ? 'healthy' : 'unhealthy',
@@ -159,7 +181,9 @@ export async function GET(request: Request) {
       lastExecution: {
         campaignsSent: lastCampaignSent?.toISOString() ?? null,
         automationsSent: lastAutomationSent?.toISOString() ?? null,
-        minutesAgo: lastCampaignSent ? Math.floor((now.getTime() - lastCampaignSent.getTime()) / 60000) : null,
+        minutesAgo: lastCampaignSent
+          ? Math.floor((now.getTime() - lastCampaignSent.getTime()) / 60000)
+          : null,
       },
       queues: {
         dueCampaigns,
@@ -179,7 +203,7 @@ export async function GET(request: Request) {
         totalDeliveries: Number(stat?.total_deliveries ?? 0),
         totalClicks: Number(stat?.total_clicks ?? 0),
       },
-      recentFailures: recentFailures.map((row) => ({
+      recentFailures: recentCampaignFailures.map((row) => ({
         type: String(row.type),
         id: String(row.id),
         label: String(row.label),
@@ -187,7 +211,24 @@ export async function GET(request: Request) {
         updatedAt: String(row.updated_at),
         errorMessage: row.error_message ? String(row.error_message) : null,
       })),
-    });
+    };
+
+    try {
+      const { isCloudflareKvEnabled, writeKvJson } = await import(
+        '@/lib/server/cache/cloudflare-kv'
+      );
+      if (isCloudflareKvEnabled()) {
+        void writeKvJson(
+          HEALTH_CACHE_KV_KEY,
+          { payload, at: Date.now() },
+          HEALTH_CACHE_TTL_SECONDS,
+        ).catch(() => undefined);
+      }
+    } catch {
+      // best-effort
+    }
+
+    return NextResponse.json({ ...payload, cached: false });
   } catch (error) {
     console.error('[HEALTH] System health check failed:', error);
     return NextResponse.json(

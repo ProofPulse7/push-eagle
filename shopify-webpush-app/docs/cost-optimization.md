@@ -15,7 +15,14 @@ Neon autosuspends after ~5 minutes idle; **every wake bills compute**. Goal: kee
 | `ensureMerchant` KV+memory cache **24h** | Opt-ins stop double-writing merchants every time |
 | Automation-rules seed cache **7d** (KV) | Repeat opt-ins skip Neon entirely in `d1_only` |
 | `recordStorefrontHost` debounce **7d** | Bootstrap/token stop updating `primary_domain` every page view |
-| Probe + outbox-empty caches **90m** | Align with peek fast-path |
+| Probe + outbox-empty caches **4h** | Align with idle sleep; fewer Neon wakes while quiet |
+| Campaign idle KV **4h** (invalidated on schedule/send) | Cron skips Neon campaign EXISTS while idle |
+| Combined probe cache written on D1 idle path | `peekCronIdleCaches` can re-sleep without Neon |
+| Campaign probe uses KV even when D1 jobs have work | Stops Neon wake on every automation tick |
+| Billing DDL cached 24h (KV + memory) | Dashboard/bootstrap no longer CREATE/ALTER every touch |
+| `opt_in_prompt_stats` DDL skipped when D1 owns it | Schema sync no longer recreates migrated table |
+| Health `/api/health/system` cached **10m** | Monitors stop multi-query Neon scans every poll |
+| Outbox emptiness = `SELECT 1 … LIMIT 1` | Cheaper than pulling payload rows when empty |
 
 **Still wakes Neon (expected):** campaign launch/send, near-due jobs (≤3m), outbox drain after D1 blip, SSO/install (`ensureMerchantAccount` force), retention every 6h, safety net every 15m when sleep expired.
 
@@ -48,12 +55,13 @@ Code now **stops reading/writing Neon** for data that already lives on D1:
 | `neonTableExists` **24h** cache | Retention stops re-probing regclass every run |
 | Collection flags TTL 2m / KV 10m | Fewer rule-enabled Neon reads |
 | Cron probe idle cache 90m | Fewer COUNT probes while idle |
-| Audience outbox empty cache 90m | Cron tick skips Neon outbox SELECT when empty |
+| Audience outbox empty cache **4h** | Cron tick skips Neon outbox SELECT when empty |
 | `d1_only` audience: no Neon empty/error fallback | Stops stale Neon audience transfer |
 | Diagnostic API requires `CRON_SECRET` | Prevents accidental heavy Neon scans |
 | **`automation_jobs` → D1** when `D1_AUTOMATION_JOBS_ENABLED=true` | Removes highest-frequency polling table from Neon entirely |
 | **`opt_in_prompt_stats` → D1** when `D1_OPT_IN_STATS_ENABLED=true` | Opt-in beacon writes no longer touch Neon |
-| Campaign idle KV cache 90m | Cron probe skips Neon campaign scan when both jobs and campaigns are idle |
+| Campaign idle KV cache **4h** | Cron probe skips Neon campaign scan when campaigns are idle |
+| Health system metrics KV cache **10m** | Ops monitors do not burn Neon transfer |
 
 **Required production flags (already set on Vercel):**
 
@@ -72,6 +80,19 @@ AUTOMATION_QUEUE_ENABLED=true
 ```
 
 Neon should mainly hold: `merchants`, `automation_rules`, `campaigns`, billing, segments, media refs — not high-volume events/audience/deliveries/jobs.
+
+## Neon dashboard compute settings (do this once)
+
+The screenshot “Change default compute settings” only affects **new** computes. Also edit the **existing primary**:
+
+| Setting | Recommended (free plan) | Why |
+|---------|-------------------------|-----|
+| Min CU | **0.25** | Lowest billable size |
+| Max CU | **0.25** (or **0.5** if campaign sends feel slow) | Stops autoscaling to 2 CU and burning hours |
+| Scale to zero / autosuspend | **On**, shortest idle (1–5 min) | Compute hours only while awake |
+| Read replicas | **None** | Extra computes = extra CU |
+
+With Max at 2 CU (as in the screenshot defaults), a busy send can scale up and burn free hours much faster even after our D1 cutover.
 
 ## What changed (code)
 

@@ -17,26 +17,59 @@ export type MerchantBillingRecord = {
   impressionsRemaining: number;
 };
 
+const BILLING_SCHEMA_KV_KEY = 'pe:billing:schema:ready:v1';
+const BILLING_SCHEMA_TTL_SECONDS = 24 * 60 * 60;
+let billingSchemaReady = false;
+
+/**
+ * Billing DDL also lives in ensureSchema(). Cache readiness so dashboard/bootstrap
+ * billing reads do not run CREATE/ALTER on every request (Neon wake + transfer).
+ */
 const ensureBillingSchema = async (shopDomain: string) => {
   await ensureMerchantAccount(shopDomain);
-  const sql = getNeonSql();
-  await sql`
-    CREATE TABLE IF NOT EXISTS merchant_billing (
-      shop_domain TEXT PRIMARY KEY REFERENCES merchants(shop_domain) ON DELETE CASCADE,
-      plan_key TEXT NOT NULL DEFAULT 'basic',
-      tier_id TEXT,
-      impression_limit INTEGER NOT NULL DEFAULT 10000,
-      price_usd NUMERIC(10,2) NOT NULL DEFAULT 0,
-      shopify_subscription_id TEXT,
-      status TEXT NOT NULL DEFAULT 'active',
-      period_start TIMESTAMPTZ NOT NULL,
-      period_end TIMESTAMPTZ NOT NULL,
-      impressions_used INTEGER NOT NULL DEFAULT 0,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `;
-  await sql`ALTER TABLE merchant_billing ADD COLUMN IF NOT EXISTS impressions_used INTEGER NOT NULL DEFAULT 0`;
+  if (billingSchemaReady) return;
+
+  try {
+    const { isCloudflareKvEnabled, readKvJson, writeKvJson } = await import(
+      '@/lib/server/cache/cloudflare-kv'
+    );
+    if (isCloudflareKvEnabled()) {
+      const ready = await readKvJson<{ ready?: boolean }>(BILLING_SCHEMA_KV_KEY);
+      if (ready?.ready) {
+        billingSchemaReady = true;
+        return;
+      }
+    }
+
+    const sql = getNeonSql();
+    await sql`
+      CREATE TABLE IF NOT EXISTS merchant_billing (
+        shop_domain TEXT PRIMARY KEY REFERENCES merchants(shop_domain) ON DELETE CASCADE,
+        plan_key TEXT NOT NULL DEFAULT 'basic',
+        tier_id TEXT,
+        impression_limit INTEGER NOT NULL DEFAULT 10000,
+        price_usd NUMERIC(10,2) NOT NULL DEFAULT 0,
+        shopify_subscription_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        period_start TIMESTAMPTZ NOT NULL,
+        period_end TIMESTAMPTZ NOT NULL,
+        impressions_used INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+    await sql`ALTER TABLE merchant_billing ADD COLUMN IF NOT EXISTS impressions_used INTEGER NOT NULL DEFAULT 0`;
+
+    billingSchemaReady = true;
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(BILLING_SCHEMA_KV_KEY, { ready: true }, BILLING_SCHEMA_TTL_SECONDS).catch(
+        () => undefined,
+      );
+    }
+  } catch {
+    // Table may already exist from ensureSchema — allow DML to proceed.
+    billingSchemaReady = true;
+  }
 };
 
 export const countImpressionsForPeriod = async (
