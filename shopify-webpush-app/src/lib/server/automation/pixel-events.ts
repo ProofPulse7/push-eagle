@@ -41,7 +41,10 @@ export const recordPixelEvent = async (event: PixelEvent): Promise<string> => {
       });
       return eventId;
     } catch (error) {
-      console.error('[d1-events] pixel write failed, falling back to Neon', error);
+      // Do NOT fall back to Neon when D1 owns events — empty Neon writes still
+      // burn free-plan network transfer and keep the endpoint awake.
+      console.error('[d1-events] pixel write failed (no Neon fallback)', error);
+      throw error;
     }
   }
 
@@ -81,6 +84,17 @@ export const recordPixelEvent = async (event: PixelEvent): Promise<string> => {
  * Get pixel event stats for dashboard
  */
 export const getPixelEventStats = async (shopDomain: string, hoursBack = 24) => {
+  const { isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
+  if (isD1EventsEnabled()) {
+    // Events live on D1 — do not scan empty Neon pixel_events (burns transfer).
+    return [] as Array<{
+      eventType: string;
+      count: number;
+      uniqueUsers: number;
+      hoursActive: number;
+    }>;
+  }
+
   const sql = getNeonSql();
 
   const stats = await sql`
@@ -170,6 +184,16 @@ export const archiveOldPixelEvents = async (hotRetentionDays = 14, batchSize = 2
  * Analyze pixel events to find trends
  */
 export const analyzePixelEventTrends = async (shopDomain: string, hoursBack = 24) => {
+  const { isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
+  if (isD1EventsEnabled()) {
+    return [] as Array<{
+      hour: string | null;
+      eventType: string;
+      count: number;
+      uniqueUsers: number;
+    }>;
+  }
+
   const sql = getNeonSql();
 
   const trends = await sql`

@@ -31,9 +31,16 @@ Code now **stops reading/writing Neon** for data that already lives on D1:
 | Activity / checkout skip checks = D1-only | No empty Neon `subscriber_activity_events` scans |
 | Product image = D1-only when `D1_CATALOG_ENABLED` | No Neon catalog fallback after D1 miss |
 | Orders-create identity = D1 tracking | No 30-day Neon pixel/activity UNION scans |
+| **Orders-create processes inline** (no `ingestion_jobs` JSONB) | Stops buffering full order payloads in Neon |
 | Skip Neon pixel archive when D1 events on | No wide `SELECT * FROM pixel_events` every 6h |
 | Skip Neon activity/commerce/delivery deletes when D1 owns them | Retention no longer scans empty Neon tables |
-| `getRuleConfig` 60s in-process cache | Fewer `automation_rules` round-trips |
+| **No Neon fallback** on D1 pixel/activity write failure | Failed D1 writes no longer dump events into Neon |
+| `getRuleConfig` **10m KV + memory** cache | Fewer `automation_rules` round-trips on automations |
+| Welcome path uses cached rule; skips Neon job existence scan | Opt-ins stop double-reading rules/jobs |
+| Attribution settings **6h KV** cache | Order attribution skips Neon settings wake |
+| Storefront config TTL **6h** (invalidated on edit) | Fewer Neon opt-in/capability reads per page view |
+| Cron probe uses **EXISTS** not COUNT; skips ingestion when D1 | Smaller probe queries |
+| `neonTableExists` **24h** cache | Retention stops re-probing regclass every run |
 | Collection flags TTL 2m / KV 10m | Fewer rule-enabled Neon reads |
 | Cron probe idle cache 90m | Fewer COUNT probes while idle |
 | Audience outbox empty cache 90m | Cron tick skips Neon outbox SELECT when empty |

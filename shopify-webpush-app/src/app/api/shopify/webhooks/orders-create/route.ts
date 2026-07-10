@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 
-import { getNeonSql } from '@/lib/integrations/database/neon';
 import { verifyShopifyWebhookSignature } from '@/lib/integrations/shopify/verify';
 import { deferAfterResponse } from '@/lib/server/defer-after-response';
-import { enqueueIngestionJob, registerWebhookEvent } from '@/lib/server/data/store';
+import { ingestShopifyOrderCreateDirect, registerWebhookEvent } from '@/lib/server/data/store';
 import { parseShopDomain } from '@/lib/server/shop-context';
 import { getCustomerExternalId } from '@/lib/server/storefront-identity';
 
@@ -140,6 +139,7 @@ const findExternalIdByCartToken = async (shopDomain: string, cartToken?: string 
     return externalId || null;
   }
 
+  const { getNeonSql } = await import('@/lib/integrations/database/neon');
   const sql = getNeonSql();
   const rows = await sql`
     WITH cart_related AS (
@@ -231,6 +231,7 @@ const findExternalIdByFingerprint = async (
     return null;
   }
 
+  const { getNeonSql } = await import('@/lib/integrations/database/neon');
   const sql = getNeonSql();
   const rows = await sql`
     WITH recent_touch AS (
@@ -329,41 +330,37 @@ export async function POST(request: Request) {
 
       const orderId = String(payload.id ?? payload.order_number ?? `shopify-${Date.now()}`);
       const totalPriceCents = Math.round(Number(payload.total_price ?? 0) * 100);
-      const dedupeKey = eventId ? `orders-create:${eventId}` : `orders-create:${shopDomain}:${orderId}`;
 
-      await enqueueIngestionJob({
+      // Process directly (D1 commerce/customers/deliveries) — skip Neon ingestion_jobs
+      // which previously stored the full order JSONB and kept the endpoint awake.
+      await ingestShopifyOrderCreateDirect({
         shopDomain,
-        jobType: 'shopify_order_create',
-        dedupeKey,
-        payload: {
-          shopDomain,
-          orderId,
-          externalId,
-          cartToken,
-          clientId: clientIdFromNotes,
-          customerId: payload.customer?.id ? String(payload.customer.id) : null,
-          email: payload.customer?.email ?? null,
-          firstName: payload.customer?.first_name ?? null,
-          lastName: payload.customer?.last_name ?? null,
-          customerTags: normalizeCustomerTags(payload.customer?.tags),
-          totalPriceCents,
-          createdAt: payload.created_at ?? null,
-          lineItems: (payload.line_items ?? []).map((item) => ({
-            productId: item.product_id ? String(item.product_id) : null,
-            productTitle: item.title ?? null,
-            collectionHint: item.product_type ?? item.vendor ?? null,
-          })),
-          landingSite: payload.landing_site ?? null,
-          browserIp,
-          userAgent,
-        },
+        orderId,
+        externalId,
+        cartToken,
+        clientId: clientIdFromNotes,
+        customerId: payload.customer?.id ? String(payload.customer.id) : null,
+        email: payload.customer?.email ?? null,
+        firstName: payload.customer?.first_name ?? null,
+        lastName: payload.customer?.last_name ?? null,
+        customerTags: normalizeCustomerTags(payload.customer?.tags),
+        totalPriceCents,
+        createdAt: payload.created_at ?? null,
+        lineItems: (payload.line_items ?? []).map((item) => ({
+          productId: item.product_id ? String(item.product_id) : null,
+          productTitle: item.title ?? null,
+          collectionHint: item.product_type ?? item.vendor ?? null,
+        })),
+        landingSite: payload.landing_site ?? null,
+        browserIp,
+        userAgent,
       });
     });
 
     return NextResponse.json({
       ok: true,
       shopDomain,
-      queued: true,
+      processed: true,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to process order webhook.';

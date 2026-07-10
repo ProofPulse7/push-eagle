@@ -13,6 +13,9 @@ import { isD1AudienceOnly } from '@/lib/server/integrations/d1-audience';
 import { isD1EventsEnabled } from '@/lib/server/integrations/d1-events';
 import { getNeonSql } from '@/lib/integrations/database/neon';
 
+const neonTableExistsCache = new Map<string, { exists: boolean; at: number }>();
+const NEON_TABLE_EXISTS_TTL_MS = 24 * 60 * 60 * 1000;
+
 export type NeonLegacySchemaSkip = {
   audience: boolean;
   deliveries: boolean;
@@ -106,11 +109,40 @@ export const getNeonLegacySchemaSkip = (): NeonLegacySchemaSkip => ({
 });
 
 export const neonTableExists = async (tableName: string): Promise<boolean> => {
+  const mem = neonTableExistsCache.get(tableName);
+  if (mem && Date.now() - mem.at < NEON_TABLE_EXISTS_TTL_MS) {
+    return mem.exists;
+  }
+
+  try {
+    const { readKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      const cached = await readKvJson<{ exists: boolean; at: number }>(`pe:neon:tbl:v1:${tableName}`);
+      if (cached && typeof cached.exists === 'boolean' && Date.now() - cached.at < NEON_TABLE_EXISTS_TTL_MS) {
+        neonTableExistsCache.set(tableName, { exists: cached.exists, at: cached.at });
+        return cached.exists;
+      }
+    }
+  } catch {
+    // fall through
+  }
+
   const sql = getNeonSql();
   const rows = await sql`
     SELECT to_regclass(${`public.${tableName}`}) IS NOT NULL AS exists
   `;
-  return Boolean(rows[0]?.exists);
+  const exists = Boolean(rows[0]?.exists);
+  const at = Date.now();
+  neonTableExistsCache.set(tableName, { exists, at });
+  try {
+    const { writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(`pe:neon:tbl:v1:${tableName}`, { exists, at }, 24 * 60 * 60).catch(() => undefined);
+    }
+  } catch {
+    // best-effort
+  }
+  return exists;
 };
 
 const ALLOWED_LEGACY_TABLES = new Set(

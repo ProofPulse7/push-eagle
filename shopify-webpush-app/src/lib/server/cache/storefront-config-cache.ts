@@ -13,7 +13,7 @@ type StorefrontConfig = {
 
 // Long TTL is safe because updateOptInSettings clears this key on change, so
 // merchants still see edits immediately. This keeps KV writes (and Neon misses) low.
-const CONFIG_TTL_SECONDS = 1800;
+const CONFIG_TTL_SECONDS = 6 * 60 * 60;
 const configKey = (shopDomain: string) => `pe:sf:config:v1:${shopDomain}`;
 
 /**

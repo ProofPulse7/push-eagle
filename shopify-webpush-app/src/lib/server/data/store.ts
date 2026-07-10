@@ -2827,14 +2827,36 @@ const buildProductUrl = (handle?: string | null) => {
   return normalized ? `/products/${normalized}` : null;
 };
 
-const RULE_CONFIG_CACHE_TTL_MS = 60_000;
+const RULE_CONFIG_CACHE_TTL_MS = 10 * 60_000;
+const RULE_CONFIG_KV_TTL_SECONDS = 10 * 60;
 const ruleConfigCache = new Map<string, { value: { enabled: boolean; config: Record<string, unknown> }; at: number }>();
+const ruleConfigKvKey = (shopDomain: string, ruleKey: string) =>
+  `pe:rule:cfg:v1:${shopDomain.trim().toLowerCase()}:${ruleKey}`;
 
 const getRuleConfig = async (shopDomain: string, ruleKey: AutomationRuleKey) => {
   const cacheKey = `${shopDomain}:${ruleKey}`;
   const cached = ruleConfigCache.get(cacheKey);
   if (cached && Date.now() - cached.at < RULE_CONFIG_CACHE_TTL_MS) {
     return cached.value;
+  }
+
+  try {
+    const { isCloudflareKvEnabled, readKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      const kvCached = await readKvJson<{ enabled: boolean; config: Record<string, unknown> }>(
+        ruleConfigKvKey(shopDomain, ruleKey),
+      );
+      if (kvCached && typeof kvCached.enabled === 'boolean' && kvCached.config) {
+        const value = {
+          enabled: isComingSoonAutomation(ruleKey) ? false : kvCached.enabled,
+          config: kvCached.config,
+        };
+        ruleConfigCache.set(cacheKey, { value, at: Date.now() });
+        return value;
+      }
+    }
+  } catch {
+    // fall through to Neon
   }
 
   const sql = getNeonSql();
@@ -2851,6 +2873,16 @@ const getRuleConfig = async (shopDomain: string, ruleKey: AutomationRuleKey) => 
     config: (rows[0]?.config ?? {}) as Record<string, unknown>,
   };
   ruleConfigCache.set(cacheKey, { value, at: Date.now() });
+  try {
+    const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(ruleConfigKvKey(shopDomain, ruleKey), value, RULE_CONFIG_KV_TTL_SECONDS).catch(
+        () => undefined,
+      );
+    }
+  } catch {
+    // best-effort
+  }
   return value;
 };
 
@@ -2865,6 +2897,28 @@ export const invalidateRuleConfigCache = (shopDomain?: string) => {
       ruleConfigCache.delete(key);
     }
   }
+  void (async () => {
+    try {
+      const { isCloudflareKvEnabled, deleteKvKey } = await import('@/lib/server/cache/cloudflare-kv');
+      if (!isCloudflareKvEnabled()) {
+        return;
+      }
+      const keys = [
+        'welcome_subscriber',
+        'browse_abandonment_15m',
+        'cart_abandonment_30m',
+        'checkout_abandonment_30m',
+        'shipping_notifications',
+        'back_in_stock',
+        'price_drop',
+        'win_back_7d',
+        'post_purchase_followup',
+      ] as const;
+      await Promise.all(keys.map((ruleKey) => deleteKvKey(ruleConfigKvKey(shopDomain, ruleKey)).catch(() => undefined)));
+    } catch {
+      // best-effort
+    }
+  })();
 };
 
 const listAutomationTargets = async (input: { shopDomain: string; externalId?: string | null; subscriberId?: number | null }) => {
@@ -4297,7 +4351,7 @@ export const enqueueAutomationJob = async (input: {
   dueAt?: Date;
   payload: AutomationJobPayload;
 }) => {
-  await ensureSchema();
+  // Schema is ensured at install/deploy; skip DDL probe on every job insert (transfer).
   const sql = getNeonSql();
   const { isD1AudienceOnly } = await import('@/lib/server/integrations/d1-audience');
   // In d1_only, token/subscriber rows live in D1 — Neon FK columns must stay null;
@@ -4596,6 +4650,49 @@ export const ingestStorefrontPixelEventDirect = async (payload: PixelIngestionPa
   return { processed: true, pixelEventId };
 };
 
+/** Process order webhooks without buffering a wide JSONB row in Neon ingestion_jobs. */
+export const ingestShopifyOrderCreateDirect = async (payload: OrderCreateIngestionPayload) => {
+  await upsertShopifyCustomer({
+    shopDomain: payload.shopDomain,
+    customerId: payload.customerId ?? null,
+    email: payload.email ?? null,
+    firstName: payload.firstName ?? null,
+    lastName: payload.lastName ?? null,
+    externalId: payload.externalId ?? null,
+    tags: payload.customerTags ?? null,
+  });
+
+  await upsertShopifyOrderEvent({
+    shopDomain: payload.shopDomain,
+    orderId: payload.orderId,
+    externalId: payload.externalId ?? null,
+    customerId: payload.customerId ?? null,
+    email: payload.email ?? null,
+    totalPriceCents: payload.totalPriceCents,
+    createdAt: payload.createdAt ?? null,
+    lineItems: payload.lineItems ?? [],
+  });
+
+  await recordAttributedConversion({
+    shopDomain: payload.shopDomain,
+    orderId: payload.orderId,
+    revenueCents: payload.totalPriceCents,
+    occurredAt: payload.createdAt ?? null,
+    externalId: payload.externalId ?? null,
+    cartToken: payload.cartToken ?? null,
+    clientId: payload.clientId ?? null,
+    customerId: payload.customerId ?? null,
+    email: payload.email ?? null,
+    campaignId: getCampaignIdFromLandingSite(payload.landingSite),
+    ipAddress: payload.browserIp ?? null,
+    userAgent: payload.userAgent ?? null,
+    browser: payload.userAgent ?? null,
+    country: null,
+  });
+
+  return { processed: true };
+};
+
 export const processIngestionJob = async (jobId: string) => {
   await ensureSchema();
   const sql = getNeonSql();
@@ -4621,44 +4718,7 @@ export const processIngestionJob = async (jobId: string) => {
       await ingestStorefrontPixelEventDirect(payload);
     } else if (claim.job_type === 'shopify_order_create') {
       const payload = claim.payload as OrderCreateIngestionPayload;
-
-      await upsertShopifyCustomer({
-        shopDomain: payload.shopDomain,
-        customerId: payload.customerId ?? null,
-        email: payload.email ?? null,
-        firstName: payload.firstName ?? null,
-        lastName: payload.lastName ?? null,
-        externalId: payload.externalId ?? null,
-        tags: payload.customerTags ?? null,
-      });
-
-      await upsertShopifyOrderEvent({
-        shopDomain: payload.shopDomain,
-        orderId: payload.orderId,
-        externalId: payload.externalId ?? null,
-        customerId: payload.customerId ?? null,
-        email: payload.email ?? null,
-        totalPriceCents: payload.totalPriceCents,
-        createdAt: payload.createdAt ?? null,
-        lineItems: payload.lineItems ?? [],
-      });
-
-      await recordAttributedConversion({
-        shopDomain: payload.shopDomain,
-        orderId: payload.orderId,
-        revenueCents: payload.totalPriceCents,
-        occurredAt: payload.createdAt ?? null,
-        externalId: payload.externalId ?? null,
-        cartToken: payload.cartToken ?? null,
-        clientId: payload.clientId ?? null,
-        customerId: payload.customerId ?? null,
-        email: payload.email ?? null,
-        campaignId: getCampaignIdFromLandingSite(payload.landingSite),
-        ipAddress: payload.browserIp ?? null,
-        userAgent: payload.userAgent ?? null,
-        browser: payload.userAgent ?? null,
-        country: null,
-      });
+      await ingestShopifyOrderCreateDirect(payload);
     }
 
     await sql`
@@ -6032,7 +6092,9 @@ export const recordSubscriberActivity = async (input: {
         });
         return;
       } catch (error) {
-        console.error('[d1-events] activity write failed, falling back to Neon', error);
+        // No Neon fallback when D1 owns events — protects free-plan transfer.
+        console.error('[d1-events] activity write failed (no Neon fallback)', error);
+        throw error;
       }
     }
 
@@ -6282,10 +6344,6 @@ export const upsertMerchantProfile = async (input: UpsertMerchantProfileInput) =
 };
 
 export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) => {
-  await ensureSchema();
-  const sql = getNeonSql();
-  await ensureMerchant(input.shopDomain);
-
   if (!input.customerId && !input.email) {
     return;
   }
@@ -6296,6 +6354,7 @@ export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) =
     '@/lib/server/integrations/d1-customers'
   );
   if (isD1CustomersEnabled()) {
+    // D1 owns customers — skip Neon schema/merchant wakes.
     await d1UpsertCustomer({
       shopDomain: input.shopDomain,
       customerId: input.customerId ?? null,
@@ -6307,6 +6366,10 @@ export const upsertShopifyCustomer = async (input: UpsertShopifyCustomerInput) =
     });
     return;
   }
+
+  await ensureSchema();
+  const sql = getNeonSql();
+  await ensureMerchant(input.shopDomain);
 
   if (input.customerId) {
     await sql`
@@ -6954,20 +7017,33 @@ const resolveSubscriberIdsFromConditionGroups = async (shopDomain: string, condi
 };
 
 export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInput) => {
-  await ensureSchema();
-  const sql = getNeonSql();
-  await ensureMerchant(input.shopDomain);
+  const { isD1CommerceEnabled, d1UpsertOrderEvent } = await import(
+    '@/lib/server/integrations/d1-commerce'
+  );
+  const d1Commerce = isD1CommerceEnabled();
+
+  // When commerce lives on D1, skip Neon schema/merchant wakes entirely.
+  let sql: ReturnType<typeof getNeonSql> | null = null;
+  if (!d1Commerce) {
+    await ensureSchema();
+    sql = getNeonSql();
+    await ensureMerchant(input.shopDomain);
+  }
 
   const subscriberId = input.externalId
     ? await (async () => {
-        const { audienceRead, d1GetSubscriberIdByExternalId } = await import(
+        const { audienceRead, d1GetSubscriberIdByExternalId, isD1AudienceOnly } = await import(
           '@/lib/server/integrations/d1-audience'
         );
+        if (isD1AudienceOnly() || d1Commerce) {
+          return d1GetSubscriberIdByExternalId(input.shopDomain, String(input.externalId));
+        }
         return audienceRead<number | null>({
           label: 'upsertShopifyOrderEvent.subscriberId',
           key: (v) => String(v ?? 'null'),
           neon: async () => {
-            const rows = await sql`
+            const neonSql = sql ?? getNeonSql();
+            const rows = await neonSql`
               SELECT id
               FROM subscribers
               WHERE shop_domain = ${input.shopDomain}
@@ -6983,11 +7059,7 @@ export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInpu
     : null;
   const createdAt = input.createdAt ? new Date(input.createdAt) : new Date();
 
-  const { isD1CommerceEnabled, d1UpsertOrderEvent } = await import(
-    '@/lib/server/integrations/d1-commerce'
-  );
-
-  if (isD1CommerceEnabled()) {
+  if (d1Commerce) {
     // Authoritative write to D1. order_items are replaced inside d1UpsertOrderEvent.
     await d1UpsertOrderEvent({
       shopDomain: input.shopDomain,
@@ -7005,7 +7077,8 @@ export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInpu
       })),
     });
   } else {
-    const orderRows = await sql`
+    const neonSql = sql ?? getNeonSql();
+    const orderRows = await neonSql`
       INSERT INTO shopify_orders (
         shop_domain,
         order_id,
@@ -7039,14 +7112,14 @@ export const upsertShopifyOrderEvent = async (input: UpsertShopifyOrderEventInpu
 
     const orderEventId = Number(orderRows[0]?.id ?? 0);
 
-    await sql`
+    await neonSql`
       DELETE FROM shopify_order_items
       WHERE shop_domain = ${input.shopDomain}
         AND order_id = ${input.orderId}
     `;
 
     for (const item of input.lineItems ?? []) {
-      await sql`
+      await neonSql`
         INSERT INTO shopify_order_items (
           shop_domain,
           order_id,
@@ -8426,46 +8499,30 @@ const maybeEnqueueWelcomeAutomation = async (params: {
   tokenWasInserted: boolean;
 }) => {
   const { shopDomain, externalId, subscriberId, tokenId, tokenWasInserted } = params;
-  const sql = getNeonSql();
-
-  const welcomeRuleRows = await sql`
-    SELECT enabled, config
-    FROM automation_rules
-    WHERE shop_domain = ${shopDomain}
-      AND rule_key = 'welcome_subscriber'
-    LIMIT 1
-  `;
-
-  if (!(Boolean(welcomeRuleRows[0]?.enabled) && tokenWasInserted)) {
+  if (!tokenWasInserted) {
     return;
   }
 
-  const existingWelcomeJobRows = await sql`
-    SELECT id
-    FROM automation_jobs
-    WHERE shop_domain = ${shopDomain}
-      AND rule_key = 'welcome_subscriber'
-      AND payload ->> 'externalId' = ${externalId}
-      AND status IN ('pending', 'processing', 'sent')
-    LIMIT 1
-  `;
-
-  const existingWelcomeDelivery = await (async () => {
-    const { hasAutomationDeliveryForRuleExternal } = await import(
-      '@/lib/server/integrations/deliveries-data'
-    );
-    return hasAutomationDeliveryForRuleExternal({
-      shopDomain,
-      ruleKey: 'welcome_subscriber',
-      externalId,
-    });
-  })();
-
-  if (existingWelcomeJobRows.length > 0 || existingWelcomeDelivery) {
+  // KV/in-process cached — avoids a Neon SELECT on every new opt-in.
+  const welcomeRule = await getRuleConfig(shopDomain, 'welcome_subscriber');
+  if (!welcomeRule.enabled) {
     return;
   }
 
-  const welcomeConfig = parseWelcomeRuleConfig(welcomeRuleRows[0]?.config ?? null);
+  const { hasAutomationDeliveryForRuleExternal } = await import(
+    '@/lib/server/integrations/deliveries-data'
+  );
+  const existingWelcomeDelivery = await hasAutomationDeliveryForRuleExternal({
+    shopDomain,
+    ruleKey: 'welcome_subscriber',
+    externalId,
+  });
+  if (existingWelcomeDelivery) {
+    return;
+  }
+
+  // Skip Neon "existing job" SELECT — enqueueAutomationJob dedupes on dedupe_key.
+  const welcomeConfig = parseWelcomeRuleConfig(welcomeRule.config);
   const now = Date.now();
   const immediateWelcomeJobIds: string[] = [];
 
@@ -8511,6 +8568,7 @@ const maybeEnqueueWelcomeAutomation = async (params: {
   }
 
   if (immediateWelcomeJobIds.length > 0) {
+    const sql = getNeonSql();
     const { bumpCronWakeNow } = await import('@/lib/server/cron/cron-idle');
     for (const jobId of immediateWelcomeJobIds) {
       const result = await processAutomationJob(jobId);
@@ -11476,15 +11534,34 @@ export const markMerchantUninstalled = async (shopDomain: string) => {
 };
 
 export const getAttributionSettings = async (shopDomain: string) => {
+  const shop = shopDomain.trim().toLowerCase();
+  const kvKey = `pe:attr:settings:v1:${shop}`;
+
+  try {
+    const { isCloudflareKvEnabled, readKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      const cached = await readKvJson<{
+        attributionModel: 'click' | 'impression';
+        attributionCreditMode: 'last_touch' | 'all_touches';
+        clickWindowDays: number;
+        impressionWindowDays: number;
+      }>(kvKey);
+      if (cached?.attributionModel && cached?.attributionCreditMode) {
+        return cached;
+      }
+    }
+  } catch {
+    // fall through
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
   await ensureMerchant(shopDomain);
 
-  const rows = await sql`
+  await sql`
     INSERT INTO merchant_settings (shop_domain)
     VALUES (${shopDomain})
     ON CONFLICT (shop_domain) DO NOTHING
-    RETURNING shop_domain
   `;
 
   const settingsRows = await sql`
@@ -11494,12 +11571,23 @@ export const getAttributionSettings = async (shopDomain: string) => {
     LIMIT 1
   `;
 
-  return {
+  const value = {
     attributionModel: (settingsRows[0]?.attribution_model as 'click' | 'impression') ?? 'impression',
     attributionCreditMode: (settingsRows[0]?.attribution_credit_mode as 'last_touch' | 'all_touches') ?? 'last_touch',
     clickWindowDays: Number(settingsRows[0]?.click_window_days ?? 7),
     impressionWindowDays: Number(settingsRows[0]?.impression_window_days ?? 7),
   };
+
+  try {
+    const { isCloudflareKvEnabled, writeKvJson } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(kvKey, value, 6 * 60 * 60).catch(() => undefined);
+    }
+  } catch {
+    // best-effort
+  }
+
+  return value;
 };
 
 export const getOptInSettings = async (shopDomain: string): Promise<OptInSettings> => {
@@ -11711,6 +11799,15 @@ export const updateAttributionSettings = async (input: UpdateAttributionSettings
       impression_window_days = EXCLUDED.impression_window_days,
       updated_at = NOW()
   `;
+
+  try {
+    const { isCloudflareKvEnabled, deleteKvKey } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void deleteKvKey(`pe:attr:settings:v1:${input.shopDomain.trim().toLowerCase()}`).catch(() => undefined);
+    }
+  } catch {
+    // best-effort
+  }
 
   return getAttributionSettings(input.shopDomain);
 };
@@ -12350,7 +12447,15 @@ export const trackAutomationClick = async (input: TrackAutomationClickInput) => 
 };
 
 export const recordAttributedConversion = async (input: RecordConversionInput) => {
-  await ensureSchema();
+  const { isD1CustomersEnabled, d1GetLinkedCustomerExternalIds } = await import(
+    '@/lib/server/integrations/d1-customers'
+  );
+  const { isD1CommerceEnabled } = await import('@/lib/server/integrations/d1-commerce');
+  const { isD1DeliveriesEnabled } = await import('@/lib/server/integrations/d1-deliveries');
+  const d1Owned = isD1CustomersEnabled() && isD1CommerceEnabled() && isD1DeliveriesEnabled();
+  if (!d1Owned) {
+    await ensureSchema();
+  }
   const sql = getNeonSql();
 
   const settings = await getAttributionSettings(input.shopDomain);
@@ -12372,10 +12477,6 @@ export const recordAttributedConversion = async (input: RecordConversionInput) =
     ? `email:${createHash('sha256').update(normalizedEmail).digest('hex').slice(0, 24)}`
     : null;
   const customerExternalId = normalizedCustomerId ? `shopify_customer:${normalizedCustomerId}` : null;
-
-  const { isD1CustomersEnabled, d1GetLinkedCustomerExternalIds } = await import(
-    '@/lib/server/integrations/d1-customers'
-  );
 
   const linkedExternalRows: Array<{ external_id: string | null }> = isD1CustomersEnabled()
     ? await d1GetLinkedCustomerExternalIds(input.shopDomain, {
