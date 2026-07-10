@@ -5232,7 +5232,11 @@ export const processAutomationJob = async (jobId: string) => {
       const { d1UpdateAutomationJob } = await import(
         '@/lib/server/integrations/d1-automation-jobs'
       );
-      await d1UpdateAutomationJob(jobId, patch);
+      await d1UpdateAutomationJob(jobId, {
+        ...patch,
+        // Match Neon sent path: clear stale error on successful delivery.
+        ...(patch.status === 'sent' ? { errorMessage: null } : {}),
+      });
       return;
     }
     // Neon fallback — build targeted SQL per status to avoid huge dynamic SQL
@@ -12227,6 +12231,11 @@ export const updateBrandingSettings = async (input: UpdateBrandingSettingsInput)
 };
 
 export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
+  const { isD1AutomationJobsEnabled, d1GetWelcomeJobDiagnostics } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  const jobsOnD1 = isD1AutomationJobsEnabled();
+
   await ensureSchema();
   const sql = getNeonSql();
 
@@ -12246,7 +12255,17 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
     LIMIT 1
   `;
 
-  const jobsByStepStatusRows = await sql`
+  let jobsByStepStatusRows: Array<Record<string, unknown>>;
+  let staleProcessingRows: Array<Record<string, unknown>>;
+  let recentRows: Array<Record<string, unknown>>;
+
+  if (jobsOnD1) {
+    const snap = await d1GetWelcomeJobDiagnostics(shopDomain);
+    jobsByStepStatusRows = snap.jobsByStepStatus as Array<Record<string, unknown>>;
+    staleProcessingRows = snap.staleProcessing as Array<Record<string, unknown>>;
+    recentRows = snap.recent;
+  } else {
+    jobsByStepStatusRows = await sql`
     SELECT
       COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key,
       j.status,
@@ -12261,14 +12280,7 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
     ORDER BY step_key ASC, j.status ASC
   `;
 
-  const deliveryRows = await (async () => {
-    const { getWelcomeDeliveryStatsByStep } = await import(
-      '@/lib/server/integrations/deliveries-data'
-    );
-    return getWelcomeDeliveryStatsByStep(shopDomain);
-  })();
-
-  const staleProcessingRows = await sql`
+    staleProcessingRows = await sql`
     SELECT COUNT(*)::INT AS stale_processing
     FROM automation_jobs
     WHERE shop_domain = ${shopDomain}
@@ -12278,7 +12290,7 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
       AND COALESCE(payload -> 'metadata' ->> 'stepKey', '') IN ('reminder-2', 'reminder-3')
   `;
 
-  const recentRows = await sql`
+    recentRows = await sql`
     SELECT
       j.id,
       COALESCE(j.payload -> 'metadata' ->> 'stepKey', 'unknown') AS step_key,
@@ -12305,6 +12317,14 @@ export const getWelcomeAutomationDiagnostics = async (shopDomain: string) => {
     ORDER BY j.created_at DESC
     LIMIT 40
   `;
+  }
+
+  const deliveryRows = await (async () => {
+    const { getWelcomeDeliveryStatsByStep } = await import(
+      '@/lib/server/integrations/deliveries-data'
+    );
+    return getWelcomeDeliveryStatsByStep(shopDomain);
+  })();
 
   const summary = {
     reminder2: {

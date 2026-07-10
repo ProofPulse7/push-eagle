@@ -33,12 +33,21 @@ export async function GET(request: Request) {
       LIMIT 1
     `.then((rows) => (rows[0] ? new Date(rows[0].sent_at) : null));
 
-    const lastAutomationSent = await sql`
-      SELECT sent_at FROM automation_jobs 
-      WHERE status = 'sent'
-      ORDER BY sent_at DESC 
-      LIMIT 1
-    `.then((rows) => (rows[0] ? new Date(rows[0].sent_at) : null));
+    const lastAutomationSent = await (async () => {
+      const { isD1AutomationJobsEnabled, d1GlobalLastSentAt } = await import(
+        '@/lib/server/integrations/d1-automation-jobs'
+      );
+      if (isD1AutomationJobsEnabled()) {
+        const val = await d1GlobalLastSentAt();
+        return val ? new Date(val) : null;
+      }
+      return sql`
+        SELECT sent_at FROM automation_jobs
+        WHERE status = 'sent'
+        ORDER BY sent_at DESC
+        LIMIT 1
+      `.then((rows) => (rows[0] ? new Date(rows[0].sent_at) : null));
+    })();
 
     // Queue sizes
     const [dueCampaigns, dueAutomations, pendingTokens, activeSubscribers] = await Promise.all([
@@ -48,10 +57,18 @@ export async function GET(request: Request) {
         AND (scheduled_at IS NULL OR scheduled_at <= NOW())
       `.then((rows) => Number(rows[0]?.count ?? 0)),
 
-      sql`
-        SELECT COUNT(*)::INT as count FROM automation_jobs 
-        WHERE status = 'pending' AND due_at <= NOW()
-      `.then((rows) => Number(rows[0]?.count ?? 0)),
+      (async () => {
+        const { isD1AutomationJobsEnabled, d1CountDuePendingJobs } = await import(
+          '@/lib/server/integrations/d1-automation-jobs'
+        );
+        if (isD1AutomationJobsEnabled()) {
+          return d1CountDuePendingJobs();
+        }
+        return sql`
+          SELECT COUNT(*)::INT as count FROM automation_jobs 
+          WHERE status = 'pending' AND due_at <= NOW()
+        `.then((rows) => Number(rows[0]?.count ?? 0));
+      })(),
 
       (async () => {
         const { isD1AudienceReadActive, d1CountActiveTokens } = await import(
@@ -79,57 +96,65 @@ export async function GET(request: Request) {
       })(),
     ]);
 
-    // Recent errors
-    const recentFailures = await sql`
-      SELECT * FROM (
-        SELECT 
-          'campaign' as type,
-          id,
-          title as label,
-          status,
-          created_at as updated_at,
-          NULL as error_message
-        FROM campaigns
-        WHERE status = 'failed' OR (status = 'sent' AND delivery_count = 0)
-        ORDER BY created_at DESC
-        LIMIT 5
-      ) campaign_failures
-      UNION ALL
-      SELECT * FROM (
-        SELECT 
-          'automation' as type,
-          id,
-          rule_key as label,
-          status,
-          updated_at,
-          error_message
-        FROM automation_jobs
-        WHERE status = 'failed' AND attempts >= 3
-        ORDER BY updated_at DESC
-        LIMIT 5
-      ) automation_failures
+    const { isD1AutomationJobsEnabled } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
+    const jobsOnD1 = isD1AutomationJobsEnabled();
+
+    const recentCampaignFailures = await sql`
+      SELECT
+        'campaign' as type,
+        id,
+        title as label,
+        status,
+        created_at as updated_at,
+        NULL as error_message
+      FROM campaigns
+      WHERE status = 'failed' OR (status = 'sent' AND delivery_count = 0)
+      ORDER BY created_at DESC
+      LIMIT 5
     `;
 
+    const recentFailures = recentCampaignFailures;
+
     // System stats
-    const stats = await sql`
+    const campaignStats = await sql`
       SELECT
         (SELECT COUNT(*)::INT FROM campaigns WHERE status = 'sent') as campaigns_sent,
         (SELECT COUNT(*)::INT FROM campaigns WHERE status = 'draft') as campaigns_draft,
         (SELECT COUNT(*)::INT FROM campaigns WHERE status = 'scheduled') as campaigns_scheduled,
-        (SELECT COUNT(*)::INT FROM automation_jobs WHERE status = 'sent') as automations_sent,
-        (SELECT COUNT(*)::INT FROM automation_jobs WHERE status = 'pending') as automations_pending,
-        (SELECT COUNT(*)::INT FROM automation_jobs WHERE status = 'failed') as automations_failed,
         (SELECT COALESCE(SUM(delivery_count), 0)::INT FROM campaigns) as total_deliveries,
         (SELECT COALESCE(SUM(click_count), 0)::INT FROM campaigns) as total_clicks
     `;
 
-    const stat = stats[0];
+    let automationsSent = 0;
+    let automationsPending = 0;
+    let automationsFailed = 0;
+    if (jobsOnD1) {
+      const byStatus = await (await import('@/lib/server/integrations/d1-automation-jobs')).d1CountAllJobsByStatus();
+      automationsSent = byStatus.sent ?? 0;
+      automationsPending = byStatus.pending ?? 0;
+      automationsFailed = byStatus.failed ?? 0;
+    } else {
+      const jobStats = await sql`
+        SELECT
+          (SELECT COUNT(*)::INT FROM automation_jobs WHERE status = 'sent') as automations_sent,
+          (SELECT COUNT(*)::INT FROM automation_jobs WHERE status = 'pending') as automations_pending,
+          (SELECT COUNT(*)::INT FROM automation_jobs WHERE status = 'failed') as automations_failed
+      `;
+      automationsSent = Number(jobStats[0]?.automations_sent ?? 0);
+      automationsPending = Number(jobStats[0]?.automations_pending ?? 0);
+      automationsFailed = Number(jobStats[0]?.automations_failed ?? 0);
+    }
+
+    const stat = campaignStats[0];
 
     return NextResponse.json({
       timestamp: now.toISOString(),
       health: {
         database: dbHealth ? 'healthy' : 'unhealthy',
         cron: lastCampaignSent ? 'active' : 'pending',
+        automationJobsBackend: jobsOnD1 ? 'd1' : 'neon',
       },
       lastExecution: {
         campaignsSent: lastCampaignSent?.toISOString() ?? null,
@@ -148,9 +173,9 @@ export async function GET(request: Request) {
         campaignsSent: Number(stat?.campaigns_sent ?? 0),
         campaignsDraft: Number(stat?.campaigns_draft ?? 0),
         campaignsScheduled: Number(stat?.campaigns_scheduled ?? 0),
-        automationsSent: Number(stat?.automations_sent ?? 0),
-        automationsPending: Number(stat?.automations_pending ?? 0),
-        automationsFailed: Number(stat?.automations_failed ?? 0),
+        automationsSent,
+        automationsPending,
+        automationsFailed,
         totalDeliveries: Number(stat?.total_deliveries ?? 0),
         totalClicks: Number(stat?.total_clicks ?? 0),
       },

@@ -85,6 +85,15 @@ export const findAutomationDeliveryJobIdJoined = async (input: {
     return d1FindAutomationDeliveryJobId(input);
   }
 
+  const { isD1AutomationJobsEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (isD1AutomationJobsEnabled()) {
+    throw new Error(
+      'Invalid config: D1_AUTOMATION_JOBS_ENABLED requires D1_DELIVERIES_ENABLED (Neon deliveries cannot JOIN automation_jobs).',
+    );
+  }
+
   const sql = neonSql();
   const hasExternal = Boolean(input.externalId);
   const hasCart = Boolean(input.cartToken);
@@ -227,6 +236,15 @@ export const findAutomationDeliveryIdForPreviousStep = async (input: {
 }): Promise<number | null> => {
   if (isD1DeliveriesEnabled()) {
     return d1FindAutomationDeliveryId(input);
+  }
+
+  const { isD1AutomationJobsEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (isD1AutomationJobsEnabled()) {
+    throw new Error(
+      'Invalid config: D1_AUTOMATION_JOBS_ENABLED requires D1_DELIVERIES_ENABLED (Neon deliveries cannot JOIN automation_jobs).',
+    );
   }
 
   const sql = neonSql();
@@ -931,6 +949,14 @@ export const updateTouchConversion = async (input: Parameters<typeof d1UpdateTou
 export const getWelcomeDeliveryStatsByStep = async (shopDomain: string) => {
   if (isD1DeliveriesEnabled()) {
     return d1GetWelcomeDeliveryStatsByStep(shopDomain);
+  }
+
+  const { isD1AutomationJobsEnabled } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (isD1AutomationJobsEnabled()) {
+    // Jobs moved off Neon; without D1 deliveries we cannot JOIN for step stats.
+    return [];
   }
 
   const sql = neonSql();

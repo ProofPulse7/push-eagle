@@ -26,12 +26,15 @@ type D1QueryResult = {
   success: boolean;
   result?: Array<{
     results?: unknown[];
-    meta?: Record<string, unknown>;
+    meta?: { changes?: number; rows_written?: number };
   }>;
   errors?: Array<{ message?: string }>;
 };
 
-const runJobsD1Query = async (sql: string, params: unknown[] = []): Promise<unknown[]> => {
+const runJobsD1QueryFull = async (
+  sql: string,
+  params: unknown[] = [],
+): Promise<{ rows: unknown[]; changes: number }> => {
   const accountId = env.CLOUDFLARE_ACCOUNT_ID.trim();
   const databaseId = getJobsDatabaseId();
 
@@ -53,7 +56,16 @@ const runJobsD1Query = async (sql: string, params: unknown[] = []): Promise<unkn
     throw new Error(message);
   }
 
-  return payload.result?.[0]?.results ?? [];
+  const first = payload.result?.[0];
+  return {
+    rows: first?.results ?? [],
+    changes: Number(first?.meta?.changes ?? first?.meta?.rows_written ?? 0),
+  };
+};
+
+const runJobsD1Query = async (sql: string, params: unknown[] = []): Promise<unknown[]> => {
+  const { rows } = await runJobsD1QueryFull(sql, params);
+  return rows;
 };
 
 const asRows = (rows: unknown[]) => rows as Array<Record<string, unknown>>;
@@ -219,7 +231,7 @@ export const d1EnqueueAutomationJob = async (input: {
   }
 
   // 3. Insert
-  const insertRows = asRows(await runJobsD1Query(
+  const insertResult = await runJobsD1QueryFull(
     `INSERT INTO automation_jobs
        (id, shop_domain, rule_key, token_id, subscriber_id, dedupe_key, payload,
         status, attempts, due_at, created_at, updated_at)
@@ -238,30 +250,71 @@ export const d1EnqueueAutomationJob = async (input: {
       now,
       now,
     ],
-  ));
+  );
 
-  return insertRows[0] ? String(insertRows[0].id) : null;
+  const insertedId = insertResult.rows[0]
+    ? String((insertResult.rows[0] as Record<string, unknown>).id)
+    : null;
+  if (insertedId) return insertedId;
+
+  // Concurrent insert with same dedupe_key: another writer won. Return that row
+  // so callers never lose the job id (critical for cart refresh + welcome).
+  if (input.dedupeKey) {
+    const existing = asRows(await runJobsD1Query(
+      `SELECT id FROM automation_jobs
+       WHERE shop_domain = ? AND dedupe_key = ? AND status = 'pending'
+       LIMIT 1`,
+      [input.shopDomain, input.dedupeKey],
+    ));
+    if (existing[0]) return String(existing[0].id);
+  }
+
+  // Primary-key conflict on our generated id (extremely rare) — verify row exists.
+  if (insertResult.changes === 0) {
+    const byId = asRows(await runJobsD1Query(
+      `SELECT id FROM automation_jobs WHERE id = ? LIMIT 1`,
+      [input.id],
+    ));
+    if (byId[0]) return String(byId[0].id);
+  }
+
+  return null;
 };
 
 /**
  * Atomically claim a pending job → processing (attempts + 1).
  * Returns the full job row, or null if not claimable.
+ * Hardened for D1 HTTP: if RETURNING is empty but the UPDATE changed a row,
+ * fall back to SELECT so we never drop a claimed job.
  */
 export const d1ClaimAutomationJob = async (
   jobId: string,
 ): Promise<D1AutomationJobRow | null> => {
   const now = new Date().toISOString();
-  const rows = asRows(await runJobsD1Query(
+  const claimResult = await runJobsD1QueryFull(
     `UPDATE automation_jobs
      SET status = 'processing', attempts = attempts + 1, updated_at = ?
      WHERE id = ? AND status = 'pending'
      RETURNING id, shop_domain, rule_key, token_id, subscriber_id, payload, attempts,
                dedupe_key, error_message, due_at, created_at, updated_at, sent_at, queue_enqueued_at`,
     [now, jobId],
-  ));
+  );
 
-  if (!rows[0]) return null;
-  return parseJobRow(rows[0]);
+  if (claimResult.rows[0]) {
+    return parseJobRow(claimResult.rows[0] as Record<string, unknown>);
+  }
+
+  if (claimResult.changes > 0) {
+    const fallback = asRows(await runJobsD1Query(
+      `SELECT id, shop_domain, rule_key, token_id, subscriber_id, payload, attempts,
+              dedupe_key, error_message, due_at, created_at, updated_at, sent_at, queue_enqueued_at
+       FROM automation_jobs WHERE id = ? LIMIT 1`,
+      [jobId],
+    ));
+    if (fallback[0]) return parseJobRow(fallback[0]);
+  }
+
+  return null;
 };
 
 /** Update fields of an automation job. Only non-undefined fields are written. */
@@ -571,11 +624,21 @@ export const d1ListDueJobsForShop = async (
   limit = 50,
 ): Promise<Array<{ id: string }>> => {
   const now = new Date().toISOString();
+  const staleThreshold = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  const queueSafetyCutoff = new Date(Date.now() - 90 * 1000).toISOString();
+
+  await runJobsD1Query(
+    `UPDATE automation_jobs SET status = 'pending', updated_at = ?
+     WHERE shop_domain = ? AND status = 'processing' AND updated_at < ?`,
+    [now, shopDomain, staleThreshold],
+  );
+
   const rows = asRows(await runJobsD1Query(
     `SELECT id FROM automation_jobs
      WHERE shop_domain = ? AND status = 'pending' AND due_at <= ?
+       AND (queue_enqueued_at IS NULL OR due_at <= ?)
      ORDER BY due_at ASC LIMIT ?`,
-    [shopDomain, now, limit],
+    [shopDomain, now, queueSafetyCutoff, limit],
   ));
   return rows.map((r) => ({ id: String(r.id) }));
 };
@@ -801,9 +864,10 @@ export const d1ProbeJobsWork = async (): Promise<{
     ),
     runJobsD1Query(
       `SELECT 1 FROM automation_jobs
-       WHERE status = 'pending' AND queue_enqueued_at IS NULL AND due_at <= ?
+       WHERE status = 'pending' AND queue_enqueued_at IS NULL
+         AND due_at > ? AND due_at <= ?
        LIMIT 1`,
-      [in12h],
+      [nowIso, in12h],
     ),
     runJobsD1Query(
       `SELECT MIN(due_at) AS next_due FROM automation_jobs
@@ -820,6 +884,47 @@ export const d1ProbeJobsWork = async (): Promise<{
     promoteableAutomationJobs: promoteRows.length > 0 ? 1 : 0,
     nextWakeAt: nextWakeAt && !Number.isNaN(nextWakeAt.getTime()) ? nextWakeAt : null,
   };
+};
+
+export const d1ResetFailedJobs = async (input: {
+  shopDomain: string;
+  ruleKey?: string | null;
+}): Promise<number> => {
+  await ensureD1AutomationJobsSchema();
+  const now = new Date().toISOString();
+  if (input.ruleKey) {
+    const rows = asRows(await runJobsD1Query(
+      `UPDATE automation_jobs
+       SET status = 'pending', attempts = 0, error_message = NULL, updated_at = ?, queue_enqueued_at = NULL
+       WHERE shop_domain = ? AND rule_key = ? AND status = 'failed'
+       RETURNING id`,
+      [now, input.shopDomain, input.ruleKey],
+    ));
+    return rows.length;
+  }
+  const rows = asRows(await runJobsD1Query(
+    `UPDATE automation_jobs
+     SET status = 'pending', attempts = 0, error_message = NULL, updated_at = ?, queue_enqueued_at = NULL
+     WHERE shop_domain = ? AND status = 'failed'
+     RETURNING id`,
+    [now, input.shopDomain],
+  ));
+  return rows.length;
+};
+
+export const d1RetryFailedJobs = async (maxAgeHours = 24): Promise<number> => {
+  await ensureD1AutomationJobsSchema();
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - maxAgeHours * 60 * 60 * 1000).toISOString();
+  const dueAt = new Date(now.getTime() + 5 * 60 * 1000).toISOString();
+  const rows = asRows(await runJobsD1Query(
+    `UPDATE automation_jobs
+     SET status = 'pending', attempts = 0, error_message = NULL, due_at = ?, updated_at = ?, queue_enqueued_at = NULL
+     WHERE status = 'failed' AND updated_at > ?
+     RETURNING id`,
+    [dueAt, now.toISOString(), cutoff],
+  ));
+  return rows.length;
 };
 
 export const d1CountJobsByStatus = async (
@@ -843,6 +948,334 @@ export const d1LastSentAt = async (shopDomain: string): Promise<string | null> =
   ));
   const val = rows[0]?.last_sent;
   return val != null ? String(val) : null;
+};
+
+/** Global last automation send time (health/monitoring). */
+export const d1GlobalLastSentAt = async (): Promise<string | null> => {
+  await ensureD1AutomationJobsSchema();
+  const rows = asRows(await runJobsD1Query(
+    `SELECT MAX(sent_at) AS last_sent FROM automation_jobs WHERE status = 'sent'`,
+  ));
+  const val = rows[0]?.last_sent;
+  return val != null ? String(val) : null;
+};
+
+/** Count due pending jobs (health/monitoring). */
+export const d1CountDuePendingJobs = async (): Promise<number> => {
+  await ensureD1AutomationJobsSchema();
+  const now = new Date().toISOString();
+  const rows = asRows(await runJobsD1Query(
+    `SELECT COUNT(*) AS cnt FROM automation_jobs WHERE status = 'pending' AND due_at <= ?`,
+    [now],
+  ));
+  return Number(rows[0]?.cnt ?? 0);
+};
+
+/** Global status counts across all shops (health/monitoring). */
+export const d1CountAllJobsByStatus = async (): Promise<Record<string, number>> => {
+  await ensureD1AutomationJobsSchema();
+  const rows = asRows(await runJobsD1Query(
+    `SELECT status, COUNT(*) AS cnt FROM automation_jobs GROUP BY status`,
+  ));
+  const result: Record<string, number> = {};
+  for (const row of rows) {
+    result[String(row.status)] = Number(row.cnt ?? 0);
+  }
+  return result;
+};
+
+/**
+ * Admin cart diagnostic snapshot — mirrors the Neon aggregates used by
+ * /api/automations/diagnostic so that route never touches Neon automation_jobs.
+ */
+export const d1GetCartDiagnosticJobSnapshot = async (shopDomain: string) => {
+  await ensureD1AutomationJobsSchema();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const overdueIso = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
+  const staleIso = new Date(now.getTime() - 2 * 60 * 1000).toISOString();
+  const windowIso = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
+  const cartRule = 'cart_abandonment_30m';
+  const stepKeys = ['cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3'] as const;
+
+  const allRows = asRows(await runJobsD1Query(
+    `SELECT id, status, rule_key, due_at, sent_at, updated_at, created_at, attempts, error_message, payload
+     FROM automation_jobs WHERE shop_domain = ?`,
+    [shopDomain],
+  ));
+
+  let pendingJobs = 0;
+  let processingJobs = 0;
+  let failedJobs = 0;
+  let dueNowJobs = 0;
+  let overdueBy5m = 0;
+  let oldestDueAt: string | null = null;
+  let cartPendingJobs = 0;
+  let cartDueNowJobs = 0;
+  let staleProcessing = 0;
+  let cartJobsCreated2h = 0;
+  let cartJobsMissingStep2h = 0;
+
+  type StepAgg = {
+    step_key: string;
+    pending: number;
+    due_now: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+    processing: number;
+  };
+  const byStep = new Map<string, StepAgg>();
+  for (const key of stepKeys) {
+    byStep.set(key, {
+      step_key: key,
+      pending: 0,
+      due_now: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      processing: 0,
+    });
+  }
+
+  const lagRows: Array<{ step_key: string; lag_minutes: number }> = [];
+  const failedRows: Array<{ step_key: string; error_message: string }> = [];
+  const pendingByStep = new Map<string, {
+    step_key: string;
+    due_at: string | null;
+    attempts: number;
+    error_message: string | null;
+    updated_at: string | null;
+  }>();
+
+  for (const row of allRows) {
+    const status = String(row.status ?? '');
+    const ruleKey = String(row.rule_key ?? '');
+    const dueAt = row.due_at == null ? null : String(row.due_at);
+    const sentAt = row.sent_at == null ? null : String(row.sent_at);
+    const updatedAt = row.updated_at == null ? null : String(row.updated_at);
+    const createdAt = row.created_at == null ? null : String(row.created_at);
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = typeof row.payload === 'string'
+        ? JSON.parse(row.payload) as Record<string, unknown>
+        : (row.payload as Record<string, unknown>) ?? {};
+    } catch {
+      payload = {};
+    }
+    const meta = (payload.metadata as Record<string, unknown> | undefined) ?? {};
+    const stepKey = String(meta.stepKey ?? '');
+
+    if (status === 'pending') {
+      pendingJobs += 1;
+      if (dueAt && dueAt <= nowIso) dueNowJobs += 1;
+      if (dueAt && dueAt <= overdueIso) overdueBy5m += 1;
+      if (dueAt && (!oldestDueAt || dueAt < oldestDueAt)) oldestDueAt = dueAt;
+      if (ruleKey === cartRule) {
+        cartPendingJobs += 1;
+        if (dueAt && dueAt <= nowIso) cartDueNowJobs += 1;
+      }
+    } else if (status === 'processing') {
+      processingJobs += 1;
+    } else if (status === 'failed') {
+      failedJobs += 1;
+    }
+
+    if (
+      ruleKey === cartRule
+      && status === 'processing'
+      && updatedAt
+      && updatedAt < staleIso
+      && stepKeys.includes(stepKey as typeof stepKeys[number])
+    ) {
+      staleProcessing += 1;
+    }
+
+    if (ruleKey === cartRule && createdAt && createdAt >= windowIso) {
+      cartJobsCreated2h += 1;
+      if (!stepKey) cartJobsMissingStep2h += 1;
+    }
+
+    if (ruleKey === cartRule && stepKeys.includes(stepKey as typeof stepKeys[number])) {
+      const agg = byStep.get(stepKey)!;
+      if (status === 'pending') {
+        agg.pending += 1;
+        if (dueAt && dueAt <= nowIso) agg.due_now += 1;
+        const existing = pendingByStep.get(stepKey);
+        if (!existing || (dueAt && (!existing.due_at || dueAt < existing.due_at))) {
+          pendingByStep.set(stepKey, {
+            step_key: stepKey,
+            due_at: dueAt,
+            attempts: Number(row.attempts ?? 0),
+            error_message: row.error_message == null ? null : String(row.error_message),
+            updated_at: updatedAt,
+          });
+        }
+      } else if (status === 'sent') {
+        agg.sent += 1;
+        if (sentAt && dueAt) {
+          const lag = (new Date(sentAt).getTime() - new Date(dueAt).getTime()) / 60000;
+          if (Number.isFinite(lag)) {
+            lagRows.push({ step_key: stepKey, lag_minutes: lag });
+          }
+        }
+      } else if (status === 'failed') {
+        agg.failed += 1;
+        const err = row.error_message == null ? '' : String(row.error_message);
+        if (err) failedRows.push({ step_key: stepKey, error_message: err });
+      } else if (status === 'skipped') {
+        agg.skipped += 1;
+      } else if (status === 'processing') {
+        agg.processing += 1;
+      }
+    }
+  }
+
+  lagRows.sort((a, b) => b.lag_minutes - a.lag_minutes);
+  const lagSample = lagRows.slice(0, 120);
+  const failedSample = failedRows.slice(0, 60);
+
+  return {
+    queue: {
+      pending_jobs: pendingJobs,
+      processing_jobs: processingJobs,
+      failed_jobs: failedJobs,
+      due_now_jobs: dueNowJobs,
+      overdue_by_5m: overdueBy5m,
+      oldest_due_at: oldestDueAt,
+      cart_pending_jobs: cartPendingJobs,
+      cart_due_now_jobs: cartDueNowJobs,
+    },
+    cartJobsByStep: Array.from(byStep.values()),
+    staleProcessing: [{ stale_processing: staleProcessing }],
+    lagRows: lagSample,
+    failedRows: failedSample,
+    cartWindow: [{
+      cart_jobs_created_2h: cartJobsCreated2h,
+      cart_jobs_missing_step_2h: cartJobsMissingStep2h,
+    }],
+    pendingCartSteps: Array.from(pendingByStep.values()),
+  };
+};
+
+/** Delete failed/skipped cart jobs for a shop (admin diagnostic cleanup). */
+export const d1DeleteFailedSkippedCartJobs = async (shopDomain: string): Promise<number> => {
+  await ensureD1AutomationJobsSchema();
+  const rows = asRows(await runJobsD1Query(
+    `DELETE FROM automation_jobs
+     WHERE shop_domain = ?
+       AND rule_key = 'cart_abandonment_30m'
+       AND status IN ('failed', 'skipped')
+     RETURNING id`,
+    [shopDomain],
+  ));
+  return rows.length;
+};
+
+/**
+ * Welcome diagnostics job aggregates (D1) — step/status counts, stale processing, recent rows.
+ */
+export const d1GetWelcomeJobDiagnostics = async (shopDomain: string) => {
+  await ensureD1AutomationJobsSchema();
+  const nowIso = new Date().toISOString();
+  const staleIso = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+
+  const rows = asRows(await runJobsD1Query(
+    `SELECT id, status, attempts, due_at, sent_at, updated_at, created_at, error_message,
+            token_id, subscriber_id, payload
+     FROM automation_jobs
+     WHERE shop_domain = ? AND rule_key = 'welcome_subscriber'
+     ORDER BY created_at DESC
+     LIMIT 500`,
+    [shopDomain],
+  ));
+
+  const jobsByStepStatus: Array<{
+    step_key: string;
+    status: string;
+    total: number;
+    due_now: number;
+    last_updated_at: string | null;
+  }> = [];
+  const agg = new Map<string, { total: number; due_now: number; last_updated_at: string | null }>();
+  let staleProcessing = 0;
+  const recent: Array<Record<string, unknown>> = [];
+
+  for (const row of rows) {
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = typeof row.payload === 'string'
+        ? JSON.parse(row.payload) as Record<string, unknown>
+        : (row.payload as Record<string, unknown>) ?? {};
+    } catch {
+      payload = {};
+    }
+    const meta = (payload.metadata as Record<string, unknown> | undefined) ?? {};
+    const stepKey = String(meta.stepKey ?? 'unknown');
+    const status = String(row.status ?? '');
+    const dueAt = row.due_at == null ? null : String(row.due_at);
+    const updatedAt = row.updated_at == null ? null : String(row.updated_at);
+
+    if (['reminder-1', 'reminder-2', 'reminder-3'].includes(stepKey)) {
+      const key = `${stepKey}|${status}`;
+      const cur = agg.get(key) ?? { total: 0, due_now: 0, last_updated_at: null as string | null };
+      cur.total += 1;
+      if (status === 'pending' && dueAt && dueAt <= nowIso) cur.due_now += 1;
+      if (updatedAt && (!cur.last_updated_at || updatedAt > cur.last_updated_at)) {
+        cur.last_updated_at = updatedAt;
+      }
+      agg.set(key, cur);
+    }
+
+    if (
+      status === 'processing'
+      && updatedAt
+      && updatedAt < staleIso
+      && (stepKey === 'reminder-2' || stepKey === 'reminder-3')
+    ) {
+      staleProcessing += 1;
+    }
+
+    if (stepKey === 'reminder-2' || stepKey === 'reminder-3') {
+      if (recent.length < 40) {
+        recent.push({
+          id: String(row.id),
+          step_key: stepKey,
+          status,
+          attempts: Number(row.attempts ?? 0),
+          due_at: dueAt,
+          sent_at: row.sent_at == null ? null : String(row.sent_at),
+          updated_at: updatedAt,
+          error_message: row.error_message == null ? null : String(row.error_message),
+          action_buttons: meta.actionButtons ?? null,
+          token_id: row.token_id == null ? null : Number(row.token_id),
+          subscriber_id: row.subscriber_id == null ? null : Number(row.subscriber_id),
+          external_id: payload.externalId == null ? null : String(payload.externalId),
+          token_status: null,
+          last_seen_at: null,
+          subscriber_browser: null,
+          subscriber_platform: null,
+        });
+      }
+    }
+  }
+
+  for (const [key, val] of agg) {
+    const [step_key, status] = key.split('|');
+    jobsByStepStatus.push({
+      step_key,
+      status,
+      total: val.total,
+      due_now: val.due_now,
+      last_updated_at: val.last_updated_at,
+    });
+  }
+
+  return {
+    jobsByStepStatus,
+    staleProcessing: [{ stale_processing: staleProcessing }],
+    recent,
+  };
 };
 
 export { toIso };

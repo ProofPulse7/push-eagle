@@ -242,8 +242,15 @@ async function sendJobNotification(
  * Mark automation job as skipped (suppression logic)
  */
 export const skipAutomationJob = async (jobId: string, skipReason: string) => {
-  const sql = getNeonSql();
+  const { isD1AutomationJobsEnabled, d1UpdateAutomationJob } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (isD1AutomationJobsEnabled()) {
+    await d1UpdateAutomationJob(jobId, { status: 'skipped', errorMessage: skipReason });
+    return;
+  }
 
+  const sql = getNeonSql();
   await sql`
     UPDATE automation_jobs
     SET
@@ -258,9 +265,15 @@ export const skipAutomationJob = async (jobId: string, skipReason: string) => {
  * Retry failed jobs with exponential backoff
  */
 export const retryFailedJobs = async (maxAgeHours = 24) => {
-  const sql = getNeonSql();
+  const { isD1AutomationJobsEnabled, d1RetryFailedJobs } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (isD1AutomationJobsEnabled()) {
+    return d1RetryFailedJobs(maxAgeHours);
+  }
 
-  const count = await sql`
+  const sql = getNeonSql();
+  const count = (await sql`
     UPDATE automation_jobs
     SET
       status = 'pending',
@@ -269,9 +282,9 @@ export const retryFailedJobs = async (maxAgeHours = 24) => {
       due_at = NOW() + INTERVAL '5 minutes',
       updated_at = NOW()
     WHERE status = 'failed'
-      AND updated_at > NOW() - INTERVAL '${maxAgeHours} hours'
+      AND updated_at > NOW() - make_interval(hours => ${maxAgeHours})
     RETURNING id
-  `;
+  `) as unknown as Array<{ id: unknown }>;
 
   return count.length;
 };
@@ -280,9 +293,20 @@ export const retryFailedJobs = async (maxAgeHours = 24) => {
  * Get automation job stats
  */
 export const getAutomationJobStats = async (shopDomain: string) => {
-  const sql = getNeonSql();
+  const { isD1AutomationJobsEnabled, d1CountJobsByStatus } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+  if (isD1AutomationJobsEnabled()) {
+    const byStatus = await d1CountJobsByStatus(shopDomain);
+    const acc: Record<string, { count: number; withRetries: number }> = {};
+    for (const [status, count] of Object.entries(byStatus)) {
+      acc[status] = { count, withRetries: 0 };
+    }
+    return acc;
+  }
 
-  const stats = await sql`
+  const sql = getNeonSql();
+  const stats = (await sql`
     SELECT
       status,
       COUNT(*) as count,
@@ -290,7 +314,7 @@ export const getAutomationJobStats = async (shopDomain: string) => {
     FROM automation_jobs
     WHERE shop_domain = ${shopDomain}
     GROUP BY status
-  `;
+  `) as unknown as Array<{ status: unknown; count: unknown; with_retries: unknown }>;
 
   return stats.reduce((acc: Record<string, any>, row: any) => {
     acc[String(row.status)] = {

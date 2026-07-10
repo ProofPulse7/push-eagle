@@ -32,26 +32,41 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'shop is required' }, { status: 400 });
   }
 
+  const { isD1AutomationJobsEnabled, d1ResetFailedJobs } = await import(
+    '@/lib/server/integrations/d1-automation-jobs'
+  );
+
+  if (isD1AutomationJobsEnabled()) {
+    const resetCount = await d1ResetFailedJobs({ shopDomain: shop, ruleKey: ruleKey ?? null });
+    return NextResponse.json({
+      ok: true,
+      resetCount,
+      shop,
+      ruleKey: ruleKey ?? 'all',
+      backend: 'd1',
+    });
+  }
+
   const sql = getNeonSql();
-  let rows: { count: string }[];
+  let rows: Array<{ id: unknown }>;
 
   if (ruleKey) {
-    rows = await sql`
+    rows = (await sql`
       UPDATE automation_jobs
       SET status = 'pending', attempts = 0, error_message = NULL, updated_at = NOW()
       WHERE shop_domain = ${shop}
         AND rule_key = ${ruleKey}
         AND status = 'failed'
       RETURNING id
-    ` as unknown as { count: string }[];
+    `) as unknown as Array<{ id: unknown }>;
   } else {
-    rows = await sql`
+    rows = (await sql`
       UPDATE automation_jobs
       SET status = 'pending', attempts = 0, error_message = NULL, updated_at = NOW()
       WHERE shop_domain = ${shop}
         AND status = 'failed'
       RETURNING id
-    ` as unknown as { count: string }[];
+    `) as unknown as Array<{ id: unknown }>;
   }
 
   return NextResponse.json({
@@ -59,5 +74,6 @@ export async function POST(request: Request) {
     resetCount: rows.length,
     shop,
     ruleKey: ruleKey ?? 'all',
+    backend: 'neon',
   });
 }

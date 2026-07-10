@@ -8,7 +8,8 @@ import { env } from '@/lib/config/env';
  * These detail rows are pruned at scale; D1 holds the hot path off Neon.
  *
  * automation_deliveries denormalizes step_key + cart_token at insert time so welcome/
- * cart dedup does not need a cross-DB join to automation_jobs (jobs stay on Neon).
+ * cart dedup does not need a cross-DB join to automation_jobs (step_key / cart_token
+ * are denormalized onto automation_deliveries; jobs may live on D1).
  */
 const getDeliveriesDatabaseId = () =>
   env.CLOUDFLARE_D1_DELIVERIES_DATABASE_ID.trim() || env.CLOUDFLARE_D1_DATABASE_ID.trim();
@@ -1389,6 +1390,27 @@ export const d1GetWelcomeDeliveryStatsByStep = async (shopDomain: string) => {
       WHERE shop_domain = ?
         AND rule_key = 'welcome_subscriber'
         AND COALESCE(step_key, '') IN ('reminder-1', 'reminder-2', 'reminder-3')
+      GROUP BY step_key
+      ORDER BY step_key ASC
+    `,
+    [shopDomain],
+  );
+  return asRows(rows);
+};
+
+/** Cart reminder delivery counts by step_key (no jobs join required). */
+export const d1GetCartDeliveryStatsByStep = async (shopDomain: string) => {
+  await ensureD1DeliveriesSchema();
+  const rows = await runD1Query(
+    `
+      SELECT
+        COALESCE(step_key, '') AS step_key,
+        COUNT(*) AS delivered,
+        MAX(delivered_at) AS last_delivered_at
+      FROM automation_deliveries
+      WHERE shop_domain = ?
+        AND rule_key = 'cart_abandonment_30m'
+        AND COALESCE(step_key, '') IN ('cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3')
       GROUP BY step_key
       ORDER BY step_key ASC
     `,

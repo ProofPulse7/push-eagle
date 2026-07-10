@@ -143,6 +143,16 @@ export async function GET(request: NextRequest) {
     const sql = getNeonSql();
     const checkedAt = new Date().toISOString();
 
+    const {
+      isD1AutomationJobsEnabled,
+      d1GetCartDiagnosticJobSnapshot,
+    } = await import('@/lib/server/integrations/d1-automation-jobs');
+    const { isD1DeliveriesEnabled, d1GetCartDeliveryStatsByStep } = await import(
+      '@/lib/server/integrations/d1-deliveries'
+    );
+    const jobsOnD1 = isD1AutomationJobsEnabled();
+    const d1JobSnap = jobsOnD1 ? await d1GetCartDiagnosticJobSnapshot(shopDomain) : null;
+
     const [
       automationQueueRows,
       cronHeartbeatRows,
@@ -157,8 +167,10 @@ export async function GET(request: NextRequest) {
       tokenCoverageRows,
       identityDebugRows,
       pendingCartStepRows,
-    ] = await Promise.all([
-      sql`
+    ] = (await Promise.all([
+      jobsOnD1
+        ? Promise.resolve([d1JobSnap!.queue])
+        : sql`
         SELECT
           COUNT(*) FILTER (WHERE status = 'pending')::INT AS pending_jobs,
           COUNT(*) FILTER (WHERE status = 'processing')::INT AS processing_jobs,
@@ -186,7 +198,9 @@ export async function GET(request: NextRequest) {
           AND started_at >= NOW() - INTERVAL '7 days'
         GROUP BY job_name
       `,
-      sql`
+      jobsOnD1
+        ? Promise.resolve(d1JobSnap!.cartJobsByStep)
+        : sql`
         SELECT
           COALESCE(payload -> 'metadata' ->> 'stepKey', '') AS step_key,
           COUNT(*) FILTER (WHERE status = 'pending')::INT AS pending,
@@ -201,7 +215,11 @@ export async function GET(request: NextRequest) {
           AND COALESCE(payload -> 'metadata' ->> 'stepKey', '') IN ('cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3')
         GROUP BY 1
       `,
-      sql`
+      jobsOnD1
+        ? (isD1DeliveriesEnabled()
+          ? d1GetCartDeliveryStatsByStep(shopDomain)
+          : Promise.resolve([]))
+        : sql`
         SELECT
           COALESCE(j.payload -> 'metadata' ->> 'stepKey', '') AS step_key,
           COUNT(*)::INT AS delivered,
@@ -213,7 +231,9 @@ export async function GET(request: NextRequest) {
           AND COALESCE(j.payload -> 'metadata' ->> 'stepKey', '') IN ('cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3')
         GROUP BY 1
       `,
-      sql`
+      jobsOnD1
+        ? Promise.resolve(d1JobSnap!.staleProcessing)
+        : sql`
         SELECT COUNT(*)::INT AS stale_processing
         FROM automation_jobs
         WHERE shop_domain = ${shopDomain}
@@ -222,7 +242,9 @@ export async function GET(request: NextRequest) {
           AND updated_at < NOW() - INTERVAL '2 minutes'
           AND COALESCE(payload -> 'metadata' ->> 'stepKey', '') IN ('cart-reminder-1', 'cart-reminder-2', 'cart-reminder-3')
       `,
-      sql`
+      jobsOnD1
+        ? Promise.resolve(d1JobSnap!.lagRows)
+        : sql`
         SELECT
           COALESCE(payload -> 'metadata' ->> 'stepKey', '') AS step_key,
           EXTRACT(EPOCH FROM (sent_at - due_at)) / 60.0 AS lag_minutes
@@ -236,7 +258,9 @@ export async function GET(request: NextRequest) {
         ORDER BY sent_at DESC
         LIMIT 120
       `,
-      sql`
+      jobsOnD1
+        ? Promise.resolve(d1JobSnap!.failedRows)
+        : sql`
         SELECT
           COALESCE(payload -> 'metadata' ->> 'stepKey', '') AS step_key,
           error_message
@@ -273,7 +297,9 @@ export async function GET(request: NextRequest) {
         FROM subscriber_activity_events
         WHERE shop_domain = ${shopDomain}
       `,
-      sql`
+      jobsOnD1
+        ? Promise.resolve(d1JobSnap!.cartWindow)
+        : sql`
         SELECT
           COUNT(*) FILTER (
             WHERE rule_key = 'cart_abandonment_30m'
@@ -422,7 +448,9 @@ export async function GET(request: NextRequest) {
             LIMIT 1
           ) AS latest_add_to_cart_identity_source
       `,
-      sql`
+      jobsOnD1
+        ? Promise.resolve(d1JobSnap!.pendingCartSteps)
+        : sql`
         SELECT DISTINCT ON (step_key)
           step_key,
           due_at,
@@ -444,7 +472,21 @@ export async function GET(request: NextRequest) {
         ) pending_steps
         ORDER BY step_key, due_at ASC NULLS LAST, updated_at DESC
       `,
-    ]);
+    ])) as [
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+      Array<Record<string, unknown>>,
+    ];
 
     const queueRow = automationQueueRows[0] as Record<string, unknown> | undefined;
     const automationQueueHealth: DiagnosticResult['automationQueueHealth'] = {
@@ -1030,9 +1072,26 @@ export async function POST() {
 
 export async function DELETE(request: NextRequest) {
   try {
+    const { env } = await import('@/lib/config/env');
+    const secret = env.CRON_SECRET.trim();
+    const bearer = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+    const xSecret = request.headers.get('x-automation-secret') ?? '';
+    const querySecret = request.nextUrl.searchParams.get('secret') ?? '';
+    if (!secret || (bearer !== secret && xSecret !== secret && querySecret !== secret)) {
+      return NextResponse.json({ ok: false, error: 'Unauthorized diagnostic request.' }, { status: 401 });
+    }
+
     const shopDomain = request.nextUrl.searchParams.get('shop')?.trim().toLowerCase();
     if (!shopDomain) {
       return NextResponse.json({ ok: false, error: 'Missing shop parameter.' }, { status: 400 });
+    }
+
+    const { isD1AutomationJobsEnabled, d1DeleteFailedSkippedCartJobs } = await import(
+      '@/lib/server/integrations/d1-automation-jobs'
+    );
+    if (isD1AutomationJobsEnabled()) {
+      const deletedJobs = await d1DeleteFailedSkippedCartJobs(shopDomain);
+      return NextResponse.json({ ok: true, deletedJobs, backend: 'd1' });
     }
 
     const sql = getNeonSql();
@@ -1050,6 +1109,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       deletedJobs: Array.isArray(deletedJobsResult) ? deletedJobsResult.length : 0,
+      backend: 'neon',
     });
   } catch (error) {
     return NextResponse.json(
