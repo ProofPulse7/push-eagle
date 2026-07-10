@@ -101,6 +101,8 @@ export const audienceRead = async <T>(opts: {
   if (mode === 'read' || mode === 'd1_only') {
     try {
       const d1Result = await opts.d1();
+      // In d1_only, never fall back to Neon on empty — Neon audience is stale and
+      // every empty-miss fallback burns free-plan network transfer.
       if (mode === 'read') {
         const isEmpty =
           d1Result == null
@@ -115,7 +117,11 @@ export const audienceRead = async <T>(opts: {
       return d1Result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error ?? '');
-      // In d1_only Neon is stale, but falling back still beats crashing a read.
+      if (mode === 'd1_only') {
+        // Prefer failing closed over paying Neon transfer for a stale audience copy.
+        console.warn(`[d1-audience] read '${opts.label}' failed in d1_only (no Neon fallback): ${message}`);
+        throw error;
+      }
       console.warn(`[d1-audience] read '${opts.label}' failed, falling back to Neon: ${message}`);
       return await opts.neon();
     }

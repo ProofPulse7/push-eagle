@@ -124,6 +124,17 @@ const summarizeLag = (samples: number[]) => {
 
 export async function GET(request: NextRequest) {
   try {
+    // Heavy Neon scans — require cron/admin secret so this cannot be hit casually
+    // from the browser and burn free-plan network transfer.
+    const { env } = await import('@/lib/config/env');
+    const secret = env.CRON_SECRET.trim();
+    const bearer = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+    const xSecret = request.headers.get('x-automation-secret') ?? '';
+    const querySecret = request.nextUrl.searchParams.get('secret') ?? '';
+    if (!secret || (bearer !== secret && xSecret !== secret && querySecret !== secret)) {
+      return NextResponse.json({ ok: false, error: 'Unauthorized diagnostic request.' }, { status: 401 });
+    }
+
     const shopDomain = request.nextUrl.searchParams.get('shop')?.trim().toLowerCase();
     if (!shopDomain) {
       return NextResponse.json({ ok: false, error: 'Missing shop parameter.' }, { status: 400 });

@@ -140,20 +140,25 @@ export const listCartProductsInAddOrder = async (input: {
   currentProductId?: string | null;
 }) => {
   const cartToken = input.cartToken ? String(input.cartToken).trim() : null;
-  const [neonRows, d1Rows] = await Promise.all([
-    readProductRowsFromNeon({
-      shopDomain: input.shopDomain,
-      cartToken,
-      externalId: input.externalId,
-    }).catch(() => [] as CartProductRow[]),
-    readProductRowsFromD1({
-      shopDomain: input.shopDomain,
-      cartToken,
-      externalId: input.externalId,
-    }).catch(() => [] as CartProductRow[]),
-  ]);
 
-  const mergedRows = [...neonRows, ...d1Rows].sort((left, right) => {
+  // When D1 events is the source of truth, skip Neon entirely — dual-reads were a
+  // major free-plan network-transfer leak on every cart reminder enqueue/send.
+  let mergedRows: CartProductRow[] = [];
+  if (isD1EventsEnabled()) {
+    mergedRows = await readProductRowsFromD1({
+      shopDomain: input.shopDomain,
+      cartToken,
+      externalId: input.externalId,
+    }).catch(() => [] as CartProductRow[]);
+  } else {
+    mergedRows = await readProductRowsFromNeon({
+      shopDomain: input.shopDomain,
+      cartToken,
+      externalId: input.externalId,
+    }).catch(() => [] as CartProductRow[]);
+  }
+
+  mergedRows = [...mergedRows].sort((left, right) => {
     const leftTime = left.createdAt || '';
     const rightTime = right.createdAt || '';
     if (leftTime && rightTime) {
@@ -287,6 +292,8 @@ export const resolveShopifyProductImageUrl = async (
         return handleImage;
       }
     }
+    // Catalog lives on D1 — do not fall through to Neon (network transfer).
+    return null;
   }
 
   return lookupNeonProductImage({

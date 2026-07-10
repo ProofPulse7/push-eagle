@@ -105,6 +105,41 @@ const findExternalIdByCartToken = async (shopDomain: string, cartToken?: string 
     return null;
   }
 
+  const { isD1EventsEnabled, queryD1TrackingRowsForAutomation } = await import('@/lib/server/integrations/d1-events');
+  if (isD1EventsEnabled()) {
+    const windowStartIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const rows = await queryD1TrackingRowsForAutomation({
+      shopDomain,
+      cartToken: normalizedToken,
+      windowStartIso,
+    }).catch(() => []);
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const ranked = [...rows].sort((left, right) => {
+      const rank = (externalId: string) => {
+        if (externalId.startsWith('anon:')) return 0;
+        if (externalId.startsWith('shopify_customer:')) return 1;
+        if (externalId.startsWith('email:')) return 2;
+        if (externalId.startsWith('cart:')) return 3;
+        if (externalId.startsWith('px:')) return 4;
+        return 5;
+      };
+      const leftId = String(left.external_id ?? '');
+      const rightId = String(right.external_id ?? '');
+      const rankDiff = rank(leftId) - rank(rightId);
+      if (rankDiff !== 0) {
+        return rankDiff;
+      }
+      return String(right.created_at ?? '').localeCompare(String(left.created_at ?? ''));
+    });
+
+    const externalId = ranked[0]?.external_id ? String(ranked[0].external_id).trim() : '';
+    return externalId || null;
+  }
+
   const sql = getNeonSql();
   const rows = await sql`
     WITH cart_related AS (
@@ -186,6 +221,13 @@ const findExternalIdByFingerprint = async (
   const ip = String(browserIp ?? '').trim();
   const ua = String(userAgent ?? '').trim();
   if (!ip || !ua) {
+    return null;
+  }
+
+  const { isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
+  if (isD1EventsEnabled()) {
+    // Skip Neon fingerprint scans when events live on D1 (empty Neon still costs transfer).
+    // Cart-token + note-attribute identity cover the common attribution paths.
     return null;
   }
 

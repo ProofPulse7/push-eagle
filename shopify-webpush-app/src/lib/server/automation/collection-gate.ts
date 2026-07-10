@@ -28,8 +28,8 @@ const RAW_EVENT_RULE_KEYS = [
   'checkout_abandonment_30m',
 ] as const;
 
-const IN_PROC_TTL_MS = 60_000;
-const KV_TTL_SECONDS = 300;
+const IN_PROC_TTL_MS = 120_000;
+const KV_TTL_SECONDS = 600;
 
 type CacheEntry = { flags: CollectionFlags; at: number };
 const inProcessCache = new Map<string, CacheEntry>();

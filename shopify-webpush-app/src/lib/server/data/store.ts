@@ -2574,6 +2574,7 @@ export const upsertAutomationRule = async (
   // Raw-event collection is gated on whether the consuming automation is on, and
   // that decision is cached (in-process + KV). Drop the cache immediately so the
   // webhook/storefront gates react to this toggle without waiting for TTL expiry.
+  invalidateRuleConfigCache(shopDomain);
   if (currentEnabled !== nextEnabled) {
     const { invalidateCollectionFlags } = await import('@/lib/server/automation/collection-gate');
     void invalidateCollectionFlags(shopDomain);
@@ -2742,7 +2743,16 @@ const buildProductUrl = (handle?: string | null) => {
   return normalized ? `/products/${normalized}` : null;
 };
 
+const RULE_CONFIG_CACHE_TTL_MS = 60_000;
+const ruleConfigCache = new Map<string, { value: { enabled: boolean; config: Record<string, unknown> }; at: number }>();
+
 const getRuleConfig = async (shopDomain: string, ruleKey: AutomationRuleKey) => {
+  const cacheKey = `${shopDomain}:${ruleKey}`;
+  const cached = ruleConfigCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < RULE_CONFIG_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
   const sql = getNeonSql();
   const rows = await sql`
     SELECT enabled, config
@@ -2752,10 +2762,25 @@ const getRuleConfig = async (shopDomain: string, ruleKey: AutomationRuleKey) => 
     LIMIT 1
   `;
 
-  return {
+  const value = {
     enabled: isComingSoonAutomation(ruleKey) ? false : Boolean(rows[0]?.enabled),
     config: (rows[0]?.config ?? {}) as Record<string, unknown>,
   };
+  ruleConfigCache.set(cacheKey, { value, at: Date.now() });
+  return value;
+};
+
+export const invalidateRuleConfigCache = (shopDomain?: string) => {
+  if (!shopDomain) {
+    ruleConfigCache.clear();
+    return;
+  }
+  const prefix = `${shopDomain}:`;
+  for (const key of ruleConfigCache.keys()) {
+    if (key.startsWith(prefix)) {
+      ruleConfigCache.delete(key);
+    }
+  }
 };
 
 const listAutomationTargets = async (input: { shopDomain: string; externalId?: string | null; subscriberId?: number | null }) => {
@@ -3406,7 +3431,8 @@ const hasRecentActivity = async (input: {
   const sinceIso = new Date(input.since).toISOString();
   const { isD1EventsEnabled, hasD1RecentSubscriberActivity } = await import('@/lib/server/integrations/d1-events');
   if (isD1EventsEnabled()) {
-    const d1Hit = await hasD1RecentSubscriberActivity({
+    // Events live on D1 — never fall through to Neon (empty Neon tables still cost transfer).
+    return hasD1RecentSubscriberActivity({
       shopDomain: input.shopDomain,
       externalId: input.externalId,
       sinceIso,
@@ -3414,9 +3440,6 @@ const hasRecentActivity = async (input: {
       productId: input.productId,
       cartToken: input.cartToken,
     }).catch(() => false);
-    if (d1Hit) {
-      return true;
-    }
   }
 
   const sql = getNeonSql();
@@ -3457,15 +3480,13 @@ const hasCheckoutCompleteSince = async (input: {
   const sinceIso = input.since ? input.since.toISOString() : null;
   const { isD1EventsEnabled, hasD1CheckoutCompleteSince } = await import('@/lib/server/integrations/d1-events');
   if (isD1EventsEnabled()) {
-    const d1Hit = await hasD1CheckoutCompleteSince({
+    // Events live on D1 — skip Neon checkout_complete scans entirely.
+    return hasD1CheckoutCompleteSince({
       shopDomain: input.shopDomain,
       externalId: payloadExternalId,
       cartToken: payloadCartToken,
       sinceIso,
     }).catch(() => false);
-    if (d1Hit) {
-      return true;
-    }
   }
 
   const sql = getNeonSql();
@@ -3739,7 +3760,10 @@ export const pruneAutomationData = async () => {
     `;
   }
 
-  if (await neonTableExists('subscriber_activity_events')) {
+  const { isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
+  // Activity lives on D1 when enabled — skip Neon activity deletes (empty-table
+  // scans still burn free-plan network transfer).
+  if (!isD1EventsEnabled() && (await neonTableExists('subscriber_activity_events'))) {
     await sql`
       DELETE FROM subscriber_activity_events
       WHERE created_at < ${activityCutoff}
@@ -4043,38 +4067,28 @@ export const pruneHighVolumeTimeSeries = async () => {
   if (!isD1DeliveriesEnabled()) {
     // Neon path already pruned inside the helpers above when D1 is off.
   } else {
-    const { neonTableExists } = await import('@/lib/server/integrations/neon-legacy-tables');
-    if (await neonTableExists('campaign_deliveries')) {
-      await sql`DELETE FROM campaign_deliveries WHERE delivered_at < ${deliveryCutoff}`;
-    }
-    if (await neonTableExists('campaign_clicks')) {
-      await sql`DELETE FROM campaign_clicks WHERE clicked_at < ${deliveryCutoff}`;
-    }
-    if (await neonTableExists('automation_deliveries')) {
-      await sql`DELETE FROM automation_deliveries WHERE delivered_at < ${deliveryCutoff}`;
-    }
-    if (await neonTableExists('automation_clicks')) {
-      await sql`DELETE FROM automation_clicks WHERE clicked_at < ${deliveryCutoff}`;
-    }
+    // Deliveries live on D1 — skip Neon legacy delivery deletes to save transfer.
+    // One-time Neon cleanup can be done via admin drop-legacy-tables if needed.
   }
   const { neonTableExists } = await import('@/lib/server/integrations/neon-legacy-tables');
-  if (await neonTableExists('shopify_orders')) {
-    await sql`DELETE FROM shopify_orders WHERE created_at < ${orderCutoff}`;
-  }
-  if (await neonTableExists('shopify_order_items')) {
-    await sql`DELETE FROM shopify_order_items WHERE created_at < ${orderCutoff}`;
-  }
-  if (await neonTableExists('shopify_fulfillments')) {
-    await sql`DELETE FROM shopify_fulfillments WHERE last_seen_at < ${fulfillmentCutoff}`;
+  const { isD1CommerceEnabled, d1PruneCommerce } = await import(
+    '@/lib/server/integrations/d1-commerce'
+  );
+
+  if (!isD1CommerceEnabled()) {
+    if (await neonTableExists('shopify_orders')) {
+      await sql`DELETE FROM shopify_orders WHERE created_at < ${orderCutoff}`;
+    }
+    if (await neonTableExists('shopify_order_items')) {
+      await sql`DELETE FROM shopify_order_items WHERE created_at < ${orderCutoff}`;
+    }
+    if (await neonTableExists('shopify_fulfillments')) {
+      await sql`DELETE FROM shopify_fulfillments WHERE last_seen_at < ${fulfillmentCutoff}`;
+    }
   }
 
-  // When commerce is on D1, prune it there with the same cutoffs. The Neon deletes
-  // above stay as a cheap no-op safety net that also reclaims any pre-migration rows
-  // still sitting on Neon after a cutover.
+  // When commerce is on D1, prune it there with the same cutoffs.
   try {
-    const { isD1CommerceEnabled, d1PruneCommerce } = await import(
-      '@/lib/server/integrations/d1-commerce'
-    );
     if (isD1CommerceEnabled()) {
       await d1PruneCommerce({
         orderCutoffIso: orderCutoff.toISOString(),
@@ -4169,9 +4183,11 @@ export const runRetentionMaintenance = async () => {
   `;
 
   const { archiveOldPixelEvents } = await import('@/lib/server/automation/pixel-events');
-  const pixelArchive = await archiveOldPixelEvents(14, 2000);
-
   const { pruneD1TrackingEvents, isD1EventsEnabled } = await import('@/lib/server/integrations/d1-events');
+  // When events live on D1, skip Neon pixel archive scans (empty Neon still costs transfer).
+  const pixelArchive = isD1EventsEnabled()
+    ? { archived: 0, deleted: 0, objectKeys: [] as string[], skipped: 'd1_events' as const }
+    : await archiveOldPixelEvents(14, 2000);
   // Pass undefined so the env-configured D1_EVENTS_RETENTION_DAYS applies.
   const d1Prune = isD1EventsEnabled() ? await pruneD1TrackingEvents(undefined, 2000) : null;
   const campaignMediaPrune = await pruneUnusedCampaignDeviceImages(30);
@@ -8195,6 +8211,15 @@ const enqueueAudienceOutbox = async (input: UpsertTokenInput) => {
       external_id = EXCLUDED.external_id,
       updated_at = NOW()
   `;
+
+  try {
+    const { isCloudflareKvEnabled, deleteKvKey } = await import('@/lib/server/cache/cloudflare-kv');
+    if (isCloudflareKvEnabled()) {
+      void deleteKvKey('pe:cron:audience_outbox_empty_v1').catch(() => undefined);
+    }
+  } catch {
+    // best-effort cache bust
+  }
 };
 
 /**
@@ -8229,27 +8254,6 @@ export const replayCartAbandonmentEnqueueForSubscriber = async (input: {
     createdAt: string;
   } | null = null;
 
-  const neonRows = await sql`
-    SELECT page_url, product_id, cart_token, metadata, created_at
-    FROM subscriber_activity_events
-    WHERE shop_domain = ${input.shopDomain}
-      AND external_id = ${input.externalId}
-      AND event_type = 'add_to_cart'
-      AND created_at >= ${windowStart}
-    ORDER BY created_at DESC
-    LIMIT 1
-  `;
-
-  if (neonRows[0]) {
-    latestEvent = {
-      pageUrl: neonRows[0].page_url ? String(neonRows[0].page_url) : null,
-      productId: neonRows[0].product_id ? String(neonRows[0].product_id) : null,
-      cartToken: neonRows[0].cart_token ? String(neonRows[0].cart_token) : null,
-      metadata: (neonRows[0].metadata as Record<string, unknown> | null) ?? null,
-      createdAt: new Date(neonRows[0].created_at).toISOString(),
-    };
-  }
-
   const { isD1EventsEnabled, runD1Query } = await import('@/lib/server/integrations/d1-events');
   if (isD1EventsEnabled()) {
     const d1Rows = await runD1Query(
@@ -8267,18 +8271,44 @@ export const replayCartAbandonmentEnqueueForSubscriber = async (input: {
     ) as Array<Record<string, unknown>>;
 
     if (d1Rows[0]) {
-      const createdAt = String(d1Rows[0].created_at ?? '');
-      if (!latestEvent || createdAt > latestEvent.createdAt) {
-        latestEvent = {
-          pageUrl: d1Rows[0].page_url == null ? null : String(d1Rows[0].page_url),
-          productId: d1Rows[0].product_id == null ? null : String(d1Rows[0].product_id),
-          cartToken: d1Rows[0].cart_token == null ? null : String(d1Rows[0].cart_token),
-          metadata: d1Rows[0].metadata
+      let metadata: Record<string, unknown> | null = null;
+      if (d1Rows[0].metadata) {
+        try {
+          metadata = typeof d1Rows[0].metadata === 'string'
             ? (JSON.parse(String(d1Rows[0].metadata)) as Record<string, unknown>)
-            : null,
-          createdAt,
-        };
+            : (d1Rows[0].metadata as Record<string, unknown>);
+        } catch {
+          metadata = null;
+        }
       }
+      latestEvent = {
+        pageUrl: d1Rows[0].page_url == null ? null : String(d1Rows[0].page_url),
+        productId: d1Rows[0].product_id == null ? null : String(d1Rows[0].product_id),
+        cartToken: d1Rows[0].cart_token == null ? null : String(d1Rows[0].cart_token),
+        metadata,
+        createdAt: String(d1Rows[0].created_at ?? ''),
+      };
+    }
+  } else {
+    const neonRows = await sql`
+      SELECT page_url, product_id, cart_token, metadata, created_at
+      FROM subscriber_activity_events
+      WHERE shop_domain = ${input.shopDomain}
+        AND external_id = ${input.externalId}
+        AND event_type = 'add_to_cart'
+        AND created_at >= ${windowStart}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+
+    if (neonRows[0]) {
+      latestEvent = {
+        pageUrl: neonRows[0].page_url ? String(neonRows[0].page_url) : null,
+        productId: neonRows[0].product_id ? String(neonRows[0].product_id) : null,
+        cartToken: neonRows[0].cart_token ? String(neonRows[0].cart_token) : null,
+        metadata: (neonRows[0].metadata as Record<string, unknown> | null) ?? null,
+        createdAt: new Date(neonRows[0].created_at).toISOString(),
+      };
     }
   }
 
@@ -8435,6 +8465,26 @@ export const reconcileAudienceOutbox = async (limit = 500) => {
     return { processed: 0, failed: 0, remaining: 0, skipped: true };
   }
 
+  const {
+    isCloudflareKvEnabled,
+    readKvJson,
+    writeKvJson,
+    deleteKvKey,
+  } = await import('@/lib/server/cache/cloudflare-kv');
+  const OUTBOX_EMPTY_CACHE_KEY = 'pe:cron:audience_outbox_empty_v1';
+  const OUTBOX_EMPTY_TTL_SECONDS = 300;
+
+  if (isCloudflareKvEnabled()) {
+    try {
+      const emptyCached = await readKvJson<{ empty: true; at: number }>(OUTBOX_EMPTY_CACHE_KEY);
+      if (emptyCached?.empty && typeof emptyCached.at === 'number' && Date.now() - emptyCached.at < OUTBOX_EMPTY_TTL_SECONDS * 1000) {
+        return { processed: 0, failed: 0, remaining: 0, cachedEmpty: true };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
   await ensureSchema();
   const sql = getNeonSql();
 
@@ -8446,7 +8496,14 @@ export const reconcileAudienceOutbox = async (limit = 500) => {
   `;
 
   if (rows.length === 0) {
+    if (isCloudflareKvEnabled()) {
+      void writeKvJson(OUTBOX_EMPTY_CACHE_KEY, { empty: true, at: Date.now() }, OUTBOX_EMPTY_TTL_SECONDS).catch(() => undefined);
+    }
     return { processed: 0, failed: 0, remaining: 0 };
+  }
+
+  if (isCloudflareKvEnabled()) {
+    void deleteKvKey(OUTBOX_EMPTY_CACHE_KEY).catch(() => undefined);
   }
 
   let processed = 0;

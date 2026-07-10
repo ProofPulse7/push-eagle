@@ -2,6 +2,41 @@
 
 Target: **30 merchants**, **1M subscriber tokens**, all automations + tracking on **Neon free + Vercel free + Cloudflare Workers $5/mo**.
 
+## Neon network transfer (critical for free 5 GB/mo)
+
+Code now **stops reading/writing Neon** for data that already lives on D1:
+
+| Change | Impact |
+|--------|--------|
+| Cart product list = D1-only when `D1_EVENTS_ENABLED` | Stops dual Neon+D1 reads on every cart reminder |
+| Activity / checkout skip checks = D1-only | No empty Neon `subscriber_activity_events` scans |
+| Product image = D1-only when `D1_CATALOG_ENABLED` | No Neon catalog fallback after D1 miss |
+| Orders-create identity = D1 tracking | No 30-day Neon pixel/activity UNION scans |
+| Skip Neon pixel archive when D1 events on | No wide `SELECT * FROM pixel_events` every 6h |
+| Skip Neon activity/commerce/delivery deletes when D1 owns them | Retention no longer scans empty Neon tables |
+| `getRuleConfig` 60s in-process cache | Fewer `automation_rules` round-trips |
+| Collection flags TTL 2m / KV 10m | Fewer rule-enabled Neon reads |
+| Cron probe idle cache 15m | Fewer COUNT probes while idle |
+| Audience outbox empty cache 5m | Cron tick skips Neon outbox SELECT when empty |
+| `d1_only` audience: no Neon empty/error fallback | Stops stale Neon audience transfer |
+| Diagnostic API requires `CRON_SECRET` | Prevents accidental heavy Neon scans |
+
+**Required production flags (already set on Vercel):**
+
+```
+D1_AUDIENCE_MODE=d1_only
+D1_EVENTS_ENABLED=true
+D1_DELIVERIES_ENABLED=true
+D1_COMMERCE_ENABLED=true
+D1_CUSTOMERS_ENABLED=true
+D1_CATALOG_ENABLED=true
+CLOUDFLARE_KV_NAMESPACE_ID=...
+CLOUDFLARE_WORKER_URL=...
+AUTOMATION_QUEUE_ENABLED=true
+```
+
+Neon should mainly hold: `merchants`, `automation_rules`, `automation_jobs`, `campaigns`, billing, segments, media refs — not high-volume events/audience/deliveries.
+
 ## What changed (code)
 
 | Change | Impact |
@@ -10,8 +45,8 @@ Target: **30 merchants**, **1M subscriber tokens**, all automations + tracking o
 | **KV event throttle** | Dedupes page_view / product_view / cart events per visitor |
 | **No inline automation on page views** | Bootstrap/activity no longer run `processDueAutomationJobsForShop` when queue is enabled |
 | **KV merchant host cache** | Storefront CORS auth avoids repeated Neon `merchants` lookups |
-| **KV cron probe cache** | Idle ticks reuse probe result for 90s (fewer COUNT queries) |
-| **Cron idle sleep** | Worker skips ticks for ~14 min when no work (needs KV) |
+| **KV cron probe cache** | Idle ticks reuse probe result (fewer COUNT queries) |
+| **Cron idle sleep** | Worker skips ticks for up to ~60 min when no work (needs KV) |
 | **Removed analytics page load** | Dashboard bootstrap no longer loads heavy analytics stats |
 | **All 6 automations unlocked** | `COMING_SOON_AUTOMATIONS_ENABLED=false` |
 
